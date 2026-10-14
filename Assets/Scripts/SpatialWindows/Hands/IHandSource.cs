@@ -23,10 +23,13 @@ namespace SpatialLauncher.SpatialWindows
         public PinchState Pinch;
         /// <summary>0 = fully open, 1 = fingers touching. Sources without a continuous value report 0 or 1.</summary>
         public float PinchStrength;
-        /// <summary>Where the hand is pointing. The origin is usually near the index fingertip.</summary>
+        /// <summary>Where the hand is pointing. The origin is usually near the index fingertip or knuckle.</summary>
         public Ray PointingRay;
+        /// <summary>A fist (all fingers curled). Reported by device sources; <see cref="HandWindowInput"/> doesn't use it yet.</summary>
+        public bool Grab;
 
         public bool IsPinched => IsTracked && Pinch == PinchState.Pinched;
+        public bool IsGrabbing => IsTracked && Grab;
 
         public static HandState Untracked => default;
     }

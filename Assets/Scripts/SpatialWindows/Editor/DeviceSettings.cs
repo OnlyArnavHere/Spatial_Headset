@@ -7,13 +7,16 @@ using UnityEditor.Build;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 
 namespace SpatialLauncher.SpatialWindows.Editor
 {
     /// <summary>
     /// Applies what the iOS device build needs (Tools > Spatial Windows > Apply iOS Device Settings): player settings
     /// for a headset app that streams from the laptop, HoloKit's required fixes, DeviceMain as the only build scene,
-    /// and DeviceMain's launcher in WebRTC mode. Safe to run again: it logs each change with a [DeviceSettings] prefix
+    /// DeviceMain's launcher in WebRTC mode, and HoloKit hand tracking as DeviceMain's window input (HandTrackingManager,
+    /// LiDAR depth, <see cref="HoloKitHandSource"/>). Safe to run again: it logs each change with a [DeviceSettings] prefix
     /// and leaves settings that are already right alone. Info.plist keys Unity has no setting for are added at build
     /// time by <see cref="IosInfoPlist"/>; <see cref="DeviceBuildCheck"/> checks the result.
     /// </summary>
@@ -148,12 +151,71 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     so.ApplyModifiedPropertiesWithoutUndo();
                 }
 
+                ApplyHandTracking(scene, Find<HandWindowInput>(), Find<ARCameraManager>());
+
                 if (changes > before) EditorSceneManager.SaveScene(scene);
             }
             finally
             {
                 if (openedHere) EditorSceneManager.CloseScene(scene, true);
             }
+        }
+
+        // HoloKit hand tracking as the windows' input: depth for the 3D joints, HoloKit's HandTrackingManager, and
+        // HoloKitHandSource feeding HandWindowInput.
+        static void ApplyHandTracking(Scene scene, HandWindowInput hands, ARCameraManager arCamera)
+        {
+            if (hands == null || arCamera == null)
+            {
+                Debug.LogWarning("[DeviceSettings] DeviceMain needs a HandWindowInput and an AR camera for hand tracking.");
+                return;
+            }
+
+            if (arCamera.GetComponent<AROcclusionManager>() == null)
+            {
+                var occlusion = arCamera.gameObject.AddComponent<AROcclusionManager>();
+                // LiDAR depth places HoloKit's hand joints in 3D. Depth only: windows aren't hidden behind real objects.
+                occlusion.requestedEnvironmentDepthMode = EnvironmentDepthMode.Fastest;
+                occlusion.requestedOcclusionPreferenceMode = OcclusionPreferenceMode.NoOcclusion;
+                occlusion.requestedHumanDepthMode = HumanSegmentationDepthMode.Disabled;
+                occlusion.requestedHumanStencilMode = HumanSegmentationStencilMode.Disabled;
+                changes++;
+                Debug.Log($"[DeviceSettings] DeviceMain: added AROcclusionManager to {arCamera.name} (environment depth Fastest, no occlusion)");
+            }
+
+#if UNITY_IOS
+            var tracking = scene.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<HoloKit.iOS.HandTrackingManager>(true)).FirstOrDefault();
+            if (tracking == null)
+            {
+                var go = new GameObject("Hand Tracking");
+                SceneManager.MoveGameObjectToScene(go, scene);
+                tracking = go.AddComponent<HoloKit.iOS.HandTrackingManager>();
+                var trackingSettings = new SerializedObject(tracking);
+                trackingSettings.FindProperty("m_HandJointsVisibility").boolValue = false; // debug spheres would show in the headset
+                trackingSettings.ApplyModifiedPropertiesWithoutUndo();
+                changes++;
+                Debug.Log("[DeviceSettings] DeviceMain: added Hand Tracking (HoloKit HandTrackingManager, one hand, joints hidden)");
+            }
+
+            var source = hands.GetComponent<HoloKitHandSource>();
+            if (source == null)
+            {
+                source = hands.gameObject.AddComponent<HoloKitHandSource>();
+                changes++;
+                Debug.Log($"[DeviceSettings] DeviceMain: added HoloKitHandSource to {hands.name}");
+            }
+            var sourceSettings = new SerializedObject(source);
+            var trackingField = sourceSettings.FindProperty("handTracking");
+            var headField = sourceSettings.FindProperty("head");
+            Change("DeviceMain HoloKitHandSource.handTracking", trackingField.objectReferenceValue, tracking, () => trackingField.objectReferenceValue = tracking);
+            Change("DeviceMain HoloKitHandSource.head", headField.objectReferenceValue, arCamera.transform, () => headField.objectReferenceValue = arCamera.transform);
+            sourceSettings.ApplyModifiedPropertiesWithoutUndo();
+
+            var handsSettings = new SerializedObject(hands);
+            var sourceField = handsSettings.FindProperty("handSource");
+            Change("DeviceMain HandWindowInput.handSource", sourceField.objectReferenceValue, source, () => sourceField.objectReferenceValue = source);
+            handsSettings.ApplyModifiedPropertiesWithoutUndo();
+#endif
         }
     }
 }

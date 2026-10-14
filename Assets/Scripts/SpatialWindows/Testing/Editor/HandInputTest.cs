@@ -7,7 +7,8 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     /// <summary>
     /// Play-mode test for HandWindowInput, driven by a scripted hand source (no mouse needed): hover cursor,
     /// pinch to focus, drag in plane and in depth, tremor rejection, resize, close, controls (launcher icon,
-    /// video play/pause and seek-bar drag), two hands at once, and losing tracking mid-drag.
+    /// video play/pause and seek-bar drag), two hands at once, and losing tracking mid-drag; then HoloKitHandSource's
+    /// mapping from hand joints to pinch, grab and pointing ray, on synthetic hands.
     /// Results are logged with a [HandTest] prefix. The previous input source and hand source are restored after.
     /// </summary>
     static class HandInputTest
@@ -61,6 +62,64 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 hands.SetHandSource(previousSource);
                 if (previousInput >= 0) manager.SetActiveInput(previousInput);
             }
+
+            CheckHoloKitMapping();
+        }
+
+        /// <summary>
+        /// HoloKitHandSource's joints-to-state mapping on synthetic hands (the device source itself needs a phone):
+        /// head at the origin looking along +Z, the right hand below-right of it with the fingers pointing forward.
+        /// </summary>
+        static void CheckHoloKitMapping()
+        {
+            var head = new Pose(Vector3.zero, Quaternion.identity);
+            var wrist = new Vector3(0.15f, -0.25f, 0.35f);
+            HandJoints Hand(bool fist, bool foldOthers, Vector3 thumbFromIndexTip)
+            {
+                Vector3 Tip(Vector3 knuckle, bool curled) => knuckle + (curled ? new Vector3(0f, -0.03f, -0.03f) : new Vector3(0f, 0f, 0.08f));
+                var j = new HandJoints
+                {
+                    Wrist = wrist,
+                    IndexMCP = wrist + new Vector3(-0.02f, 0f, 0.09f),
+                    MiddleMCP = wrist + new Vector3(0f, 0f, 0.09f),
+                    RingMCP = wrist + new Vector3(0.02f, 0f, 0.085f),
+                    LittleMCP = wrist + new Vector3(0.04f, 0f, 0.075f),
+                };
+                j.IndexTip = Tip(j.IndexMCP, fist);
+                j.MiddleTip = Tip(j.MiddleMCP, fist || foldOthers);
+                j.RingTip = Tip(j.RingMCP, fist || foldOthers);
+                j.LittleTip = Tip(j.LittleMCP, fist || foldOthers);
+                j.ThumbTip = j.IndexTip + thumbFromIndexTip;
+                return j;
+            }
+
+            var open = HoloKitHandSource.FromJoints(Hand(false, false, new Vector3(-0.04f, 0f, -0.09f)), Handedness.Right, head, false);
+            var pinch = HoloKitHandSource.FromJoints(Hand(false, false, new Vector3(0.005f, 0f, 0f)), Handedness.Right, head, false);
+            var halfway = Hand(false, false, new Vector3(0.03f, 0f, 0f)); // 1/3 of the hand's size: between on and off
+            var fist = HoloKitHandSource.FromJoints(Hand(true, false, new Vector3(0.005f, 0f, 0f)), Handedness.Right, head, false);
+            var folded = HoloKitHandSource.FromJoints(Hand(false, true, new Vector3(0.005f, 0f, 0f)), Handedness.Right, head, false);
+            var collapsed = HoloKitHandSource.FromJoints(new HandJoints { Wrist = wrist, MiddleMCP = wrist }, Handedness.Right, head, false);
+
+            Check(open.IsTracked && !open.IsPinched && !open.IsGrabbing && open.PinchStrength < 0.01f, "HoloKit mapping: an open hand is tracked, not pinched or grabbing");
+            Check(pinch.IsPinched && !pinch.IsGrabbing && pinch.PinchStrength > 0.99f, "HoloKit mapping: thumb on index tip pinches");
+            Check(!HoloKitHandSource.FromJoints(halfway, Handedness.Right, head, false).IsPinched &&
+                  HoloKitHandSource.FromJoints(halfway, Handedness.Right, head, true).IsPinched,
+                "HoloKit mapping: between the thresholds a pinch neither starts nor ends (hysteresis)");
+            Check(fist.IsGrabbing && !fist.IsPinched, "HoloKit mapping: a fist grabs and doesn't pinch");
+            Check(folded.IsPinched && !folded.IsGrabbing, "HoloKit mapping: a pinch with the other fingers folded is still a pinch, not a grab");
+            Check(!collapsed.IsTracked, "HoloKit mapping: collapsed joints aren't a hand");
+
+            var shoulder = new Vector3(0.15f, -0.18f, 0f);
+            var knuckle = wrist + new Vector3(-0.02f, 0f, 0.09f);
+            Check(Vector3.Distance(open.PointingRay.origin, knuckle) < 1e-5f &&
+                  Vector3.Angle(open.PointingRay.direction, knuckle - shoulder) < 0.01f && Vector3.Dot(open.PointingRay.direction, Vector3.forward) > 0.9f,
+                "HoloKit mapping: the ray goes from the shoulder through the index knuckle, forward");
+            Check(Vector3.Angle(open.PointingRay.direction, pinch.PointingRay.direction) < 0.01f &&
+                  Vector3.Distance(open.PointingRay.origin, pinch.PointingRay.origin) < 1e-5f,
+                "HoloKit mapping: pinching doesn't move the ray");
+            var leftOpen = HoloKitHandSource.FromJoints(Hand(false, false, new Vector3(-0.04f, 0f, -0.09f)), Handedness.Left, head, false);
+            Check(Vector3.Angle(leftOpen.PointingRay.direction, knuckle - new Vector3(-0.15f, -0.18f, 0f)) < 0.01f,
+                "HoloKit mapping: the left hand's ray starts from the left shoulder");
         }
 
         static MonoBehaviour FindMouse(WindowManager manager)

@@ -299,7 +299,21 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 {
                     var so = new SerializedObject(hands);
                     Expect(so.FindProperty("head").objectReferenceValue != null, "HandWindowInput.head is assigned");
+                    var source = so.FindProperty("handSource").objectReferenceValue as HoloKitHandSource;
+                    Expect(source != null, "HandWindowInput takes its hands from HoloKitHandSource");
+                    if (source != null)
+                    {
+                        var sourceSettings = new SerializedObject(source);
+                        Expect(sourceSettings.FindProperty("handTracking").objectReferenceValue != null &&
+                               sourceSettings.FindProperty("head").objectReferenceValue != null,
+                            "HoloKitHandSource has its HandTrackingManager and head assigned");
+                    }
                 }
+                Expect(cameraManagers.Length == 1 && cameraManagers[0].GetComponent<AROcclusionManager>() != null,
+                    "the AR camera has an AROcclusionManager (LiDAR depth for HoloKit's 3D hand joints)");
+#if UNITY_IOS
+                Expect(Find<HoloKit.iOS.HandTrackingManager>().Length == 1, "scene has HoloKit's HandTrackingManager");
+#endif
 
                 var launchers = Find<LauncherWindow>();
                 Expect(launchers.Length == 1, "scene has one LauncherWindow");
