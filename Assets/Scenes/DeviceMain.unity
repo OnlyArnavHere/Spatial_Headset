@@ -820,6 +820,10 @@ MonoBehaviour:
   sampleSprite: {fileID: 0}
   sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
   sampleVideoUrl: 
+  laptopStreaming: 1
+  connectionSettings: {fileID: 11400000, guid: 6ea254d4367a7b34db54d7bc4100e6ab, type: 2}
+  remoteInputSink: {fileID: 0}
+  laptopResolution: {x: 1920, y: 1080}
   openOnStart: 1
   openKey: 22
   launcherSize: {x: 0.5, y: 0.3}
@@ -922,14 +926,14 @@ Light:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1418692277}
   m_Enabled: 1
-  serializedVersion: 11
+  serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 0.95686275, b: 0.8392157, a: 1}
   m_Intensity: 1
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
-  m_CookieSize: 10
+  m_CookieSize2D: {x: 10, y: 10}
   m_Shadows:
     m_Type: 2
     m_Resolution: -1
@@ -1210,7 +1214,7 @@ MonoBehaviour:
   m_StereoTriggerLabel: TRIGGER
   m_StereoTriggerPressedLabel: TRIGGERED
   m_ShowStereoBarTouchAreas: 0
-  m_SupportedMonoScreenOrientations: 9
+  m_SupportedMonoScreenOrientations: 8
   m_StereoFrameRate: 0
   m_AdaptStereoFrameRateToThermalState: 1
   m_HoloKitGeneration: 0

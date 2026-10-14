@@ -1,0 +1,159 @@
+using System;
+using System.Linq;
+using HoloKit;
+using HoloKit.Editor;
+using UnityEditor;
+using UnityEditor.Build;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace SpatialLauncher.SpatialWindows.Editor
+{
+    /// <summary>
+    /// Applies what the iOS device build needs (Tools > Spatial Windows > Apply iOS Device Settings): player settings
+    /// for a headset app that streams from the laptop, HoloKit's required fixes, DeviceMain as the only build scene,
+    /// and DeviceMain's launcher in WebRTC mode. Safe to run again: it logs each change with a [DeviceSettings] prefix
+    /// and leaves settings that are already right alone. Info.plist keys Unity has no setting for are added at build
+    /// time by <see cref="IosInfoPlist"/>; <see cref="DeviceBuildCheck"/> checks the result.
+    /// </summary>
+    static class DeviceSettings
+    {
+        /// <summary>Used only while the project still has the Mobile AR template's identifier.</summary>
+        public const string BundleId = "com.onlyarnavhere.spatiallauncher";
+        /// <summary>HoloKit hand tracking, the only input on the device, needs iOS 18 (and a LiDAR iPhone).</summary>
+        public static readonly Version MinimumIos = new Version(18, 0);
+        public const string CameraUsage =
+            "Spatial Launcher shows the room around you through the camera and follows your hands to control its windows.";
+        const string ConnectionSettingsPath = "Assets/Settings/RemoteConnectionSettings.asset";
+        const string WebRtcDefine = "SPATIAL_LAUNCHER_WEBRTC";
+
+        static int changes;
+
+        [MenuItem("Tools/Spatial Windows/Apply iOS Device Settings")]
+        static void Apply()
+        {
+            changes = 0;
+            ApplyPlayerSettings();
+            ApplyHoloKitFixes();
+            ApplyBuildScenes();
+            ApplyDeviceScene();
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[DeviceSettings] Done: {changes} change(s). Run Tools > Spatial Windows > Check iOS Device Build to verify.");
+        }
+
+        static void Change(string what, object current, object wanted, Action apply)
+        {
+            if (Equals(current, wanted)) return;
+            apply();
+            changes++;
+            Debug.Log($"[DeviceSettings] {what}: {current} -> {wanted}");
+        }
+
+        static void ApplyPlayerSettings()
+        {
+            var ios = NamedBuildTarget.iOS;
+
+            string bundleId = PlayerSettings.GetApplicationIdentifier(ios);
+            if (bundleId.StartsWith("com.unity.template"))
+                Change("Bundle identifier (the template's can't be signed with your Apple ID)", bundleId, BundleId,
+                    () => PlayerSettings.SetApplicationIdentifier(ios, BundleId));
+
+            Change("Camera Usage Description", PlayerSettings.iOS.cameraUsageDescription, CameraUsage,
+                () => PlayerSettings.iOS.cameraUsageDescription = CameraUsage);
+
+            if (!Version.TryParse(PlayerSettings.iOS.targetOSVersionString, out var minimum) || minimum < MinimumIos)
+                Change("Target minimum iOS version (HoloKit hand tracking needs iOS 18)", PlayerSettings.iOS.targetOSVersionString,
+                    MinimumIos.ToString(), () => PlayerSettings.iOS.targetOSVersionString = MinimumIos.ToString());
+
+            // The phone sits sideways in the viewer; HoloKit's stereo mode renders in Landscape Left.
+            Change("Default orientation", PlayerSettings.defaultInterfaceOrientation, UIOrientation.LandscapeLeft,
+                () => PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft);
+
+            // Without it iOS may power Wi-Fi down after 30 minutes without network-heavy foreground use.
+            Change("Requires Persistent WiFi", PlayerSettings.iOS.requiresPersistentWiFi, true,
+                () => PlayerSettings.iOS.requiresPersistentWiFi = true);
+
+            // WHEP signaling with the laptop agent is plain HTTP on the local network (http://<laptop>:8889/...).
+            Change("Allow downloads over HTTP", PlayerSettings.insecureHttpOption, InsecureHttpOption.AlwaysAllowed,
+                () => PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed);
+
+            var defines = PlayerSettings.GetScriptingDefineSymbols(ios).Split(';').Where(d => d.Length > 0).ToList();
+            if (!defines.Contains(WebRtcDefine))
+            {
+                string before = string.Join(";", defines);
+                defines.Add(WebRtcDefine);
+                Change("iOS Scripting Define Symbols", before, string.Join(";", defines),
+                    () => PlayerSettings.SetScriptingDefineSymbols(ios, string.Join(";", defines)));
+            }
+        }
+
+        static void ApplyHoloKitFixes()
+        {
+            foreach (var rule in HoloKitProjectValidation.RulesFor(BuildTargetGroup.iOS))
+            {
+                if (!rule.IsRuleEnabled() || rule.CheckPredicate() || rule.FixIt == null) continue;
+                rule.FixIt();
+                changes++;
+                Debug.Log($"[DeviceSettings] HoloKit fix: {rule.FixItMessage}");
+            }
+        }
+
+        static void ApplyBuildScenes()
+        {
+            var enabled = EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path).ToArray();
+            if (enabled.Length == 1 && enabled[0] == DeviceBuildCheck.ScenePath) return;
+            Change("Build scenes", string.Join(", ", enabled), DeviceBuildCheck.ScenePath,
+                () => EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(DeviceBuildCheck.ScenePath, true) });
+        }
+
+        static void ApplyDeviceScene()
+        {
+            var scene = SceneManager.GetSceneByPath(DeviceBuildCheck.ScenePath);
+            bool openedHere = false;
+            if (!scene.isLoaded)
+            {
+                scene = EditorSceneManager.OpenScene(DeviceBuildCheck.ScenePath, OpenSceneMode.Additive);
+                openedHere = true;
+            }
+            int before = changes;
+            try
+            {
+                T Find<T>() where T : Component =>
+                    scene.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<T>(true)).FirstOrDefault();
+
+                var launcher = Find<LauncherWindow>();
+                if (launcher != null)
+                {
+                    var so = new SerializedObject(launcher);
+                    var mode = so.FindProperty("laptopStreaming");
+                    Change("DeviceMain LauncherWindow.laptopStreaming", (LauncherWindow.LaptopStreaming)mode.enumValueIndex,
+                        LauncherWindow.LaptopStreaming.WebRtc, () => mode.enumValueIndex = (int)LauncherWindow.LaptopStreaming.WebRtc);
+                    var connection = so.FindProperty("connectionSettings");
+                    var asset = AssetDatabase.LoadAssetAtPath<RemoteConnectionSettings>(ConnectionSettingsPath);
+                    Change("DeviceMain LauncherWindow.connectionSettings", connection.objectReferenceValue != null ? connection.objectReferenceValue.name : "none",
+                        asset != null ? asset.name : "none", () => connection.objectReferenceValue = asset);
+                    so.ApplyModifiedPropertiesWithoutUndo();
+                }
+                else Debug.LogWarning("[DeviceSettings] DeviceMain has no LauncherWindow.");
+
+                var holokit = Find<HoloKitCameraManager>();
+                if (holokit != null)
+                {
+                    // Landscape in Mono too (phone in hand before it goes into the viewer), like the app's default.
+                    var so = new SerializedObject(holokit);
+                    var orientations = so.FindProperty("m_SupportedMonoScreenOrientations");
+                    Change("DeviceMain HoloKitCameraManager mono orientations", (MonoScreenOrientation)orientations.intValue,
+                        MonoScreenOrientation.LandscapeLeft, () => orientations.intValue = (int)MonoScreenOrientation.LandscapeLeft);
+                    so.ApplyModifiedPropertiesWithoutUndo();
+                }
+
+                if (changes > before) EditorSceneManager.SaveScene(scene);
+            }
+            finally
+            {
+                if (openedHere) EditorSceneManager.CloseScene(scene, true);
+            }
+        }
+    }
+}
