@@ -15,8 +15,8 @@ namespace SpatialLauncher.SpatialWindows.Editor
     /// <summary>
     /// Applies what the iOS device build needs (Tools > Spatial Windows > Apply iOS Device Settings): player settings
     /// for a headset app that streams from the laptop, HoloKit's required fixes, DeviceMain as the only build scene,
-    /// DeviceMain's launcher in WebRTC mode, and HoloKit hand tracking as DeviceMain's window input (HandTrackingManager,
-    /// LiDAR depth, <see cref="HoloKitHandSource"/>). Safe to run again: it logs each change with a [DeviceSettings] prefix
+    /// DeviceMain's launcher in WebRTC mode, HoloKit hand tracking as DeviceMain's window input (HandTrackingManager,
+    /// LiDAR depth, <see cref="HoloKitHandSource"/>) and HoloKit's Mono/Stereo button. Safe to run again: it logs each change with a [DeviceSettings] prefix
     /// and leaves settings that are already right alone. Info.plist keys Unity has no setting for are added at build
     /// time by <see cref="IosInfoPlist"/>; <see cref="DeviceBuildCheck"/> checks the result.
     /// </summary>
@@ -152,12 +152,45 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 }
 
                 ApplyHandTracking(scene, Find<HandWindowInput>(), Find<ARCameraManager>());
+                ApplyStereoSwitch(scene);
 
                 if (changes > before) EditorSceneManager.SaveScene(scene);
             }
             finally
             {
                 if (openedHere) EditorSceneManager.CloseScene(scene, true);
+            }
+        }
+
+        const string HoloKitCanvasPrefab = "Packages/io.holokit.unity-sdk/Assets/Prefabs/HoloKit Default UI Canvas.prefab";
+
+        // HoloKit starts in mono, and only a UI button switches to stereo: add the SDK's default canvas (a Mono/Stereo
+        // button and recording; in stereo its buttons hide and HoloKit's stereo bar offers MONO to go back), with an
+        // EventSystem on the Input System for its buttons.
+        static void ApplyStereoSwitch(Scene scene)
+        {
+            bool Has<T>() where T : Component => scene.GetRootGameObjects().Any(r => r.GetComponentInChildren<T>(true) != null);
+
+            if (!Has<HoloKit.UI.HoloKitDefaultUICanvas>())
+            {
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(HoloKitCanvasPrefab);
+                if (prefab == null)
+                {
+                    Debug.LogWarning($"[DeviceSettings] {HoloKitCanvasPrefab} not found: DeviceMain has no way into stereo mode.");
+                    return;
+                }
+                PrefabUtility.InstantiatePrefab(prefab, scene);
+                changes++;
+                Debug.Log("[DeviceSettings] DeviceMain: added HoloKit Default UI Canvas (Mono/Stereo button)");
+            }
+
+            if (!Has<UnityEngine.EventSystems.EventSystem>())
+            {
+                var eventSystem = new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem),
+                    typeof(UnityEngine.InputSystem.UI.InputSystemUIInputModule));
+                SceneManager.MoveGameObjectToScene(eventSystem, scene);
+                changes++;
+                Debug.Log("[DeviceSettings] DeviceMain: added an EventSystem (Input System UI module)");
             }
         }
 

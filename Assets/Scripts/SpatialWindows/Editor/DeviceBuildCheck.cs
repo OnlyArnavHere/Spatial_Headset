@@ -309,6 +309,10 @@ namespace SpatialLauncher.SpatialWindows.Editor
                             "HoloKitHandSource has its HandTrackingManager and head assigned");
                     }
                 }
+                var eventSystems = Find<UnityEngine.EventSystems.EventSystem>();
+                Expect(Find<HoloKit.UI.HoloKitDefaultUICanvas>().Length == 1 && eventSystems.Length == 1 &&
+                       eventSystems[0].GetComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>() != null,
+                    "a Mono/Stereo button gets into stereo (HoloKit Default UI Canvas, EventSystem on the Input System); HoloKit starts in mono");
                 Expect(cameraManagers.Length == 1 && cameraManagers[0].GetComponent<AROcclusionManager>() != null,
                     "the AR camera has an AROcclusionManager (LiDAR depth for HoloKit's 3D hand joints)");
 #if UNITY_IOS
