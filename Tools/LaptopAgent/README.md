@@ -1,7 +1,9 @@
 # Laptop Agent
 
-Streams a Windows laptop's screen, or a single window, to the Spatial Launcher headset's **Laptop** window, and, if you
-allow it, lets the headset move and click the laptop's mouse.
+Streams a Windows laptop's windows, or its whole desktop, to the Spatial Launcher headset, and, if you allow it, lets
+the headset move and click the laptop's mouse in them. The headset's **Laptop** icon opens a picker listing what the
+laptop can stream ("Whole desktop" first, then the open windows); each one picked opens in its own window in the
+headset, and several can be open at once, each with its own video stream and its own input routing.
 
 > Prototype. It has been tested with the agent and the Unity editor on the same Windows machine, not yet with an
 > iPhone over Wi-Fi. Read **Risks** before using `--input`.
@@ -10,9 +12,9 @@ allow it, lets the headset move and click the laptop's mouse.
 
 | Piece | Role | Listens on |
 |---|---|---|
-| `ffmpeg` | Captures the screen or window (Windows Graphics Capture) and encodes H.264: NVENC, QuickSync or AMF if one works, else x264 with zero-latency settings | nothing (publishes to MediaMTX on 127.0.0.1) |
-| `MediaMTX` | Serves the stream over WebRTC; the headset connects with WHEP | TCP 8889 (WHEP/HTTP), UDP 8189 (media); RTSP 8554 on 127.0.0.1 only |
-| `input_server.py` | Receives pointer events and injects mouse input. **Only with `--input`** | TCP 8765 (WebSocket) |
+| `ffmpeg` (one per streamed window) | Captures a window or the screen (Windows Graphics Capture) and encodes H.264: NVENC, QuickSync or AMF if one works, else x264 with zero-latency settings. Started when the headset opens that window, stopped 15 s after the last headset window showing it closes | nothing (publishes to MediaMTX on 127.0.0.1) |
+| `MediaMTX` | Serves each stream over WebRTC on its own path, named after the window title (e.g. `/untitled-notepad`, `/desktop`); the headset connects with WHEP | TCP 8889 (WHEP/HTTP), UDP 8189 (media); RTSP 8554 on 127.0.0.1 only |
+| `input_server.py` | The control server: lists windows, starts streams, and (only with `--input`) injects mouse input into the window each headset connection opened | TCP 8765 (WebSocket) |
 
 `agent.py` starts and stops all of them. They run only while `agent.py` runs: nothing is installed as a service or
 started at login, and if `agent.py` is closed or killed, Windows ends ffmpeg and MediaMTX with it.
@@ -33,24 +35,33 @@ and installs the Python dependency (`websockets`). Nothing downloaded is committ
 
 ```
 python agent.py --list                                   # monitors and windows
-python agent.py                                          # stream the primary monitor, no input
-python agent.py --window "Notepad"                       # stream one window (part of its title)
-python agent.py --window "Notepad" --input               # ...and accept mouse input from the headset
+python agent.py                                          # the headset picks what to stream; view only
+python agent.py --input                                  # ...and may move and click the mouse in streamed windows
+python agent.py --window "Notepad"                       # also stream one window right away (part of its title)
+python agent.py --window "Notepad" --no-picker           # offer only that window, no window list
 python agent.py --max-width 1280 --max-height 720 --fps 60 --bitrate 8M --encoder nvenc
 ```
 
-The console prints a **pairing token** (new every run) and the address to use. In the headset's Laptop window, enter
-the laptop's address, port `8889` and the token, then **Connect**. You can also watch the stream in a browser at
-`http://<laptop>:8889/laptop/` (user `viewer`, password the token).
+The console prints a **pairing token** (new every run) and the address to use. In the headset, tap the **Laptop** icon,
+enter the laptop's address, port `8889` and the token, then **List**, and pick a window or **Whole desktop**. Each pick
+opens its own window. While a stream runs you can also watch it in a browser at `http://<laptop>:8889/<path>/` (user
+`viewer`, password the token); the path is the title in lowercase with dashes, e.g. `/untitled-notepad`.
 
-Options: `--monitor N`, `--max-width`, `--max-height` (the picture is scaled down to fit, never padded, so pointer
-positions map 1:1), `--fps`, `--bitrate`, `--encoder auto|nvenc|qsv|amf|x264`, `--webrtc-port`, `--ice-udp-port`,
-`--input`, `--input-port`, `--dry-run-input` (log mapped mouse events instead of injecting them), `--verbose`.
+Options: `--monitor N`, `--max-width`, `--max-height` (each picture is scaled down to fit, never padded, so pointer
+positions map 1:1), `--fps`, `--bitrate` (per stream), `--encoder auto|nvenc|qsv|amf|x264`, `--webrtc-port`,
+`--ice-udp-port`, `--input`, `--input-port` (the control server), `--dry-run-input` (log mapped mouse events instead of
+injecting them), `--no-picker`, `--verbose`.
+
+Windows Graphics Capture only delivers a frame when a window changes, so a window nobody is typing in (or one behind
+other windows) would stream nothing. The agent asks each streamed window to repaint twice a second, which keeps it
+streaming, and forces a keyframe every second so a headset that joins late gets a picture at once. Minimized windows
+can't be captured: they're left out of the list.
 
 ### Measuring delay
 
 `python clock.py` opens a window showing this laptop's clock to the millisecond (`clock.html` is a browser version).
-Stream it with `--window "Spatial Launcher Test Clock"`, then compare:
+Pick it in the headset's Laptop picker (or start the agent with `--window "Spatial Launcher Test Clock"`), then
+compare:
 
 - **By eye:** put the headset view (or the Unity editor) next to the clock and take one photo; the difference between
   the two clocks is the end-to-end video delay.
@@ -64,36 +75,45 @@ headset pointed.
 ### Firewall
 
 On the same machine nothing needs opening. For an iPhone on the same Wi-Fi, Windows Firewall must allow inbound
-TCP 8889 and UDP 8189 (video) and TCP 8765 (input) for `mediamtx.exe` and `python.exe`. Windows asks the first time.
+TCP 8889 and UDP 8189 (video) and TCP 8765 (control and input) for `mediamtx.exe` and `python.exe`. Windows asks the
+first time.
 **Allow them on Private networks only**, and set your home Wi-Fi to Private (Settings > Network > Wi-Fi > your
 network). On a Public network profile Windows blocks them, which is the safe default for cafés and hotels.
 
 ## Security model
 
 - **Pairing token:** `agent.py` generates a random token (18 random bytes, URL-safe) every run and prints it. Every
-  video (WHEP) request needs it as the password, and every input connection must send it as its first message within
-  5 seconds. It's compared in constant time. After 5 wrong tokens from one address, that address is locked out
+  video (WHEP) request needs it as the password, and every control connection must send it as its first message
+  within 5 seconds. It's compared in constant time. After 5 wrong tokens from one address, that address is locked out
   until the agent restarts; each wrong attempt also waits 2 seconds.
-- **Local network only:** the input server accepts only loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7)
+- **Local network only:** the control server accepts only loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7)
   and link-local addresses. MediaMTX only lets viewers in from the same ranges, and only lets ffmpeg on this machine
-  publish. Its control API, metrics, RTMP, HLS, SRT and playback servers are switched off, and RTSP listens on
+  publish. Its control API, metrics, RTMP, HLS, SRT, MoQ and playback servers are switched off, and RTSP listens on
   127.0.0.1 only.
-- **Opt-in input:** the input server never starts unless you run `agent.py --input`. Without it, the headset can
-  only watch.
-- **One controller:** only one headset can control the mouse at a time; others are refused while it's connected.
-- **Letting go:** when the input connection closes or drops, any held mouse button is released and input stops.
-  Dead connections are detected by WebSocket pings within about 6 seconds, and a held button is released after
-  3 seconds without any message. Input aimed at a closed or minimized window is dropped rather than sent to
-  whatever is behind it.
-- **What it can do:** move the pointer, left/right click and scroll within the captured window or monitor. No
-  keyboard input, no file access, no commands.
+- **Nothing streams until asked:** a window is captured only while a paired headset has it open (plus 15 seconds),
+  or when you name it with `--window`/`--monitor`. `--no-picker` limits the headset to that one target.
+- **Opt-in input:** without `--input` the headset can list windows and watch them, but the agent never moves or
+  clicks the mouse.
+- **One headset:** only one headset (one address) can be connected at a time; it may open several windows, each on
+  its own connection. Others are refused while it's connected.
+- **Clicks go to the window they're meant for:** each connection's input goes only to the window it opened. Before a
+  click or scroll the agent brings that window to the top, and drops the click if another window still covers the
+  point, so it never lands on a different window.
+- **Letting go:** when a connection closes or drops, any mouse button it held is released. Dead connections are
+  detected by WebSocket pings within about 6 seconds, and a held button is released after 3 seconds without any
+  message. Input aimed at a closed or minimized window is dropped rather than sent to whatever is behind it.
+- **What it can do:** list the titles of the open windows, stream them or the whole desktop, and (with `--input`)
+  move the pointer, left/right click and scroll within the streamed window or monitor. No keyboard input, no file
+  access, no commands.
 
 ## Risks
 
 Read these before using `--input`.
 
-- **Anyone with the token on your network controls your mouse.** They can click anything visible in the captured
-  area: buttons, links, dialogs. Treat the token like a password; it's shown in the console and stored in
+- **Anyone with the token on your network can see any window and the whole desktop.** The picker lists every open
+  window's title, and any of them can be streamed. Use `--window ... --no-picker` to offer only one window.
+- **With `--input`, anyone with the token controls your mouse** in the windows they stream. They can click anything
+  in them: buttons, links, dialogs. Treat the token like a password; it's shown in the console and stored in
   `.runtime/mediamtx.yml` while the agent runs.
 - **The token and the input aren't encrypted.** The video itself is (WebRTC always uses DTLS-SRTP), but the token
   travels in plain HTTP (the WHEP request) and plain WebSocket (`ws://`), and so do all pointer events. Anyone who can
@@ -101,9 +121,10 @@ Read these before using `--input`.
   you trust; never on public Wi-Fi, and never forward these ports from a router.
 - **Window capture can show more than the window.** Menus, pop-ups and notifications drawn over it are not captured,
   but a full-monitor capture shows everything on that monitor, including notifications and anything you open.
-- **Clicks follow the screen, not the window's content.** If another window covers the captured one, injected clicks
-  land on whatever is on top. If the captured window is resized after the agent starts, positions drift (restart the
-  agent).
+- **Clicks follow the screen, not the window's content.** The agent raises the streamed window before each click and
+  drops clicks that would land on another window, but a window that stays on top (an "always on top" app) can still
+  block them. If a streamed window is resized while it streams, positions drift: close its headset window and pick it
+  again.
 - **Administrator windows can't be clicked** from a normal-privilege agent (Windows blocks it), and clicks on the
   Windows secure desktop (UAC prompts, lock screen) are impossible. Don't run the agent as administrator to "fix"
   this: that would let the headset click administrator windows too.
@@ -113,12 +134,13 @@ Read these before using `--input`.
 
 | File | Purpose |
 |---|---|
-| `agent.py` | The launcher |
-| `input_server.py` | WebSocket input server (protocol documented at the top of the file) |
-| `winapi.py` | Windows calls: DPI awareness, windows and monitors, `SendInput`, the job object that ends child processes |
+| `agent.py` | The launcher: MediaMTX, the capture processes and the control server |
+| `streams.py` | What can be streamed (desktop, windows), each stream's path, starting and stopping captures |
+| `input_server.py` | WebSocket control and input server (protocol documented at the top of the file) |
+| `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising and repainting windows, `SendInput`, the job object that ends child processes |
 | `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs `websockets` |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
-| `selftest_input.py` | Checks a running agent's input server: token, ping, single controller, dry-run mapping |
+| `selftest_input.py` | Checks a running agent's control server: token, ping, window list, streams per window, one headset, per-window input routing (dry run) |
 
 ## Licenses
 

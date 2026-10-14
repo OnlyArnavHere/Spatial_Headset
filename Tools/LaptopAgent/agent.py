@@ -1,8 +1,9 @@
-"""Laptop agent: streams this laptop's screen (or one window) to the headset and, if asked, accepts its mouse input.
+"""Laptop agent: streams this laptop's windows or whole desktop to the headset and, if asked, accepts its mouse input.
 
   python agent.py --list                          show monitors and windows
-  python agent.py                                 stream the primary monitor (no input)
-  python agent.py --window "Notepad" --input      stream one window and accept mouse input for it
+  python agent.py                                 let the headset pick what to stream (Laptop icon), view only
+  python agent.py --input                         ...and let it move and click the mouse in the streamed windows
+  python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
 
 Run `python agent.py --help` for every option. See README.md, especially the risks section, before using --input.
 """
@@ -18,12 +19,12 @@ import time
 from pathlib import Path
 
 import winapi
-from input_server import InputServer, Target
+from input_server import InputServer
+from streams import StreamManager, Target, monitor_target, window_target
 
 HERE = Path(__file__).resolve().parent
 BIN = HERE / "bin"
 RUNTIME = HERE / ".runtime"
-STREAM_PATH = "laptop"
 RTSP_PORT = 8554  # local only: ffmpeg publishes here
 log = logging.getLogger("agent")
 
@@ -51,22 +52,25 @@ def tool(name: str) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Stream this laptop's screen to the Spatial Launcher headset.")
+    p = argparse.ArgumentParser(description="Stream this laptop's windows or desktop to the Spatial Launcher headset.")
     what = p.add_mutually_exclusive_group()
-    what.add_argument("--window", metavar="TITLE", help="stream the first visible window whose title contains TITLE")
-    what.add_argument("--monitor", type=int, metavar="N", help="stream monitor N from --list (default: primary)")
+    what.add_argument("--window", metavar="TITLE",
+                      help="also start streaming the first visible window whose title contains TITLE right away")
+    what.add_argument("--monitor", type=int, metavar="N", help="also start streaming monitor N from --list right away")
+    p.add_argument("--no-picker", action="store_true",
+                   help="with --window or --monitor: offer only that target, not the window list")
     p.add_argument("--list", action="store_true", help="list monitors and windows, then exit")
-    p.add_argument("--max-width", type=int, default=1920, help="scale down to at most this width (default 1920)")
-    p.add_argument("--max-height", type=int, default=1080, help="scale down to at most this height (default 1080)")
+    p.add_argument("--max-width", type=int, default=1920, help="scale each stream down to at most this width (default 1920)")
+    p.add_argument("--max-height", type=int, default=1080, help="scale each stream down to at most this height (default 1080)")
     p.add_argument("--fps", type=int, default=30, help="frame rate (default 30)")
-    p.add_argument("--bitrate", default="6M", help="video bitrate, e.g. 4M or 8000k (default 6M)")
+    p.add_argument("--bitrate", default="6M", help="video bitrate per stream, e.g. 4M or 8000k (default 6M)")
     p.add_argument("--encoder", choices=["auto"] + [e[0] for e in ENCODERS], default="auto",
                    help="H.264 encoder (default: first hardware encoder that works, else x264)")
     p.add_argument("--webrtc-port", type=int, default=8889, help="MediaMTX WebRTC/WHEP HTTP port (default 8889)")
     p.add_argument("--ice-udp-port", type=int, default=8189, help="MediaMTX WebRTC media UDP port (default 8189)")
     p.add_argument("--input", action="store_true",
-                   help="also start the input server, letting the paired headset move and click the mouse")
-    p.add_argument("--input-port", type=int, default=8765, help="input WebSocket port (default 8765)")
+                   help="let the paired headset move and click the mouse in the windows it streams")
+    p.add_argument("--input-port", type=int, default=8765, help="control and input WebSocket port (default 8765)")
     p.add_argument("--dry-run-input", action="store_true",
                    help="with --input: log the mapped mouse events instead of injecting them")
     p.add_argument("--verbose", action="store_true", help="show ffmpeg and MediaMTX logs")
@@ -76,37 +80,28 @@ def parse_args() -> argparse.Namespace:
 def list_targets() -> None:
     print("Monitors:")
     for m in winapi.list_monitors():
-        print(f"  {m.index}: {m.rect}{'  (primary)' if m.primary else ''}")
-    print("\nWindows (use part of a title with --window):")
+        note = '  (primary: "Whole desktop")' if m.primary else ""
+        print(f"  {m.index}: {m.rect}{note}")
+    print("\nWindows (the headset's picker lists these; use part of a title with --window):")
     for w in winapi.list_windows():
         r = winapi.window_rect(w.handle)
-        state = "  (minimized)" if winapi.window_is_minimized(w.handle) else f"  {r}" if r else ""
+        state = "  (minimized: not listed)" if winapi.window_is_minimized(w.handle) else f"  {r}" if r else ""
         print(f"  {w.title[:70]!r}{state}")
 
 
-def choose_target(args) -> tuple[Target, str]:
-    """The capture target and its gfxcapture selector (an exact HWND/HMONITOR, so input maps to the same thing)."""
+def pinned_target(args) -> Target | None:
+    """The target named on the command line, if any."""
     if args.window:
         window = winapi.find_window(args.window)
         if window is None:
             raise SystemExit(f"No visible window title contains {args.window!r}. Try --list.")
-        handle = window.handle
-        target = Target("window", handle, f"window {window.title!r}",
-                        rect=lambda: winapi.window_rect(handle),
-                        usable=lambda: winapi.window_exists(handle) and not winapi.window_is_minimized(handle))
-        return target, f"hwnd={handle}"
-
-    monitors = winapi.list_monitors()
+        return window_target(window)
     if args.monitor is None:
-        monitor = next((m for m in monitors if m.primary), monitors[0])
-    elif 0 <= args.monitor < len(monitors):
-        monitor = monitors[args.monitor]
-    else:
+        return None
+    monitors = winapi.list_monitors()
+    if not 0 <= args.monitor < len(monitors):
         raise SystemExit(f"Monitor {args.monitor} doesn't exist. Try --list.")
-    handle = monitor.handle
-    target = Target("monitor", handle, f"monitor {monitor.index} ({monitor.rect})",
-                    rect=lambda: winapi.monitor_rect(handle), usable=lambda: True)
-    return target, f"hmonitor={handle}"
+    return monitor_target(monitors[args.monitor])
 
 
 def output_size(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
@@ -135,9 +130,11 @@ def bitrate_bits(text: str) -> int:
 
 def encoder_args(name: str, codec: str, fps: int, bitrate: int) -> list[str]:
     """Low-latency settings: constant bitrate, a small buffer, no B-frames (WebRTC can't use them),
-    a keyframe every second so a reconnecting headset gets a picture quickly, and the baseline profile."""
+    a keyframe every second so a reconnecting headset gets a picture quickly, and the baseline profile.
+    Keyframes go by time, not frame count: a static window delivers only a couple of frames a second."""
     b, buf, gop = str(bitrate), str(bitrate // 2), str(fps)
-    common = ["-b:v", b, "-maxrate", b, "-bufsize", buf, "-g", gop, "-bf", "0"]
+    common = ["-b:v", b, "-maxrate", b, "-bufsize", buf, "-g", gop, "-bf", "0",
+              "-force_key_frames", "expr:gte(t,n_forced*1)"]
     if name == "nvenc":
         return ["-c:v", codec, "-preset", "p1", "-tune", "ull", "-rc", "cbr", "-zerolatency", "1",
                 "-profile:v", "baseline", "-forced-idr", "1"] + common
@@ -159,19 +156,17 @@ logDestinations: [stdout]
 
 authMethod: internal
 authInternalUsers:
-  # ffmpeg on this machine publishes the stream.
+  # ffmpeg on this machine publishes the streams (one path per streamed window).
   - user: any
     ips: ['127.0.0.1', '::1']
     permissions:
       - action: publish
-        path: {STREAM_PATH}
-  # The headset reads it over WebRTC (WHEP) with the pairing token, from the local network only.
+  # The headset reads them over WebRTC (WHEP) with the pairing token, from the local network only.
   - user: viewer
     pass: '{token}'
     ips: [{networks}]
     permissions:
       - action: read
-        path: {STREAM_PATH}
 
 api: no
 metrics: no
@@ -184,6 +179,7 @@ rtspTransports: [tcp]
 rtmp: no
 hls: no
 srt: no
+moq: no
 
 webrtc: yes
 webrtcAddress: :{webrtc_port}
@@ -191,7 +187,7 @@ webrtcLocalUDPAddress: :{ice_udp_port}
 webrtcLocalTCPAddress: ''
 
 paths:
-  {STREAM_PATH}:
+  all_others:
     source: publisher
 """
     path = RUNTIME / "mediamtx.yml"
@@ -232,43 +228,51 @@ def wait_for_port(port: int, process: subprocess.Popen, timeout: float) -> None:
     raise SystemExit(f"MediaMTX didn't open port {port} within {timeout:g} s.")
 
 
-def start_processes(args, selector: str, size: tuple[int, int], encoder: tuple[str, str, str], token: str):
-    job = winapi.KillOnExitJob()
-    mediamtx_out = None if args.verbose else subprocess.DEVNULL
+def start_mediamtx(args, token: str, job: winapi.KillOnExitJob) -> subprocess.Popen:
     config = write_mediamtx_config(token, args.webrtc_port, args.ice_udp_port)
     mediamtx = subprocess.Popen([tool("mediamtx"), str(config)], cwd=RUNTIME,
-                                stdout=mediamtx_out, stderr=subprocess.STDOUT)
+                                stdout=None if args.verbose else subprocess.DEVNULL, stderr=subprocess.STDOUT)
     job.add(mediamtx.pid)
     wait_for_port(RTSP_PORT, mediamtx, 10)
+    return mediamtx
 
+
+def capture_launcher(args, encoder: tuple[str, str, str], job: winapi.KillOnExitJob):
+    """Returns launch(target, path): starts ffmpeg capturing the target and publishing it on the path."""
+    ffmpeg = tool("ffmpeg")
     name, codec, pix_fmt = encoder
-    width, height = size
-    capture = (f"gfxcapture={selector}:max_framerate={args.fps}:capture_cursor=1,"
-               f"hwdownload,format=bgra,scale={width}:{height}:flags=bilinear,format={pix_fmt}[v]")
-    command = [tool("ffmpeg"), "-hide_banner", "-loglevel", "info" if args.verbose else "warning",
-               "-filter_complex", capture, "-map", "[v]", "-fps_mode", "vfr"]
-    command += encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
-    command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{RTSP_PORT}/{STREAM_PATH}"]
-    log.debug("ffmpeg: %s", subprocess.list2cmdline(command))
-    ffmpeg = subprocess.Popen(command, stdin=subprocess.DEVNULL)
-    job.add(ffmpeg.pid)
-    return mediamtx, ffmpeg, job
+
+    def launch(target: Target, path: str) -> tuple[subprocess.Popen, tuple[int, int]]:
+        rect = target.rect()
+        if rect is None or rect.width < 16 or rect.height < 16:
+            raise LookupError("minimized")
+        width, height = output_size(rect.width, rect.height, args.max_width, args.max_height)
+        capture = (f"gfxcapture={target.selector}:max_framerate={args.fps}:capture_cursor=1,"
+                   f"hwdownload,format=bgra,scale={width}:{height}:flags=bilinear,format={pix_fmt}[v]")
+        command = [ffmpeg, "-hide_banner", "-loglevel", "info" if args.verbose else "warning",
+                   "-filter_complex", capture, "-map", "[v]", "-fps_mode", "vfr"]
+        command += encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
+        command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{RTSP_PORT}/{path}"]
+        log.debug("ffmpeg: %s", subprocess.list2cmdline(command))
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL)
+        job.add(process.pid)
+        return process, (width, height)
+
+    return launch
 
 
-async def supervise(processes: dict, input_server: InputServer | None) -> None:
-    tasks = [asyncio.create_task(input_server.run())] if input_server else []
+async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, server: InputServer) -> None:
+    task = asyncio.create_task(server.run())
     try:
         while True:
-            for name, process in processes.items():
-                if process.poll() is not None:
-                    raise SystemExit(f"{name} stopped (exit code {process.returncode}); shutting down.")
-            for task in tasks:
-                if task.done():
-                    task.result()  # re-raises, e.g. the input port is already in use
+            if mediamtx.poll() is not None:
+                raise SystemExit(f"MediaMTX stopped (exit code {mediamtx.returncode}); shutting down.")
+            if task.done():
+                task.result()  # re-raises, e.g. the control port is already in use
+            streams.tick()
             await asyncio.sleep(0.5)
     finally:
-        for task in tasks:
-            task.cancel()
+        task.cancel()
 
 
 def main() -> None:
@@ -283,30 +287,38 @@ def main() -> None:
         return
     if args.dry_run_input and not args.input:
         raise SystemExit("--dry-run-input only makes sense together with --input.")
+    pinned = pinned_target(args)
+    if args.no_picker and pinned is None:
+        raise SystemExit("--no-picker needs --window or --monitor (otherwise there would be nothing to stream).")
 
-    target, selector = choose_target(args)
-    rect = target.rect()
-    if rect is None or rect.width < 16 or rect.height < 16:
-        raise SystemExit(f"Can't capture {target.description}: it has no usable size (minimized?).")
-    size = output_size(rect.width, rect.height, args.max_width, args.max_height)
     encoder = probe_encoder(tool("ffmpeg"), args.encoder)
     token = secrets.token_urlsafe(18)
-
-    mediamtx, ffmpeg, _job = start_processes(args, selector, size, encoder, token)
-    input_server = InputServer(token, target, port=args.input_port, dry_run=args.dry_run_input) if args.input else None
+    job = winapi.KillOnExitJob()
+    mediamtx = start_mediamtx(args, token, job)
+    streams = StreamManager(capture_launcher(args, encoder, job), only_pinned=args.no_picker)
+    pinned_stream = None
+    if pinned is not None:
+        try:
+            pinned_stream = streams.pin(pinned.id)
+        except LookupError:
+            raise SystemExit(f"Can't capture {pinned.description}: it has no usable size (minimized?).")
+    server = InputServer(token, streams, port=args.input_port, input_enabled=args.input, dry_run=args.dry_run_input)
 
     hosts = lan_addresses()
+    offered = f"only {pinned.description}" if args.no_picker else "the headset picks a window or the whole desktop"
+    started = (f"\n Streaming now:     {pinned_stream.target.description} on /{pinned_stream.path}"
+               f"   ({pinned_stream.size[0]}x{pinned_stream.size[1]})") if pinned_stream else ""
     print(f"""
 ==============================================================================
- Streaming {target.description}
-   {rect.width}x{rect.height} -> {size[0]}x{size[1]} at up to {args.fps} fps, {args.bitrate}bit/s, encoder {encoder[0]}
+ Offering:          {offered}
+                    up to {args.fps} fps, {args.bitrate}bit/s per stream, encoder {encoder[0]}{started}
 
  PAIRING TOKEN:  {token}
-   (new every run; type it into the Laptop window's connect panel)
+   (new every run; type it into the Laptop picker's connect panel)
 
- Headset settings:  host {hosts[0]}   video port {args.webrtc_port}   input port {args.input_port}
+ Headset settings:  host {hosts[0]}   video port {args.webrtc_port}   control port {args.input_port}
                     (same machine: 127.0.0.1; other adapters: {', '.join(hosts[1:]) or 'none'})
- Browser preview:   http://{hosts[0]}:{args.webrtc_port}/{STREAM_PATH}/   (user: viewer, password: the token)
+ Browser preview:   http://{hosts[0]}:{args.webrtc_port}/<path>/ while a stream runs (user: viewer, password: the token)
  Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse') if args.input else 'off (start with --input to allow it)'}
 
  Press Ctrl+C to stop.
@@ -314,18 +326,17 @@ def main() -> None:
 """, flush=True)
 
     try:
-        asyncio.run(supervise({"MediaMTX": mediamtx, "ffmpeg": ffmpeg}, input_server))
+        asyncio.run(supervise(mediamtx, streams, server))
     except KeyboardInterrupt:
         pass
     finally:
-        for process in (ffmpeg, mediamtx):
-            if process.poll() is None:
-                process.terminate()
-        for process in (ffmpeg, mediamtx):
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        streams.stop_all()
+        if mediamtx.poll() is None:
+            mediamtx.terminate()
+        try:
+            mediamtx.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            mediamtx.kill()
         print("Stopped.")
 
 

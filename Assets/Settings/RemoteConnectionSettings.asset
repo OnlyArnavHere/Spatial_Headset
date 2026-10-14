@@ -15,6 +15,5 @@ MonoBehaviour:
   defaultHost: 127.0.0.1
   defaultVideoPort: 8889
   inputPort: 8765
-  streamPath: laptop
   viewerUser: viewer
   expectedResolution: {x: 1920, y: 1080}

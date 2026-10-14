@@ -151,6 +151,36 @@ def window_is_minimized(handle: int) -> bool:
     return bool(user32.IsIconic(wt.HWND(handle)))
 
 
+_HWND_TOP = 0
+_SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
+_GA_ROOT = 2
+user32.WindowFromPoint.argtypes = [wt.POINT]
+user32.WindowFromPoint.restype = wt.HWND
+user32.GetAncestor.restype = wt.HWND
+
+
+def raise_window(handle: int) -> None:
+    """Puts the window on top of the others without activating it (a click then activates it as usual)."""
+    user32.SetWindowPos(wt.HWND(handle), wt.HWND(_HWND_TOP), 0, 0, 0, 0, _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE)
+
+
+def window_at(x: int, y: int) -> int:
+    """The top-level window that owns the screen pixel (x, y), or 0."""
+    hwnd = user32.WindowFromPoint(wt.POINT(x, y))
+    return int(user32.GetAncestor(hwnd, _GA_ROOT) or 0) if hwnd else 0
+
+
+_RDW_INVALIDATE, _RDW_ALLCHILDREN, _RDW_FRAME = 0x0001, 0x0080, 0x0400
+
+
+def request_repaint(handle: int) -> None:
+    """Asks the window to repaint itself, without waiting for it (a hung app can't block the agent). Windows Graphics
+    Capture delivers a frame only when a window changes, so a static window (a document nobody is typing in, or one
+    behind other windows) would otherwise stream nothing at all; measured on Notepad: 1-2 frames in 5 s without,
+    one frame per request with."""
+    user32.RedrawWindow(wt.HWND(handle), None, None, _RDW_INVALIDATE | _RDW_ALLCHILDREN | _RDW_FRAME)
+
+
 def window_frame_rect(handle: int) -> Rect | None:
     """The window's visible outer bounds (DWM extended frame, without the invisible resize border)."""
     r = wt.RECT()

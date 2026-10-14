@@ -14,10 +14,8 @@ namespace SpatialLauncher.SpatialWindows
         public string defaultHost = "127.0.0.1";
         [Tooltip("MediaMTX's WebRTC (WHEP) port; agent.py --webrtc-port.")]
         public int defaultVideoPort = 8889;
-        [Tooltip("The agent's input WebSocket port; agent.py --input-port.")]
+        [Tooltip("The agent's control and input WebSocket port; agent.py --input-port.")]
         public int inputPort = 8765;
-        [Tooltip("The stream path the agent publishes to.")]
-        public string streamPath = "laptop";
         [Tooltip("User name MediaMTX expects for viewers; the password is the pairing token.")]
         public string viewerUser = "viewer";
         [Tooltip("The laptop screen's resolution, used for the window's aspect until the stream reports its own.")]
