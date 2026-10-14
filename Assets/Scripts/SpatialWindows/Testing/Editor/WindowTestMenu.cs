@@ -21,9 +21,6 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         [MenuItem("Tools/Spatial Windows/Spawn Test Window", true)]
         static bool CanSpawnTestWindow() => Application.isPlaying;
 
-        // Title bar height plus gap above the body, matching SpatialWindow's layout.
-        const float TitleBarExtent = 0.065f;
-
         /// <summary>
         /// Clicks (press + release, no movement) a point of the window just behind the front one that is
         /// visibly uncovered, through MouseWindowInput, and logs what the physics ray hit along the way.
@@ -41,11 +38,13 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             }
 
             var target = manager.Windows[manager.Windows.Count - 2];
-            if (!TryFindVisiblePoint(manager, target, cam, out var screenPoint))
+            if (!WindowTestUtil.TryFindVisiblePoint(manager, target, cam.transform.position, out var worldPoint))
             {
                 Debug.LogWarning($"[ClickTest] No visible point found on {target.Title}.");
                 return;
             }
+            Vector2 screenPoint = cam.WorldToScreenPoint(worldPoint);
+            WindowTestUtil.SelectInput<MouseWindowInput>(manager);
 
             var ray = cam.ScreenPointToRay(screenPoint);
             var hits = Physics.RaycastAll(ray, 20f, ~0, QueryTriggerInteraction.Collide);
@@ -70,46 +69,17 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         [MenuItem("Tools/Spatial Windows/Click Window Behind Front", true)]
         static bool CanClickWindowBehindFront() => Application.isPlaying;
 
-        // Finds a screen point on the target where it is the visually front-most window,
-        // using the windows' drawn rectangles rather than physics.
-        static bool TryFindVisiblePoint(WindowManager manager, SpatialWindow target, Camera cam, out Vector2 screenPoint)
+        [MenuItem("Tools/Spatial Windows/Switch Input Source")]
+        static void SwitchInputSource()
         {
-            const int steps = 9;
-            var visual = target.ContentRoot.parent;
-            for (int ix = 1; ix < steps; ix++)
-            for (int iy = 1; iy < steps; iy++)
-            {
-                float x = Mathf.Lerp(-target.Size.x * 0.5f, target.Size.x * 0.5f, ix / (float)steps);
-                float y = Mathf.Lerp(-target.Size.y * 0.5f, target.Size.y * 0.5f + TitleBarExtent, iy / (float)steps);
-                Vector3 screen = cam.WorldToScreenPoint(visual.TransformPoint(new Vector3(x, y, 0f)));
-                if (screen.z <= 0f || screen.x < 0f || screen.y < 0f || screen.x >= Screen.width || screen.y >= Screen.height)
-                    continue;
-                screenPoint = screen;
-                if (VisualPick(manager, cam.ScreenPointToRay(screenPoint)) == target)
-                    return true;
-            }
-            screenPoint = default;
-            return false;
+            var manager = Object.FindFirstObjectByType<WindowManager>();
+            if (manager == null) return;
+            manager.CycleInput();
+            Debug.Log($"[Input] Active input: {manager.ActiveInputName}");
         }
 
-        static SpatialWindow VisualPick(WindowManager manager, Ray ray)
-        {
-            SpatialWindow best = null;
-            float bestDistance = float.MaxValue;
-            foreach (var window in manager.Windows)
-            {
-                var visual = window.ContentRoot.parent;
-                var plane = new Plane(visual.forward, visual.position);
-                if (!plane.Raycast(ray, out float distance) || distance >= bestDistance) continue;
-                var local = visual.InverseTransformPoint(ray.GetPoint(distance));
-                bool inside = Mathf.Abs(local.x) <= window.Size.x * 0.5f
-                              && local.y >= -window.Size.y * 0.5f && local.y <= window.Size.y * 0.5f + TitleBarExtent;
-                if (!inside) continue;
-                best = window;
-                bestDistance = distance;
-            }
-            return best;
-        }
+        [MenuItem("Tools/Spatial Windows/Switch Input Source", true)]
+        static bool CanSwitchInputSource() => Application.isPlaying;
 
         /// <summary>Saves the Game view to Temp/GameView.png in the project folder.</summary>
         [MenuItem("Tools/Spatial Windows/Capture Game View")]

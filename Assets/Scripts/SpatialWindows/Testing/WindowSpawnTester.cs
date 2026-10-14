@@ -5,7 +5,8 @@ namespace SpatialLauncher.SpatialWindows.Testing
 {
     /// <summary>
     /// Editor test harness. N or the on-screen button spawns a window with placeholder content.
-    /// B toggles billboarding and L toggles world-locking on the focused window.
+    /// B toggles billboarding and L toggles world-locking on the focused window. I switches the
+    /// window input source (mouse / simulated hands).
     /// </summary>
     public class WindowSpawnTester : MonoBehaviour
     {
@@ -13,6 +14,7 @@ namespace SpatialLauncher.SpatialWindows.Testing
         [SerializeField] Key spawnKey = Key.N;
         [SerializeField] Key toggleBillboardKey = Key.B;
         [SerializeField] Key toggleWorldLockKey = Key.L;
+        [SerializeField] Key switchInputKey = Key.I;
         [SerializeField] bool showOnScreenButton = true;
         [Tooltip("Base material for the placeholder panels. Defaults to URP Unlit.")]
         [SerializeField] Material contentMaterial;
@@ -49,6 +51,8 @@ namespace SpatialLauncher.SpatialWindows.Testing
 
             if (keyboard[spawnKey].wasPressedThisFrame)
                 SpawnTestWindow();
+            if (keyboard[switchInputKey].wasPressedThisFrame)
+                manager.CycleInput();
 
             var focused = manager.FocusedWindow;
             if (focused == null) return;
@@ -72,9 +76,18 @@ namespace SpatialLauncher.SpatialWindows.Testing
         {
             if (!showOnScreenButton || manager == null) return;
 
-            GUILayout.BeginArea(new Rect(16, 16, 260, 140));
+            GUILayout.BeginArea(new Rect(16, 16, 340, 220));
             if (GUILayout.Button($"Spawn Window ({spawnKey})", GUILayout.Height(36)))
                 SpawnTestWindow();
+
+            GUILayout.Label($"Input ({switchInputKey}): {manager.ActiveInputName}");
+            if (manager.ActiveInput is HandWindowInput hands && hands.HandSource is SimulatedHandSource simulated)
+            {
+                GUILayout.Label(simulated.TwoHanded
+                    ? "Two hands (T): LMB pinches right, RMB pinches left, hold Shift to aim left"
+                    : "One hand (T): LMB pinches");
+                GUILayout.Label($"Hand reach (scroll): {simulated.Reach:F2} m");
+            }
 
             var focused = manager.FocusedWindow;
             GUILayout.Label($"Windows: {manager.Windows.Count}");

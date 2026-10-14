@@ -28,5 +28,14 @@ namespace SpatialLauncher.SpatialWindows
 
         /// <summary>The pointer was released; <paramref name="inside"/> is true if it was still over this control.</summary>
         public virtual void Release(bool inside) { }
+
+        /// <summary>The pointer is over this control without pressing; called every frame it stays.</summary>
+        public virtual void Hover(Vector3 worldPoint) { }
+
+        /// <summary>The pointer left this control (or input stopped) after hovering.</summary>
+        public virtual void HoverExit() { }
+
+        /// <summary>Scroll while hovering, in notches; positive is up / away from the user.</summary>
+        public virtual void Scroll(Vector3 worldPoint, float delta) { }
     }
 }

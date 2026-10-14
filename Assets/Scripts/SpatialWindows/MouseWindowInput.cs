@@ -27,7 +27,7 @@ namespace SpatialLauncher.SpatialWindows
         Mode mode;
         SpatialWindow activeWindow;
         WindowControl activeControl;
-        readonly RaycastHit[] hitBuffer = new RaycastHit[32];
+        WindowControl hoveredControl;
 
         // Drag: keep the grabbed point at the same distance along the mouse ray.
         float grabDistance;
@@ -67,6 +67,28 @@ namespace SpatialLauncher.SpatialWindows
             {
                 End(ray, inView);
             }
+
+            UpdateHover(ray, inView, mouse.scroll.ReadValue().y);
+        }
+
+        // Hover and scroll go to the control under the mouse while no gesture is in progress.
+        void UpdateHover(Ray ray, bool inView, float scroll)
+        {
+            WindowControl hovered = null;
+            Vector3 point = default;
+            if (inView && mode == Mode.None && TryHit(ray, out var hit, out var part) && part.Type == WindowPartType.Control)
+            {
+                part.TryGetComponent(out hovered);
+                point = hit.point;
+            }
+
+            if (hoveredControl != hovered && hoveredControl != null) hoveredControl.HoverExit();
+            hoveredControl = hovered;
+            if (hovered == null) return;
+
+            hovered.Hover(point);
+            // Mouse wheels report about 120 per notch on Windows and 1 elsewhere; pass whole notches.
+            if (Mathf.Abs(scroll) > 0.01f) hovered.Scroll(point, Mathf.Abs(scroll) >= 60f ? scroll / 120f : scroll);
         }
 
         /// <summary>Simulates a press at a screen position (used by editor test helpers).</summary>
@@ -178,25 +200,18 @@ namespace SpatialLauncher.SpatialWindows
             activeWindow = null;
         }
 
-        // Returns the nearest window part along the ray. Other colliders are skipped rather than
-        // blocking: in AR (and XR Simulation) the real world is drawn as background, so a window
-        // can appear in front of a wall or table whose collider is physically closer.
-        bool TryHit(Ray ray, out RaycastHit hit, out WindowPart part)
+        bool TryHit(Ray ray, out RaycastHit hit, out WindowPart part) =>
+            WindowRaycast.TryHit(ray, maxDistance, raycastMask, out hit, out part);
+
+        void OnDisable()
         {
-            hit = default;
-            part = null;
-            int count = Physics.RaycastNonAlloc(ray, hitBuffer, maxDistance, raycastMask, QueryTriggerInteraction.Collide);
-            float nearest = float.MaxValue;
-            for (int i = 0; i < count; i++)
-            {
-                if (hitBuffer[i].distance >= nearest) continue;
-                var candidate = hitBuffer[i].collider.GetComponent<WindowPart>();
-                if (candidate == null || candidate.Window == null) continue;
-                nearest = hitBuffer[i].distance;
-                hit = hitBuffer[i];
-                part = candidate;
-            }
-            return part != null;
+            // Switching input sources mid-gesture: let go cleanly.
+            if (mode == Mode.Control && activeControl != null) activeControl.Release(false);
+            if (hoveredControl != null) hoveredControl.HoverExit();
+            mode = Mode.None;
+            activeWindow = null;
+            activeControl = null;
+            hoveredControl = null;
         }
     }
 }

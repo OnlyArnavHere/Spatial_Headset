@@ -5,14 +5,16 @@ using UnityEngine.Video;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// Opens the home panel: a launcher window whose icons open an Image window, a Video window or a
-    /// blank window. Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
+    /// Opens the home panel: a launcher window whose icons open an Image window, a Video window, a blank
+    /// window or a Laptop window (a remote-screen stream, not connected yet). Press H (or call
+    /// <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
     {
         static readonly Color ImageIconColor = new Color(0.20f, 0.62f, 0.45f);
         static readonly Color VideoIconColor = new Color(0.78f, 0.32f, 0.42f);
         static readonly Color BlankIconColor = new Color(0.42f, 0.44f, 0.52f);
+        static readonly Color LaptopIconColor = new Color(0.30f, 0.42f, 0.70f);
 
         [SerializeField] WindowManager manager;
 
@@ -23,6 +25,13 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] VideoClip sampleVideo;
         [Tooltip("A local file path or URL, used when no Sample Video clip is set.")]
         [SerializeField] string sampleVideoUrl = "";
+
+        [Header("Laptop (remote screen)")]
+        [Tooltip("A component implementing IRemoteInputSink that receives pointer input aimed at the laptop screen. " +
+                 "Defaults to one on this GameObject; without one, input is dropped.")]
+        [SerializeField] MonoBehaviour remoteInputSink;
+        [Tooltip("The laptop's screen resolution, used for the window's aspect until a stream reports its own.")]
+        [SerializeField] Vector2Int laptopResolution = new Vector2Int(1920, 1080);
 
         [Header("Launcher")]
         [SerializeField] bool openOnStart = true;
@@ -69,6 +78,7 @@ namespace SpatialLauncher.SpatialWindows
                 new LauncherContent.Entry { Label = "Image", Glyph = "IMG", Color = ImageIconColor, Open = () => OpenImageWindow() },
                 new LauncherContent.Entry { Label = "Video", Glyph = "VID", Color = VideoIconColor, Open = () => OpenVideoWindow() },
                 new LauncherContent.Entry { Label = "Blank", Glyph = "+", Color = BlankIconColor, Open = () => OpenBlankWindow() },
+                new LauncherContent.Entry { Label = "Laptop", Glyph = "PC", Color = LaptopIconColor, Open = () => OpenLaptopWindow() },
             });
             return Launcher;
         }
@@ -112,6 +122,21 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         public SpatialWindow OpenBlankWindow() => manager.Spawn("Blank");
+
+        public SpatialWindow OpenLaptopWindow()
+        {
+            float aspect = laptopResolution.x / (float)Mathf.Max(1, laptopResolution.y);
+            var window = manager.Spawn("Laptop", MediaWindowSize(aspect, 0f));
+            if (window == null) return null;
+
+            var sink = remoteInputSink as IRemoteInputSink ?? GetComponent<IRemoteInputSink>();
+            if (remoteInputSink != null && !(remoteInputSink is IRemoteInputSink))
+                Debug.LogWarning($"{remoteInputSink.GetType().Name} does not implement IRemoteInputSink.", this);
+
+            var content = new GameObject().AddComponent<RemoteStreamContent>();
+            content.Init(window, manager.WindowMaterial, sink, laptopResolution);
+            return window;
+        }
 
         // A window whose content area fits media of the given aspect at mediaWidth, plus any extra height.
         Vector2 MediaWindowSize(float aspect, float extraHeight) => new Vector2(

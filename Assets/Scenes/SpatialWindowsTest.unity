@@ -420,6 +420,9 @@ GameObject:
   - component: {fileID: 1123372316}
   - component: {fileID: 1123372315}
   - component: {fileID: 1123372319}
+  - component: {fileID: 1123372321}
+  - component: {fileID: 1123372320}
+  - component: {fileID: 1123372322}
   m_Layer: 0
   m_Name: Spatial Windows
   m_TagString: Untagged
@@ -443,6 +446,7 @@ MonoBehaviour:
   spawnKey: 28
   toggleBillboardKey: 16
   toggleWorldLockKey: 26
+  switchInputKey: 23
   showOnScreenButton: 1
   contentMaterial: {fileID: 2100000, guid: 1f6ed78432f39034b80d5af080a89367, type: 2}
 --- !u!114 &1123372316
@@ -458,7 +462,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   head: {fileID: 0}
-  inputSource: {fileID: 0}
+  inputSources: []
+  activeInput: 0
   windowMaterial: {fileID: 2100000, guid: 1f6ed78432f39034b80d5af080a89367, type: 2}
   spawnDistance: 1.5
   cascadeOffset: 0.05
@@ -521,10 +526,78 @@ MonoBehaviour:
   sampleSprite: {fileID: 0}
   sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
   sampleVideoUrl: 
+  remoteInputSink: {fileID: 0}
+  laptopResolution: {x: 1920, y: 1080}
   openOnStart: 1
   openKey: 22
   launcherSize: {x: 0.5, y: 0.3}
   mediaWidth: 0.6
+--- !u!114 &1123372320
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1123372314}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2e0db5da22ce5d34f80147be0fe91613, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  handSource: {fileID: 0}
+  head: {fileID: 0}
+  raycastMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  maxDistance: 10
+  smoothing: 18
+  deadZoneAngle: 0.4
+  deadZoneDistance: 0.004
+  depthGain: 3
+  minWindowDistance: 0.4
+  maxWindowDistance: 5
+  cursorMaterial: {fileID: 0}
+  cursorSize: 0.012
+  cursorColor: {r: 1, g: 1, b: 1, a: 1}
+  pinchedCursorColor: {r: 0.2, g: 0.78, b: 0.9, a: 1}
+  showRay: 1
+  rayWidth: 0.0015
+--- !u!114 &1123372321
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1123372314}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8c19dfd65516a841aa906a13b728f34, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  rayCamera: {fileID: 0}
+  handOffset: {x: 0.15, y: -0.2}
+  reach: 0.35
+  reachRange: {x: 0.15, y: 0.65}
+  scrollStep: 0.02
+  twoHanded: 0
+  twoHandKey: 34
+  defaultAimDistance: 2
+  raycastMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+--- !u!114 &1123372322
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1123372314}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a4d7e1212f1d574489b5305c2142ae71, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  logMoves: 0
 --- !u!1 &1418692277
 GameObject:
   m_ObjectHideFlags: 0

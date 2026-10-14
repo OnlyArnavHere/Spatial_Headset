@@ -7,7 +7,9 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// Base for window content. Parents itself under the window's <see cref="SpatialWindow.ContentRoot"/>
     /// and lays itself out again whenever the window is resized. Subclasses build their visuals in an
-    /// Init method (calling <see cref="Attach"/> first) and implement <see cref="Layout"/>.
+    /// Init method (calling <see cref="Attach"/> first) and implement <see cref="Layout"/>. Pixels come from an
+    /// <see cref="IContentSource"/> shown on a <see cref="ContentSurface"/> (<see cref="CreateSurface"/>); the content
+    /// adds its own chrome (controls, labels) around it and starts/stops the source.
     /// Content sits in front of the window body: use small negative local Z offsets to layer it.
     /// </summary>
     public abstract class WindowContent : MonoBehaviour
@@ -82,6 +84,26 @@ namespace SpatialLauncher.SpatialWindows
             var control = quad.gameObject.AddComponent<T>();
             control.Register(Window);
             return control;
+        }
+
+        /// <summary>
+        /// A quad that displays the source. Interactive sources (with <see cref="IContentSource.Input"/>) get a
+        /// collider so the surface receives pointer input; display-only ones don't, so clicks reach the window body.
+        /// </summary>
+        protected ContentSurface CreateSurface(string surfaceName, Transform parent, IContentSource source)
+        {
+            var material = CreateMaterial(Color.black);
+            ContentSurface surface;
+            if (source.Input != null)
+            {
+                surface = CreateControl<ContentSurface>(surfaceName, parent, material);
+            }
+            else
+            {
+                surface = CreateQuad(surfaceName, parent, material).gameObject.AddComponent<ContentSurface>();
+            }
+            surface.Bind(source, material);
+            return surface;
         }
 
         protected static TextMeshPro CreateLabel(string labelName, Transform parent, string text, float fontSize,

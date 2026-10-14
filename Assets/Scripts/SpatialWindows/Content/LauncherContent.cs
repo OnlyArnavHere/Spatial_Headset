@@ -17,7 +17,7 @@ namespace SpatialLauncher.SpatialWindows
             public Action Open;
         }
 
-        const int MaxColumns = 3;
+        const int MaxColumns = 4;
         const float Gap = 0.02f;
         const float LabelHeight = 0.04f;
 

@@ -13,8 +13,14 @@ namespace SpatialLauncher.SpatialWindows
     {
         [Tooltip("The user's head. Defaults to Camera.main.")]
         [SerializeField] Transform head;
-        [Tooltip("A component implementing IWindowInput. Defaults to one on this GameObject.")]
-        [SerializeField] MonoBehaviour inputSource;
+        [Header("Input")]
+        [Tooltip("Components implementing IWindowInput (for example MouseWindowInput, HandWindowInput). " +
+                 "Only the active one is enabled. If empty, every IWindowInput on this GameObject is used, in component order.")]
+        [SerializeField] MonoBehaviour[] inputSources;
+        [Tooltip("Index into Input Sources of the input that drives the windows.")]
+        [SerializeField] int activeInput;
+
+        [Header("Rendering")]
         [Tooltip("Base material for window quads. Defaults to URP Unlit.")]
         [SerializeField] Material windowMaterial;
 
@@ -77,19 +83,69 @@ namespace SpatialLauncher.SpatialWindows
         void OnEnable()
         {
             AdoptChildWindows();
+            ApplyInputSelection();
+        }
 
-            input = inputSource as IWindowInput ?? GetComponent<IWindowInput>();
-            if (inputSource != null && !(inputSource is IWindowInput))
-                Debug.LogWarning($"{inputSource.GetType().Name} does not implement IWindowInput.", this);
+        void OnDisable() => UnsubscribeInput();
+
+        /// <summary>The input sources this manager can switch between.</summary>
+        public IReadOnlyList<MonoBehaviour> InputSources
+        {
+            get
+            {
+                if (inputSources == null || inputSources.Length == 0)
+                {
+                    var found = new List<MonoBehaviour>();
+                    foreach (var component in GetComponents<MonoBehaviour>())
+                        if (component is IWindowInput) found.Add(component);
+                    inputSources = found.ToArray();
+                }
+                return inputSources;
+            }
+        }
+
+        public int ActiveInputIndex => activeInput;
+        public IWindowInput ActiveInput => input;
+        public string ActiveInputName => input is MonoBehaviour behaviour ? behaviour.GetType().Name : "none";
+
+        /// <summary>Makes the input at this index drive the windows and disables the others.</summary>
+        public void SetActiveInput(int index)
+        {
+            activeInput = index;
+            if (isActiveAndEnabled) ApplyInputSelection();
+        }
+
+        /// <summary>Switches to the next input source.</summary>
+        public void CycleInput()
+        {
+            int count = InputSources.Count;
+            if (count > 0) SetActiveInput((activeInput + 1) % count);
+        }
+
+        void ApplyInputSelection()
+        {
+            UnsubscribeInput();
+            var sources = InputSources;
+            if (sources.Count == 0) return;
+
+            activeInput = Mathf.Clamp(activeInput, 0, sources.Count - 1);
+            for (int i = 0; i < sources.Count; i++)
+            {
+                if (sources[i] == null) continue;
+                if (!(sources[i] is IWindowInput))
+                    Debug.LogWarning($"{sources[i].GetType().Name} does not implement IWindowInput.", this);
+                sources[i].enabled = i == activeInput;
+            }
+
+            input = sources[activeInput] as IWindowInput;
             if (input == null) return;
-
             input.SelectRequested += Focus;
             input.DragRequested += OnDragRequested;
             input.ResizeRequested += OnResizeRequested;
             input.CloseRequested += Close;
         }
 
-        void OnDisable()
+        void UnsubscribeInput()
         {
             if (input == null) return;
             input.SelectRequested -= Focus;

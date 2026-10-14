@@ -1,4 +1,3 @@
-using System.IO;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Video;
@@ -6,8 +5,8 @@ using UnityEngine.Video;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// Plays a VideoClip, a local file or a URL through a VideoPlayer into a RenderTexture, kept at the
-    /// video's aspect ratio, with a control bar underneath: play/pause, a seek bar and the time.
+    /// Plays a VideoClip, a local file or a URL (a <see cref="VideoPlayerSource"/>), kept at the video's
+    /// aspect ratio, with a control bar underneath: play/pause, a seek bar and the time.
     /// </summary>
     public class VideoContent : WindowContent
     {
@@ -25,61 +24,43 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color TrackColor = new Color(0.32f, 0.32f, 0.36f);
         static readonly Color FillColor = new Color(0.20f, 0.78f, 0.90f);
 
-        public VideoPlayer Player { get; private set; }
+        public VideoPlayerSource Source { get; private set; }
+        public VideoPlayer Player => Source?.Player;
         public WindowButton PlayPauseButton { get; private set; }
         public WindowSlider SeekBar { get; private set; }
-        public bool IsPrepared => Player != null && Player.isPrepared;
-        public bool IsPlaying => Player != null && Player.isPlaying;
-        /// <summary>Width / height of the video; 16:9 until the video is prepared.</summary>
-        public float Aspect { get; private set; } = 16f / 9f;
-        public Vector2 DisplaySize { get; private set; }
+        public bool IsPrepared => Source != null && Source.IsPrepared;
+        public bool IsPlaying => Source != null && Source.IsPlaying;
+        /// <summary>Width / height of the video; the clip's (or 16:9 for a URL) until the video is prepared.</summary>
+        public float Aspect => Source?.Aspect ?? 16f / 9f;
+        public Vector2 DisplaySize => screen != null ? screen.DisplaySize : Vector2.zero;
 
-        Transform screen, bar, fill;
+        ContentSurface screen;
+        Transform bar, fill;
         TextMeshPro playGlyph, timeLabel;
-        Material screenMaterial;
-        RenderTexture renderTexture;
-        bool wantPlaying = true;
         float trackLeft, trackWidth, trackY, trackHeight;
 
         public void Init(SpatialWindow window, Material baseMaterial, VideoClip clip)
         {
-            Build(window, baseMaterial);
-            if (clip != null) Aspect = clip.width / (float)clip.height;
-            Player.source = VideoSource.VideoClip;
-            Player.clip = clip;
-            Prepare();
+            Attach(window, baseMaterial);
+            Build(new VideoPlayerSource(gameObject, clip));
         }
 
         /// <param name="url">An http(s) or file URL, or a local file path.</param>
         public void Init(SpatialWindow window, Material baseMaterial, string url)
         {
-            Build(window, baseMaterial);
-            Player.source = VideoSource.Url;
-            Player.url = url.Contains("://") ? url : Path.GetFullPath(url);
-            Prepare();
+            Attach(window, baseMaterial);
+            Build(new VideoPlayerSource(gameObject, url));
         }
 
-        public void TogglePlay()
-        {
-            wantPlaying = !wantPlaying;
-            if (!IsPrepared) return;
-            if (wantPlaying) Player.Play();
-            else Player.Pause();
-        }
+        public void TogglePlay() => Source?.TogglePlay();
 
         /// <summary>Seeks to a fraction (0..1) of the video's length.</summary>
-        public void Seek(float normalized)
-        {
-            if (!IsPrepared || !Player.canSetTime || Player.length <= 0) return;
-            Player.time = Mathf.Clamp01(normalized) * Player.length;
-        }
+        public void Seek(float normalized) => Source?.Seek(normalized);
 
-        void Build(SpatialWindow window, Material baseMaterial)
+        void Build(VideoPlayerSource source)
         {
-            Attach(window, baseMaterial);
-
-            screenMaterial = CreateMaterial(Color.black);
-            screen = CreateQuad("Screen", transform, screenMaterial);
+            Source = source;
+            screen = CreateSurface("Screen", transform, source);
 
             bar = CreateQuad("ControlBar", transform, CreateMaterial(BarColor));
             PlayPauseButton = CreateControl<WindowButton>("PlayPause", transform, CreateMaterial(ButtonColor));
@@ -92,48 +73,16 @@ namespace SpatialLauncher.SpatialWindows
             PlayPauseButton.Clicked += TogglePlay;
             SeekBar.ValueChanged += Seek;
 
-            Player = gameObject.AddComponent<VideoPlayer>();
-            Player.playOnAwake = false;
-            Player.isLooping = true;
-            Player.skipOnDrop = true;
-            Player.renderMode = VideoRenderMode.RenderTexture;
-            Player.audioOutputMode = VideoAudioOutputMode.Direct;
-            Player.prepareCompleted += OnPrepared;
-            Player.errorReceived += OnError;
-
             Relayout();
-        }
-
-        void Prepare() => Player.Prepare();
-
-        void OnPrepared(VideoPlayer player)
-        {
-            int width = Mathf.Max(1, (int)player.width);
-            int height = Mathf.Max(1, (int)player.height);
-            Aspect = width / (float)height;
-
-            renderTexture = new RenderTexture(width, height, 0) { name = "VideoContent" };
-            renderTexture.Create();
-            player.targetTexture = renderTexture;
-            screenMaterial.mainTexture = renderTexture;
-            screenMaterial.color = Color.white;
-            Relayout();
-
-            if (wantPlaying) player.Play();
-        }
-
-        void OnError(VideoPlayer player, string message)
-        {
-            Debug.LogError($"VideoContent ({Window?.Title}): {message}", this);
+            source.Start();
         }
 
         protected override void Layout(Vector2 size)
         {
             // Video fills the space above the control bar.
             float videoHeight = Mathf.Max(0.01f, size.y - ControlBarHeight);
-            DisplaySize = FitAspect(new Vector2(size.x, videoHeight), Aspect);
-            screen.localPosition = new Vector3(0f, size.y * 0.5f - videoHeight * 0.5f, 0f);
-            screen.localScale = new Vector3(DisplaySize.x, DisplaySize.y, 1f);
+            screen.transform.localPosition = new Vector3(0f, size.y * 0.5f - videoHeight * 0.5f, 0f);
+            screen.Fit(new Vector2(size.x, videoHeight));
 
             float barY = -size.y * 0.5f + BarHeight * 0.5f;
             bar.localPosition = new Vector3(0f, barY, -0.001f);
@@ -164,8 +113,8 @@ namespace SpatialLauncher.SpatialWindows
         float Progress()
         {
             if (SeekBar != null && SeekBar.IsDragging) return SeekBar.DragValue;
-            if (!IsPrepared || Player.length <= 0) return 0f;
-            return (float)(Player.time / Player.length);
+            double length = Source != null ? Source.Length : 0;
+            return length > 0 ? (float)(Source.Time / length) : 0f;
         }
 
         void UpdateFill(float progress)
@@ -178,11 +127,10 @@ namespace SpatialLauncher.SpatialWindows
 
         void Update()
         {
-            if (Player == null) return;
+            if (Source == null) return;
             UpdateFill(Progress());
-            playGlyph.text = wantPlaying ? "II" : ">";
-            double length = IsPrepared ? Player.length : 0;
-            timeLabel.text = $"{FormatTime(Player.time)} / {FormatTime(length)}";
+            playGlyph.text = Source.WantsPlaying ? "II" : ">";
+            timeLabel.text = $"{FormatTime(Source.Time)} / {FormatTime(Source.Length)}";
         }
 
         static string FormatTime(double seconds)
@@ -193,16 +141,7 @@ namespace SpatialLauncher.SpatialWindows
 
         protected override void OnDestroy()
         {
-            if (Player != null)
-            {
-                Player.Stop();
-                Player.targetTexture = null;
-            }
-            if (renderTexture != null)
-            {
-                renderTexture.Release();
-                Destroy(renderTexture);
-            }
+            Source?.Stop();
             base.OnDestroy();
         }
     }

@@ -86,7 +86,7 @@ PlayerSettings:
   runInBackground: 1
   muteOtherAudioSources: 0
   Prepare IOS For Recording: 0
-  Force IOS Speakers When Recording: 0
+  Force IOS Speakers When Recording: 1
   audioSpatialExperience: 0
   deferSystemGesturesMode: 0
   hideHomeButton: 0
@@ -572,7 +572,7 @@ PlayerSettings:
   enableCrashReportAPI: 0
   cameraUsageDescription: AR Camera
   locationUsageDescription: 
-  microphoneUsageDescription: 
+  microphoneUsageDescription: The microphone records sound with your HoloKit videos.
   bluetoothUsageDescription: 
   macOSTargetOSVersion: 11.0
   switchNMETAOverride: 

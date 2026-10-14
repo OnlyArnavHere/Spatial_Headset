@@ -15,66 +15,13 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         const float Settle = 0.6f;
         const string SpritePath = "Assets/Samples/Images/SamplePortraitSprite.png";
 
-        static IEnumerator routine;
-        static double resumeAt;
-        static int passed, failed;
-
         [MenuItem("Tools/Spatial Windows/Test Content Windows")]
-        static void Run()
-        {
-            if (routine != null)
-            {
-                Debug.LogWarning("[ContentTest] Already running.");
-                return;
-            }
-            passed = failed = 0;
-            routine = Steps();
-            resumeAt = 0;
-            EditorApplication.update += Tick;
-            Debug.Log("[ContentTest] Started.");
-        }
+        static void Run() => EditorTestRunner.Run("ContentTest", Steps());
 
         [MenuItem("Tools/Spatial Windows/Test Content Windows", true)]
-        static bool CanRun() => Application.isPlaying;
+        static bool CanRun() => Application.isPlaying && !EditorTestRunner.IsRunning;
 
-        static void Tick()
-        {
-            if (!Application.isPlaying)
-            {
-                Finish(" (aborted: left Play mode)");
-                return;
-            }
-            if (EditorApplication.timeSinceStartup < resumeAt) return;
-
-            bool more;
-            try
-            {
-                more = routine.MoveNext();
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-                failed++;
-                more = false;
-            }
-
-            if (!more) Finish("");
-            else if (routine.Current is float seconds) resumeAt = EditorApplication.timeSinceStartup + seconds;
-        }
-
-        static void Finish(string note)
-        {
-            EditorApplication.update -= Tick;
-            routine = null;
-            Debug.Log($"[ContentTest] Done{note}: {passed} passed, {failed} failed -> {(failed == 0 ? "PASS" : "FAIL")}");
-        }
-
-        static void Check(bool condition, string what)
-        {
-            if (condition) passed++;
-            else failed++;
-            Debug.Log($"[ContentTest] {(condition ? "PASS" : "FAIL")}: {what}");
-        }
+        static void Check(bool condition, string what) => EditorTestRunner.Check(condition, what);
 
         static IEnumerator Steps()
         {
@@ -88,15 +35,31 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 yield break;
             }
 
+            // Clicks go through MouseWindowInput, so it must be the active input; restore the user's choice after.
+            int previousInput = WindowTestUtil.SelectInput<MouseWindowInput>(manager);
+            var body = Body(launcherWindow, manager, input, cam);
+            try
+            {
+                while (body.MoveNext()) yield return body.Current;
+            }
+            finally
+            {
+                if (previousInput >= 0) manager.SetActiveInput(previousInput);
+            }
+        }
+
+        static IEnumerator Body(LauncherWindow launcherWindow, WindowManager manager, MouseWindowInput input, Camera cam)
+        {
+
             // Launcher
             launcherWindow.OpenLauncher();
             yield return Settle;
             var launcherContent = launcherWindow.LauncherContent;
-            Check(launcherContent != null && launcherContent.Buttons.Count == 3, "launcher shows 3 icons");
+            Check(launcherContent != null && launcherContent.Buttons.Count == 4, "launcher shows 4 icons");
             if (launcherContent == null) yield break;
 
             // Each icon opens its window type.
-            string[] titles = { "Image", "Video", "Blank" };
+            string[] titles = { "Image", "Video", "Blank", "Laptop" };
             var opened = new SpatialWindow[titles.Length];
             for (int i = 0; i < titles.Length; i++)
             {
@@ -112,6 +75,52 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             var imageWindow = opened[0];
             var videoWindow = opened[1];
             var blankWindow = opened[2];
+            var laptopWindow = opened[3];
+
+            // Laptop: a remote screen that isn't connected yet, forwarding pointer input to a sink.
+            var remote = laptopWindow != null ? laptopWindow.GetComponentInChildren<RemoteStreamContent>() : null;
+            Check(remote != null, "Laptop window has RemoteStreamContent");
+            if (remote != null)
+            {
+                Check(remote.StatusText == "Not connected" && remote.Source.Texture == null && !remote.Source.IsConnected && remote.Source.IsRunning,
+                    $"Laptop shows the \"Not connected\" placeholder (status \"{remote.StatusText}\")");
+                Check(AspectMatches(remote.DisplaySize, remote.Source.Aspect) && Mathf.Abs(remote.Source.Aspect - 16f / 9f) < 0.01f,
+                    $"Laptop screen keeps the remote's 16:9 aspect ({Ratio(remote.DisplaySize):F3} shown)");
+                Check(remote.Surface.GetComponent<Collider>() != null, "the Laptop surface is interactive (has a collider)");
+
+                // Click a quarter in from the top-right through the mouse input's click path.
+                var sink = new RecordingSink();
+                remote.Source.Sink = sink;
+                var surface = remote.Surface.transform;
+                manager.Focus(laptopWindow);
+                yield return Settle;
+                var clickPoint = surface.TransformPoint(new Vector3(0.25f, 0.25f, 0f));
+                Click(input, cam, clickPoint);
+                // Texture convention (0.75, 0.75) is screen convention (0.75, 0.25): the sink gets top-left origin.
+                var expected = new Vector2(0.75f, 0.25f);
+                Check(sink.Downs.Count == 1 && Near(sink.Downs[0], expected),
+                    $"a click on the Laptop screen sends one press to the sink at {Format(sink.Downs)} (expected {expected})");
+                Check(sink.Ups.Count == 1 && Near(sink.Ups[0], expected), $"and one release at {Format(sink.Ups)}");
+
+                // Hover and scroll, as the mouse and hand inputs deliver them.
+                var hoverPoint = surface.TransformPoint(new Vector3(-0.4f, -0.3f, 0f));
+                remote.Surface.Hover(hoverPoint);
+                remote.Surface.Scroll(hoverPoint, -2f);
+                var hoverExpected = new Vector2(0.1f, 0.8f);
+                Check(sink.Moves.Count > 0 && Near(sink.Moves[sink.Moves.Count - 1], hoverExpected),
+                    $"hover sends a move at {Format(sink.Moves)} (expected last {hoverExpected})");
+                Check(sink.Scrolls.Count == 1 && Mathf.Approximately(sink.Scrolls[0].z, -2f) && Near(sink.Scrolls[0], hoverExpected),
+                    "scroll sends -2 notches at the hovered point");
+
+                remote.Source.Sink = null;
+            }
+
+            // Display-only content keeps clicks on the window body (selecting it), so its surface has no collider.
+            var imageSurface = imageWindow != null ? imageWindow.GetComponentInChildren<ContentSurface>() : null;
+            Check(imageSurface != null && imageSurface.GetComponent<Collider>() == null && imageSurface.Source is TextureSource,
+                "the Image window shows a TextureSource on a display-only surface");
+            var videoSurface = videoWindow != null ? videoWindow.GetComponentInChildren<ContentSurface>() : null;
+            Check(videoSurface != null && videoSurface.Source is VideoPlayerSource, "the Video window shows a VideoPlayerSource");
 
             // Image: aspect ratio kept at the initial size and after resizing both ways.
             var image = imageWindow != null ? imageWindow.GetComponentInChildren<ImageContent>() : null;
@@ -176,15 +185,18 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 manager.Focus(videoWindow);
                 yield return Settle;
 
+                // VideoPlayer.Play/Pause take effect asynchronously (longer on a cold decoder), so poll briefly.
                 Click(input, cam, video.PlayPauseButton.transform.position);
-                yield return 0.3f;
+                double pauseDeadline = EditorTestRunner.Now + 2.0;
+                while (video.IsPlaying && EditorTestRunner.Now < pauseDeadline) yield return 0.05f;
                 Check(!video.IsPlaying, "play/pause button pauses");
                 double pausedAt = video.Player.time;
                 yield return 0.4f;
                 Check(Math.Abs(video.Player.time - pausedAt) < 0.05, "time holds while paused");
 
                 Click(input, cam, video.PlayPauseButton.transform.position);
-                yield return 0.3f;
+                double resumeDeadline = EditorTestRunner.Now + 2.0;
+                while (!video.IsPlaying && EditorTestRunner.Now < resumeDeadline) yield return 0.05f;
                 Check(video.IsPlaying, "play/pause button resumes");
 
                 // Click three quarters of the way along the seek bar (a quad spans -0.5..0.5 locally).
@@ -226,6 +238,25 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             const float tolerance = 1e-4f;
             return display.x <= windowSize.x - WindowContent.Padding * 2f + tolerance
                 && display.y <= windowSize.y - WindowContent.Padding * 2f - extraHeight + tolerance;
+        }
+        static bool Near(Vector2 a, Vector2 b) => Vector2.Distance(a, b) < 0.01f;
+        static bool Near(Vector3 scroll, Vector2 b) => Near(new Vector2(scroll.x, scroll.y), b);
+        static string Format(System.Collections.Generic.List<Vector2> points) =>
+            points.Count == 0 ? "none" : string.Join(", ", points.ConvertAll(p => $"({p.x:F3}, {p.y:F3})"));
+
+        /// <summary>Records what a remote screen would receive.</summary>
+        sealed class RecordingSink : IRemoteInputSink
+        {
+            public readonly System.Collections.Generic.List<Vector2> Moves = new System.Collections.Generic.List<Vector2>();
+            public readonly System.Collections.Generic.List<Vector2> Downs = new System.Collections.Generic.List<Vector2>();
+            public readonly System.Collections.Generic.List<Vector2> Ups = new System.Collections.Generic.List<Vector2>();
+            /// <summary>x, y = position; z = delta.</summary>
+            public readonly System.Collections.Generic.List<Vector3> Scrolls = new System.Collections.Generic.List<Vector3>();
+
+            public void PointerMove(Vector2 position) => Moves.Add(position);
+            public void PointerDown(Vector2 position) => Downs.Add(position);
+            public void PointerUp(Vector2 position) => Ups.Add(position);
+            public void Scroll(Vector2 position, float delta) => Scrolls.Add(new Vector3(position.x, position.y, delta));
         }
     }
 }

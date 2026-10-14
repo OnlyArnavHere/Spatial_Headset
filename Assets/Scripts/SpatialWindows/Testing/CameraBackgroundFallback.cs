@@ -22,6 +22,10 @@ namespace SpatialLauncher.SpatialWindows.Testing
         void Awake()
         {
             cam = GetComponent<Camera>();
+#if !UNITY_EDITOR
+            // Editor-only fallback: on device the AR camera feed (or HoloKit's stereo cameras) clears the screen.
+            enabled = false;
+#endif
             cameraManager = GetComponent<ARCameraManager>();
             originalClearFlags = cam.clearFlags;
         }
