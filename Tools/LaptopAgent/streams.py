@@ -18,6 +18,9 @@ log = logging.getLogger("streams")
 
 DESKTOP_ID = "desktop"
 STOP_AFTER_IDLE_S = 15.0
+# Smaller windows are popups, tooltips and badges (e.g. WinUI's "PopupHost" key tips), not something to watch, and
+# too small for hardware encoders (NVENC refuses frames below about 145x49).
+MIN_WINDOW_SIZE = (160, 90)
 
 
 @dataclass
@@ -99,13 +102,21 @@ class StreamManager:
 
     def available(self) -> list[Target]:
         """The whole desktop and other screens first, then the windows a user would recognise (minimized ones can't
-        be captured, so they're left out). With only_pinned, just the targets given on the command line."""
+        be captured and tiny popups aren't worth it, so they're left out). With only_pinned, just the targets given
+        on the command line."""
         monitors = sorted(winapi.list_monitors(), key=lambda m: (not m.primary, m.index))
         targets = [monitor_target(m) for m in monitors]
-        targets += [window_target(w) for w in winapi.list_windows() if not winapi.window_is_minimized(w.handle)]
+        targets += [window_target(w) for w in winapi.list_windows() if self._listable(w.handle)]
         if self._only_pinned:
             targets = [t for t in targets if t.id in self._pinned]
         return targets
+
+    @staticmethod
+    def _listable(handle: int) -> bool:
+        if winapi.window_is_minimized(handle):
+            return False
+        rect = winapi.window_rect(handle)
+        return rect is not None and rect.width >= MIN_WINDOW_SIZE[0] and rect.height >= MIN_WINDOW_SIZE[1]
 
     def listing(self) -> list[dict]:
         """The targets as the headset's picker shows them, with the path each one streams on."""

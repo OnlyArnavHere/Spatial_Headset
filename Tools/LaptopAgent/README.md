@@ -55,7 +55,7 @@ injecting them), `--no-picker`, `--verbose`.
 Windows Graphics Capture only delivers a frame when a window changes, so a window nobody is typing in (or one behind
 other windows) would stream nothing. The agent asks each streamed window to repaint twice a second, which keeps it
 streaming, and forces a keyframe every second so a headset that joins late gets a picture at once. Minimized windows
-can't be captured: they're left out of the list.
+can't be captured and windows smaller than 160x90 are popups or tooltips: both are left out of the list.
 
 ### Measuring delay
 
