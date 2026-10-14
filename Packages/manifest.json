@@ -13,7 +13,7 @@
     "com.unity.xr.arkit": "6.5.0",
     "com.unity.xr.interaction.toolkit": "3.5.1",
     "com.unity.xr.management": "4.6.0",
-    "io.holokit.unity-sdk": "https://github.com/holokit/holokit-unity-sdk.git",
+    "io.holokit.unity-sdk": "https://github.com/holokit/holokit-unity-sdk.git#5a16342dc11f479b2aaf418a4826cf3ac7c8bd91",
     "com.unity.modules.accessibility": "1.0.0",
     "com.unity.modules.ai": "1.0.0",
     "com.unity.modules.androidjni": "1.0.0",
