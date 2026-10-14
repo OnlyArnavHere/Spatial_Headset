@@ -1,0 +1,28 @@
+# Normalize line endings for anything Git detects as text
+* text=auto
+
+# Code and docs
+*.cs     text
+*.shader text
+*.cginc  text
+*.hlsl   text
+*.md     text
+*.json   text
+
+# Unity YAML: LF everywhere, merged with Unity's Smart Merge (UnityYAMLMerge)
+*.unity  text merge=unityyamlmerge eol=lf
+*.prefab text merge=unityyamlmerge eol=lf
+*.asset  text merge=unityyamlmerge eol=lf
+*.mat    text merge=unityyamlmerge eol=lf
+*.meta   text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.fbx binary
+*.mp4 binary
+*.mov binary
+*.wav binary
+*.mp3 binary
+*.ttf binary
+*.dll binary

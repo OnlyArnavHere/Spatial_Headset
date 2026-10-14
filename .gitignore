@@ -65,3 +65,6 @@ Thumbs.db
 # Local tool configuration (machine-specific paths)
 .mcp.json
 .claude/
+
+# Local assistant instructions
+CLAUDE.md
