@@ -49,6 +49,8 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>Open windows in focus order; the last one is in front.</summary>
         public IReadOnlyList<SpatialWindow> Windows => windows;
         public SpatialWindow FocusedWindow => windows.Count > 0 ? windows[windows.Count - 1] : null;
+        /// <summary>Base material for window quads; content can reuse it for its own quads.</summary>
+        public Material WindowMaterial => windowMaterial;
 
         readonly List<SpatialWindow> windows = new List<SpatialWindow>();
         IWindowInput input;

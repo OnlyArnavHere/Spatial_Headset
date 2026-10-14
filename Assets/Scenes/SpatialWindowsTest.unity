@@ -419,6 +419,7 @@ GameObject:
   - component: {fileID: 1123372317}
   - component: {fileID: 1123372316}
   - component: {fileID: 1123372315}
+  - component: {fileID: 1123372319}
   m_Layer: 0
   m_Name: Spatial Windows
   m_TagString: Untagged
@@ -469,6 +470,8 @@ MonoBehaviour:
   maxSize: {x: 2, y: 1.5}
   depthStep: 0.01
   maxDepthSpread: 0.1
+  focusedForwardOffset: 0.15
+  unfocusedScale: 0.85
 --- !u!114 &1123372317
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -501,6 +504,27 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1123372319
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1123372314}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 228c8ef4654ff4f4fae6ee3703a5a906, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  manager: {fileID: 0}
+  sampleImage: {fileID: 2800000, guid: aca6a1b85d6dc1549b0cd00b3c700df7, type: 3}
+  sampleSprite: {fileID: 0}
+  sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
+  sampleVideoUrl: 
+  openOnStart: 1
+  openKey: 22
+  launcherSize: {x: 0.5, y: 0.3}
+  mediaWidth: 0.6
 --- !u!1 &1418692277
 GameObject:
   m_ObjectHideFlags: 0

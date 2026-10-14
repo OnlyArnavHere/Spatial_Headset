@@ -7,6 +7,8 @@ namespace SpatialLauncher.SpatialWindows
     /// Source of window interactions. The editor uses <see cref="MouseWindowInput"/>;
     /// a hand-tracking implementation will replace it on device.
     /// Implementations only report intent; <see cref="WindowManager"/> applies it.
+    /// Controls inside content (<see cref="WindowControl"/>: buttons, sliders) are not routed through
+    /// these events: implementations call their Press, Drag and Release methods directly.
     /// </summary>
     public interface IWindowInput
     {

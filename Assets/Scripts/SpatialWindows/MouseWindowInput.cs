@@ -7,7 +7,8 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// Editor stand-in for hand input: raycasts from the mouse through the camera.
     /// Click a window to select it, drag its title bar to move it, drag the bottom-right
-    /// handle to resize it, and click the red button to close it.
+    /// handle to resize it, and click the red button to close it. Content controls
+    /// (<see cref="WindowControl"/>) receive press, drag and release directly.
     /// </summary>
     public class MouseWindowInput : MonoBehaviour, IWindowInput
     {
@@ -21,10 +22,11 @@ namespace SpatialLauncher.SpatialWindows
         public event Action<SpatialWindow, Vector2> ResizeRequested;
         public event Action<SpatialWindow> CloseRequested;
 
-        enum Mode { None, Drag, Resize, Close }
+        enum Mode { None, Drag, Resize, Close, Control }
 
         Mode mode;
         SpatialWindow activeWindow;
+        WindowControl activeControl;
         readonly RaycastHit[] hitBuffer = new RaycastHit[32];
 
         // Drag: keep the grabbed point at the same distance along the mouse ray.
@@ -44,8 +46,8 @@ namespace SpatialLauncher.SpatialWindows
             if (rayCamera == null) rayCamera = Camera.main;
             if (rayCamera == null) return;
 
-            if (mode != Mode.None && activeWindow == null)
-                mode = Mode.None; // the window was closed mid-gesture
+            if (mode != Mode.None && (activeWindow == null || (mode == Mode.Control && activeControl == null)))
+                mode = Mode.None; // the window or control was destroyed mid-gesture
 
             // The mouse can report infinite or off-screen positions (for example when the
             // Game view isn't focused); ScreenPointToRay logs an error for those.
@@ -120,6 +122,11 @@ namespace SpatialLauncher.SpatialWindows
                     mode = Mode.Close;
                     break;
 
+                case WindowPartType.Control when part.TryGetComponent(out activeControl):
+                    mode = Mode.Control;
+                    activeControl.Press(hit.point);
+                    break;
+
                 default:
                     mode = Mode.None;
                     break;
@@ -141,11 +148,25 @@ namespace SpatialLauncher.SpatialWindows
                     // Dragging right grows the width, dragging down grows the height.
                     ResizeRequested?.Invoke(activeWindow, resizeStartSize + new Vector2(delta.x, -delta.y));
                     break;
+
+                case Mode.Control:
+                    var t = activeControl.transform;
+                    if (new Plane(t.forward, t.position).Raycast(ray, out float distance))
+                        activeControl.Drag(ray.GetPoint(distance));
+                    break;
             }
         }
 
         void End(Ray ray, bool inView)
         {
+            if (mode == Mode.Control && activeControl != null)
+            {
+                bool inside = inView && TryHit(ray, out _, out var hitPart)
+                    && hitPart.TryGetComponent<WindowControl>(out var control) && control == activeControl;
+                activeControl.Release(inside);
+            }
+            activeControl = null;
+
             // A close only counts if the button is still under the mouse on release.
             if (mode == Mode.Close && inView && TryHit(ray, out _, out var part)
                 && part.Window == activeWindow && part.Type == WindowPartType.CloseButton)

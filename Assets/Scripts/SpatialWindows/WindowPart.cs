@@ -7,7 +7,9 @@ namespace SpatialLauncher.SpatialWindows
         Content,
         TitleBar,
         CloseButton,
-        ResizeHandle
+        ResizeHandle,
+        /// <summary>An interactive element inside the content (button, slider); see <see cref="WindowControl"/>.</summary>
+        Control
     }
 
     /// <summary>
