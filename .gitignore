@@ -68,3 +68,6 @@ Thumbs.db
 
 # Local assistant instructions
 CLAUDE.md
+
+# Locally patched com.unity.webrtc (see README)
+/Packages/com.unity.webrtc/
