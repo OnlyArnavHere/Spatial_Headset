@@ -526,6 +526,8 @@ MonoBehaviour:
   sampleSprite: {fileID: 0}
   sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
   sampleVideoUrl: 
+  laptopStreaming: 1
+  connectionSettings: {fileID: 11400000, guid: 6ea254d4367a7b34db54d7bc4100e6ab, type: 2}
   remoteInputSink: {fileID: 0}
   laptopResolution: {x: 1920, y: 1080}
   openOnStart: 1

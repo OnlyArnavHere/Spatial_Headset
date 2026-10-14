@@ -6,7 +6,7 @@ namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
     /// Opens the home panel: a launcher window whose icons open an Image window, a Video window, a blank
-    /// window or a Laptop window (a remote-screen stream, not connected yet). Press H (or call
+    /// window or a Laptop window (a laptop's screen streamed by Tools/LaptopAgent, or a placeholder). Press H (or call
     /// <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
@@ -27,11 +27,18 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] string sampleVideoUrl = "";
 
         [Header("Laptop (remote screen)")]
-        [Tooltip("A component implementing IRemoteInputSink that receives pointer input aimed at the laptop screen. " +
-                 "Defaults to one on this GameObject; without one, input is dropped.")]
+        [Tooltip("Placeholder: a 'Not connected' screen only. WebRTC: video and input from the laptop agent " +
+                 "(Tools/LaptopAgent), with a connect panel. Needs the com.unity.webrtc package.")]
+        [SerializeField] LaptopStreaming laptopStreaming = LaptopStreaming.Placeholder;
+        [Tooltip("Defaults for the connect panel (host, ports, stream path).")]
+        [SerializeField] RemoteConnectionSettings connectionSettings;
+        [Tooltip("Optional: a component implementing IRemoteInputSink to receive the laptop screen's pointer input " +
+                 "instead of the agent (for example LogRemoteInputSink while debugging).")]
         [SerializeField] MonoBehaviour remoteInputSink;
-        [Tooltip("The laptop's screen resolution, used for the window's aspect until a stream reports its own.")]
+        [Tooltip("The laptop's screen resolution in Placeholder mode (WebRTC mode uses the connection settings).")]
         [SerializeField] Vector2Int laptopResolution = new Vector2Int(1920, 1080);
+
+        public enum LaptopStreaming { Placeholder, WebRtc }
 
         [Header("Launcher")]
         [SerializeField] bool openOnStart = true;
@@ -56,7 +63,7 @@ namespace SpatialLauncher.SpatialWindows
         void Update()
         {
             var keyboard = Keyboard.current;
-            if (keyboard != null && keyboard[openKey].wasPressedThisFrame)
+            if (keyboard != null && !WindowTextField.IsTyping && keyboard[openKey].wasPressedThisFrame)
                 OpenLauncher();
         }
 
@@ -125,16 +132,20 @@ namespace SpatialLauncher.SpatialWindows
 
         public SpatialWindow OpenLaptopWindow()
         {
-            float aspect = laptopResolution.x / (float)Mathf.Max(1, laptopResolution.y);
-            var window = manager.Spawn("Laptop", MediaWindowSize(aspect, 0f));
+            bool webRtc = laptopStreaming == LaptopStreaming.WebRtc;
+            var resolution = webRtc && connectionSettings != null ? connectionSettings.expectedResolution : laptopResolution;
+            float aspect = resolution.x / (float)Mathf.Max(1, resolution.y);
+            float panel = webRtc ? RemoteStreamContent.ConnectPanelHeight : 0f;
+            var window = manager.Spawn("Laptop", MediaWindowSize(aspect, panel));
             if (window == null) return null;
 
-            var sink = remoteInputSink as IRemoteInputSink ?? GetComponent<IRemoteInputSink>();
-            if (remoteInputSink != null && !(remoteInputSink is IRemoteInputSink))
+            var sink = remoteInputSink as IRemoteInputSink;
+            if (remoteInputSink != null && sink == null)
                 Debug.LogWarning($"{remoteInputSink.GetType().Name} does not implement IRemoteInputSink.", this);
 
             var content = new GameObject().AddComponent<RemoteStreamContent>();
-            content.Init(window, manager.WindowMaterial, sink, laptopResolution);
+            if (webRtc) content.InitConnected(window, manager.WindowMaterial, connectionSettings, sink);
+            else content.Init(window, manager.WindowMaterial, sink, resolution);
             return window;
         }
 
