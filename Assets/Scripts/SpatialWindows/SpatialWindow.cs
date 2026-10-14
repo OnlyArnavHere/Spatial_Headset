@@ -1,0 +1,287 @@
+using System;
+using System.Collections.Generic;
+using TMPro;
+using UnityEngine;
+
+namespace SpatialLauncher.SpatialWindows
+{
+    /// <summary>
+    /// A floating panel: a body quad that holds content, a title bar above it with a
+    /// close button, and a resize handle in the bottom-right corner.
+    /// The window's +Z points away from the viewer, so its quads face the user.
+    /// Built at runtime by <see cref="WindowManager"/>; place content under <see cref="ContentRoot"/>.
+    /// </summary>
+    public class SpatialWindow : MonoBehaviour
+    {
+        const float TitleBarHeight = 0.06f;
+        const float TitleBarGap = 0.005f;
+        const float CloseButtonSize = 0.045f;
+        const float ResizeHandleSize = 0.04f;
+        const float Margin = 0.008f;
+        // Thin, so raycasts agree with what's drawn; a thick box would reach past the 1 cm focus push-forward.
+        const float ColliderDepth = 0.001f;
+        // Layers in front of the body, towards the viewer (-Z).
+        const float DecorationDepth = 0.002f;
+        const float ContentDepth = 0.003f;
+
+        // Each part gets a distinct colour so it stays recognisable over any content.
+        static readonly Color BodyColor = new Color(0.10f, 0.10f, 0.12f);         // near-black frame
+        static readonly Color TitleColor = new Color(0.32f, 0.34f, 0.40f);        // slate, unfocused
+        static readonly Color TitleFocusedColor = new Color(0.16f, 0.36f, 0.95f); // bright blue, focused
+        static readonly Color CloseColor = new Color(0.90f, 0.22f, 0.22f);        // red
+        static readonly Color HandleColor = new Color(1.00f, 0.75f, 0.15f);       // amber
+
+        [SerializeField] bool billboard = true;
+        [Tooltip("Only rotate around the vertical axis when billboarding, so windows stay upright.")]
+        [SerializeField] bool billboardYawOnly = true;
+        [Tooltip("World-locked windows stay put; otherwise the window follows the head (body-locked).")]
+        [SerializeField] bool worldLocked = true;
+        [SerializeField] float followSmoothing = 8f;
+        [Tooltip("How quickly the window animates towards its focus depth and scale.")]
+        [SerializeField] float presentationSpeed = 10f;
+
+        /// <summary>Raised when the window's size changes, so content can lay itself out again.</summary>
+        public event Action<SpatialWindow> SizeChanged;
+
+        public string Title { get; private set; }
+        /// <summary>Size of the content body in metres (the title bar is extra).</summary>
+        public Vector2 Size { get; private set; }
+        public bool IsFocused { get; private set; }
+        /// <summary>Parent for window content. Origin is the body centre, unscaled, just in front of the body.</summary>
+        public Transform ContentRoot { get; private set; }
+
+        public bool Billboard
+        {
+            get => billboard;
+            set { billboard = value; if (value) FaceHead(); }
+        }
+
+        public bool WorldLocked
+        {
+            get => worldLocked;
+            set { worldLocked = value; if (!value) CaptureHeadOffset(); }
+        }
+
+        Transform head;
+        Transform visualRoot;
+        Transform body, titleBar, closeButton, resizeHandle;
+        TextMeshPro titleText;
+        Material titleMaterial;
+        readonly List<Material> materials = new List<Material>();
+
+        // Focus presentation: how far the visuals sit towards the viewer, and their scale.
+        float targetDepth, currentDepth;
+        float targetScale = 1f, currentScale = 1f;
+
+        // Body-locked pose, relative to the head's yaw frame.
+        Vector3 headLocalPosition;
+        Quaternion headLocalRotation;
+
+        public void Initialize(string title, Vector2 size, Material baseMaterial, Transform headTransform,
+            bool useBillboard, bool useWorldLock)
+        {
+            Title = title;
+            head = headTransform;
+            billboard = useBillboard;
+            name = $"Window - {title}";
+
+            Build(baseMaterial);
+            SetSize(size, keepTopLeft: false);
+            FaceHead();
+            WorldLocked = useWorldLock;
+        }
+
+        void Build(Material baseMaterial)
+        {
+            visualRoot = new GameObject("Visual").transform;
+            visualRoot.SetParent(transform, false);
+
+            body = CreateQuad("Body", visualRoot, MakeMaterial(baseMaterial, BodyColor), WindowPartType.Content);
+            titleMaterial = MakeMaterial(baseMaterial, TitleColor);
+            titleBar = CreateQuad("TitleBar", visualRoot, titleMaterial, WindowPartType.TitleBar);
+            closeButton = CreateQuad("CloseButton", visualRoot, MakeMaterial(baseMaterial, CloseColor), WindowPartType.CloseButton);
+            resizeHandle = CreateQuad("ResizeHandle", visualRoot, MakeMaterial(baseMaterial, HandleColor), WindowPartType.ResizeHandle);
+
+            titleText = CreateText("TitleText", visualRoot, Title, 0.3f, TextAlignmentOptions.MidlineLeft);
+            var closeGlyph = CreateText("CloseGlyph", closeButton, "X", 0.3f, TextAlignmentOptions.Center);
+            // The close button quad is scaled; undo it so the glyph keeps its size.
+            closeGlyph.transform.localScale = new Vector3(1f / CloseButtonSize, 1f / CloseButtonSize, 1f);
+            closeGlyph.transform.localPosition = new Vector3(0f, 0f, -0.01f);
+            closeGlyph.rectTransform.sizeDelta = new Vector2(CloseButtonSize, CloseButtonSize);
+
+            ContentRoot = new GameObject("Content").transform;
+            ContentRoot.SetParent(visualRoot, false);
+            ContentRoot.localPosition = new Vector3(0f, 0f, -ContentDepth);
+        }
+
+        Transform CreateQuad(string quadName, Transform parent, Material material, WindowPartType partType)
+        {
+            var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            quad.name = quadName;
+            quad.transform.SetParent(parent, false);
+            Destroy(quad.GetComponent<MeshCollider>());
+            var box = quad.AddComponent<BoxCollider>();
+            box.size = new Vector3(1f, 1f, ColliderDepth);
+            quad.GetComponent<MeshRenderer>().sharedMaterial = material;
+            quad.AddComponent<WindowPart>().Init(this, partType);
+            return quad.transform;
+        }
+
+        static TextMeshPro CreateText(string textName, Transform parent, string text, float fontSize,
+            TextAlignmentOptions alignment)
+        {
+            var go = new GameObject(textName);
+            go.transform.SetParent(parent, false);
+            var tmp = go.AddComponent<TextMeshPro>();
+            tmp.text = text;
+            tmp.fontSize = fontSize;
+            tmp.alignment = alignment;
+            tmp.color = Color.white;
+            tmp.textWrappingMode = TextWrappingModes.NoWrap;
+            tmp.overflowMode = TextOverflowModes.Ellipsis;
+            return tmp;
+        }
+
+        Material MakeMaterial(Material baseMaterial, Color color)
+        {
+            var material = new Material(baseMaterial) { color = color };
+            materials.Add(material);
+            return material;
+        }
+
+        /// <summary>
+        /// Resizes the body. With keepTopLeft the body's top-left corner stays fixed in the world,
+        /// which is what a bottom-right resize handle should do.
+        /// </summary>
+        public void SetSize(Vector2 size, bool keepTopLeft = true)
+        {
+            if (keepTopLeft && Size != Vector2.zero)
+            {
+                var topLeft = transform.position - transform.right * (Size.x * 0.5f) + transform.up * (Size.y * 0.5f);
+                transform.position = topLeft + transform.right * (size.x * 0.5f) - transform.up * (size.y * 0.5f);
+                if (!worldLocked) CaptureHeadOffset();
+            }
+
+            Size = size;
+            Layout();
+            SizeChanged?.Invoke(this);
+        }
+
+        void Layout()
+        {
+            float w = Size.x, h = Size.y;
+
+            body.localPosition = Vector3.zero;
+            body.localScale = new Vector3(w, h, 1f);
+
+            float titleY = h * 0.5f + TitleBarGap + TitleBarHeight * 0.5f;
+            titleBar.localPosition = new Vector3(0f, titleY, 0f);
+            titleBar.localScale = new Vector3(w, TitleBarHeight, 1f);
+
+            closeButton.localPosition = new Vector3(w * 0.5f - Margin - CloseButtonSize * 0.5f, titleY, -DecorationDepth);
+            closeButton.localScale = new Vector3(CloseButtonSize, CloseButtonSize, 1f);
+
+            float textWidth = Mathf.Max(0.01f, w - CloseButtonSize - Margin * 3f);
+            titleText.rectTransform.sizeDelta = new Vector2(textWidth, TitleBarHeight);
+            titleText.transform.localPosition = new Vector3(-w * 0.5f + Margin + textWidth * 0.5f, titleY, -DecorationDepth);
+
+            resizeHandle.localPosition = new Vector3(w * 0.5f - ResizeHandleSize * 0.5f, -h * 0.5f + ResizeHandleSize * 0.5f, -DecorationDepth);
+            resizeHandle.localScale = new Vector3(ResizeHandleSize, ResizeHandleSize, 1f);
+        }
+
+        /// <summary>Moves the window. Body-locked windows keep the new offset from the head.</summary>
+        public void MoveTo(Vector3 position)
+        {
+            transform.position = position;
+            if (billboard) FaceHead();
+            if (!worldLocked) CaptureHeadOffset();
+        }
+
+        public void SetFocused(bool focused)
+        {
+            IsFocused = focused;
+            titleMaterial.color = focused ? TitleFocusedColor : TitleColor;
+        }
+
+        /// <summary>
+        /// Sets where the visuals sit towards the viewer (metres) and their scale. The window animates
+        /// there, so focusing one window grows it and brings it forward while the previous one recedes.
+        /// The window's own position and size are unchanged; only its visuals (and colliders) move.
+        /// </summary>
+        public void SetPresentation(float depthOffset, float scale, bool instant = false)
+        {
+            targetDepth = depthOffset;
+            targetScale = scale;
+            if (instant)
+            {
+                currentDepth = targetDepth;
+                currentScale = targetScale;
+                ApplyPresentation();
+            }
+        }
+
+        void ApplyPresentation()
+        {
+            visualRoot.localPosition = new Vector3(0f, 0f, -currentDepth);
+            visualRoot.localScale = new Vector3(currentScale, currentScale, 1f);
+        }
+
+        void AnimatePresentation()
+        {
+            if (Mathf.Approximately(currentDepth, targetDepth) && Mathf.Approximately(currentScale, targetScale))
+                return;
+            float t = 1f - Mathf.Exp(-presentationSpeed * Time.deltaTime);
+            currentDepth = Mathf.Abs(targetDepth - currentDepth) < 1e-4f ? targetDepth : Mathf.Lerp(currentDepth, targetDepth, t);
+            currentScale = Mathf.Abs(targetScale - currentScale) < 1e-4f ? targetScale : Mathf.Lerp(currentScale, targetScale, t);
+            ApplyPresentation();
+        }
+
+        void LateUpdate()
+        {
+            AnimatePresentation();
+            if (head == null) return;
+
+            if (!worldLocked)
+            {
+                var yaw = HeadYaw();
+                var targetPosition = head.position + yaw * headLocalPosition;
+                float t = 1f - Mathf.Exp(-followSmoothing * Time.deltaTime);
+                transform.position = Vector3.Lerp(transform.position, targetPosition, t);
+                if (!billboard)
+                    transform.rotation = Quaternion.Slerp(transform.rotation, yaw * headLocalRotation, t);
+            }
+
+            if (billboard) FaceHead();
+        }
+
+        void FaceHead()
+        {
+            if (head == null) return;
+            var away = transform.position - head.position;
+            if (billboardYawOnly) away.y = 0f;
+            if (away.sqrMagnitude < 1e-6f) return;
+            transform.rotation = Quaternion.LookRotation(away, Vector3.up);
+        }
+
+        void CaptureHeadOffset()
+        {
+            if (head == null) return;
+            var inverseYaw = Quaternion.Inverse(HeadYaw());
+            headLocalPosition = inverseYaw * (transform.position - head.position);
+            headLocalRotation = inverseYaw * transform.rotation;
+        }
+
+        Quaternion HeadYaw()
+        {
+            var forward = Vector3.ProjectOnPlane(head.forward, Vector3.up);
+            return forward.sqrMagnitude < 1e-6f ? Quaternion.identity : Quaternion.LookRotation(forward, Vector3.up);
+        }
+
+        void OnDestroy()
+        {
+            foreach (var material in materials)
+                Destroy(material);
+            materials.Clear();
+        }
+    }
+}
