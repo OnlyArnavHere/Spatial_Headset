@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spatial Launcher Test Clock</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: Consolas, "SF Mono", monospace; }
+  body { display: grid; place-items: center; text-align: center; }
+  #clock { font-size: clamp(48px, 11vw, 160px); font-weight: 700; letter-spacing: 0.02em; }
+  #frame { font-size: clamp(16px, 2.4vw, 28px); color: #7fd4ff; margin-top: 0.4em; }
+  p { color: #888; font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px; margin-top: 2em; padding: 0 16px; }
+</style>
+</head>
+<body>
+<div>
+  <div id="clock">--:--:--.---</div>
+  <div id="frame">frame 0</div>
+  <p>Browser version of clock.py. Capture this window, put the headset view next to it, and compare the two clocks in one photo.</p>
+</div>
+<script>
+  // Updated every animation frame; the milliseconds show how stale the streamed copy is.
+  const clock = document.getElementById("clock");
+  const frame = document.getElementById("frame");
+  let frames = 0;
+  const pad = (n, w) => String(n).padStart(w, "0");
+  function tick() {
+    const d = new Date();
+    clock.textContent = `${pad(d.getHours(), 2)}:${pad(d.getMinutes(), 2)}:${pad(d.getSeconds(), 2)}.${pad(d.getMilliseconds(), 3)}`;
+    frame.textContent = `frame ${++frames}`;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>
