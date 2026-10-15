@@ -43,7 +43,8 @@ the whole EditMode run 10 seconds.
 
 ## Open
 
-- [ ] **T07** EditMode test assembly with smoke tests for existing pure logic
+- [x] **T07** EditMode test assembly with smoke tests for existing pure logic
+  - dropped: tests already run through the project's own runner; no asmdefs
   - plan: [Workflow](plan.md#workflow-vs-code-plus-unity-mcp), "the fastest loop" paragraph · size: S · tag: unattended-ok · depends-on: none
   - first: First add ONE trivial test and confirm the Unity Test Runner/MCP lists it. If tests in the default Editor assembly aren't discovered, STOP (needs_human); do not create asmdefs.
   - accept:
