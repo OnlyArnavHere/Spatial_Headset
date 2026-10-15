@@ -252,7 +252,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             launcher.OpenLauncher();
             yield return Settle;
             var icons = launcher.LauncherContent.Buttons;
-            Check(icons.Count == 7, $"the launcher has the Void, Cinema and Sky icons ({icons.Count} icons)");
+            Check(icons.Count >= 7, $"the launcher has the Void, Cinema and Sky icons ({icons.Count} icons)");
             if (icons.Count < 7) yield break;
 
             Click(mouse, cam, icons[5].transform.position);

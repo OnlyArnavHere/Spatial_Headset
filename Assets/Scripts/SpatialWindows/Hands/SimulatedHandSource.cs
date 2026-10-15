@@ -34,6 +34,9 @@ namespace SpatialLauncher.SpatialWindows
 
         public float Reach => reach;
 
+        /// <summary>The hand simulated in one-hand mode (Settings > Hands); the other joins in two-hand mode.</summary>
+        public Handedness DominantHand { get; set; } = Handedness.Right;
+
         HandState left, right;
         Aim leftAim, rightAim;
 
@@ -78,6 +81,12 @@ namespace SpatialLauncher.SpatialWindows
 
             right = rightAim.IsSet ? BuildHand(Handedness.Right, rightAim.Point, rightPinch) : HandState.Untracked;
             left = twoHanded && leftAim.IsSet ? BuildHand(Handedness.Left, leftAim.Point, leftPinch) : HandState.Untracked;
+            // One-handed and left-handed: the mouse drives the left hand instead.
+            if (!twoHanded && DominantHand == Handedness.Left)
+            {
+                left = rightAim.IsSet ? BuildHand(Handedness.Left, rightAim.Point, rightPinch) : HandState.Untracked;
+                right = HandState.Untracked;
+            }
         }
 
         void UpdateAim(ref Aim aim, Ray mouseRay, bool pinched)

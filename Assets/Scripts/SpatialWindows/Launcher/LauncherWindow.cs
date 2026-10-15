@@ -10,7 +10,8 @@ namespace SpatialLauncher.SpatialWindows
     /// a stream window for each one picked. In Placeholder mode the Laptop icon opens a single "Not connected" screen.
     /// A stream window's Keys button opens the virtual keyboard (<see cref="OpenKeyboard"/>, <see cref="RemoteKeyboard"/>).
     /// The Void, Cinema and Sky icons select an immersive environment and open the immersion dial
-    /// (<see cref="SelectEnvironment"/>, <see cref="ImmersionController"/>).
+    /// (<see cref="SelectEnvironment"/>, <see cref="ImmersionController"/>). The Settings icon opens the Settings window
+    /// (<see cref="OpenSettings"/>, <see cref="SettingsService"/>).
     /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
@@ -22,6 +23,7 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color VoidIconColor = new Color(0.10f, 0.12f, 0.22f);
         static readonly Color CinemaIconColor = new Color(0.45f, 0.10f, 0.14f);
         static readonly Color SkyIconColor = new Color(0.35f, 0.58f, 0.85f);
+        static readonly Color SettingsIconColor = new Color(0.45f, 0.47f, 0.52f);
 
         [SerializeField] WindowManager manager;
         [Tooltip("Keyboard input for laptop windows. Added to this GameObject at start if not set.")]
@@ -29,6 +31,8 @@ namespace SpatialLauncher.SpatialWindows
         [Tooltip("Immersion level and environments. Added to this GameObject at start if not set.")]
         [SerializeField] ImmersionController immersion;
         [SerializeField] Vector2 dialSize = new Vector2(0.5f, 0.22f);
+        [Tooltip("Settings (saved to a file) and applying them. Added to this GameObject at start if not set.")]
+        [SerializeField] SettingsService settings;
 
         [Header("Sample content")]
         [SerializeField] Texture2D sampleImage;
@@ -65,6 +69,9 @@ namespace SpatialLauncher.SpatialWindows
         public ImmersionController Immersion => immersion;
         /// <summary>The immersion dial window, while open.</summary>
         public SpatialWindow Dial { get; private set; }
+        public SettingsService Settings => settings;
+        /// <summary>The Settings window, while open.</summary>
+        public SpatialWindow SettingsWindow { get; private set; }
 
         void Awake()
         {
@@ -73,6 +80,10 @@ namespace SpatialLauncher.SpatialWindows
             keyboard.Manager = manager;
             if (immersion == null && !TryGetComponent(out immersion)) immersion = gameObject.AddComponent<ImmersionController>();
             if (immersion.Manager == null) immersion.Manager = manager;
+            if (settings == null && !TryGetComponent(out settings)) settings = gameObject.AddComponent<SettingsService>();
+            if (settings.Manager == null) settings.Manager = manager;
+            if (settings.Immersion == null) settings.Immersion = immersion;
+            if (settings.ConnectionSettings == null) settings.ConnectionSettings = connectionSettings;
         }
 
         void Start()
@@ -109,6 +120,7 @@ namespace SpatialLauncher.SpatialWindows
                 new LauncherContent.Entry { Label = "Void", Glyph = "VOID", Color = VoidIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Void) },
                 new LauncherContent.Entry { Label = "Cinema", Glyph = "CIN", Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
                 new LauncherContent.Entry { Label = "Sky", Glyph = "SKY", Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
+                new LauncherContent.Entry { Label = "Settings", Glyph = "SET", Color = SettingsIconColor, Open = () => OpenSettings() },
             });
             return Launcher;
         }
@@ -220,6 +232,20 @@ namespace SpatialLauncher.SpatialWindows
             if (Dial == null) return null;
             new GameObject().AddComponent<ImmersionDialContent>().Init(Dial, manager.WindowMaterial, immersion);
             return Dial;
+        }
+
+        /// <summary>Opens the Settings window, or brings it to the front.</summary>
+        public SpatialWindow OpenSettings()
+        {
+            if (SettingsWindow != null)
+            {
+                manager.Focus(SettingsWindow);
+                return SettingsWindow;
+            }
+            SettingsWindow = manager.Spawn("Settings", SettingsContent.PreferredSize + Vector2.one * (WindowContent.Padding * 2f));
+            if (SettingsWindow == null) return null;
+            new GameObject().AddComponent<SettingsContent>().Init(SettingsWindow, manager.WindowMaterial, settings);
+            return SettingsWindow;
         }
 
         /// <summary>Opens the virtual keyboard, which types into the front-most laptop window.</summary>

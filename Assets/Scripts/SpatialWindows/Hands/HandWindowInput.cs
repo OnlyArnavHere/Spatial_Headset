@@ -50,6 +50,13 @@ namespace SpatialLauncher.SpatialWindows
         public event Action<SpatialWindow> CloseRequested;
 
         public IHandSource HandSource => source;
+        /// <summary>
+        /// 0.5..2 (Settings > Hands): above 1 a held window follows smaller hand motions and moves further in/out per
+        /// hand motion; below 1, the reverse.
+        /// </summary>
+        public float Sensitivity { get; set; } = 1f;
+        /// <summary>False ignores pinches (Settings > Hands): the cursor still shows, nothing is pressed.</summary>
+        public bool PinchEnabled { get; set; } = true;
         public float DepthGain => depthGain;
         public float DeadZoneDistance => deadZoneDistance;
 
@@ -118,8 +125,8 @@ namespace SpatialLauncher.SpatialWindows
             right?.Cancel();
         }
 
-        bool TryHit(Ray ray, out RaycastHit hit, out WindowPart part) =>
-            WindowRaycast.TryHit(ray, maxDistance, raycastMask, out hit, out part);
+        bool TryHit(Ray ray, out RaycastHit hit, out WindowPart part, out Vector3 surfacePoint) =>
+            WindowRaycast.TryHit(ray, maxDistance, raycastMask, out hit, out part, out surfacePoint);
 
         // Keeps a dragged window within comfortable reach of the head.
         Vector3 ClampToReach(Vector3 position)
@@ -189,8 +196,9 @@ namespace SpatialLauncher.SpatialWindows
                 }
 
                 Filter.Smoothing = handDistance.Smoothing = owner.smoothing;
-                Filter.DeadZoneAngle = owner.deadZoneAngle;
-                Filter.DeadZoneDistance = handDistance.DeadZone = owner.deadZoneDistance;
+                float sensitivity = Mathf.Clamp(owner.Sensitivity, 0.5f, 2f);
+                Filter.DeadZoneAngle = owner.deadZoneAngle / sensitivity;
+                Filter.DeadZoneDistance = handDistance.DeadZone = owner.deadZoneDistance / sensitivity;
 
                 var ray = Filter.Update(state.PointingRay, deltaTime);
                 float rawHandDistance = owner.head != null ? Vector3.Distance(state.IndexTipPosition, owner.head.position) : 0f;
@@ -199,8 +207,8 @@ namespace SpatialLauncher.SpatialWindows
                 if (mode != Mode.None && (ActiveWindow == null || (mode == Mode.Control && activeControl == null)))
                     ResetGesture(); // the window or control was destroyed mid-gesture
 
-                bool hasHit = owner.TryHit(ray, out var hit, out var part);
-                bool pinched = state.IsPinched;
+                bool hasHit = owner.TryHit(ray, out var hit, out var part, out var surfacePoint);
+                bool pinched = state.IsPinched && owner.PinchEnabled;
 
                 if (pinched && !wasPinched)
                 {
@@ -226,7 +234,7 @@ namespace SpatialLauncher.SpatialWindows
                 // During a gesture the cursor stays on the grabbed point; otherwise it marks what the ray hits.
                 bool inGesture = mode == Mode.Drag || mode == Mode.Resize || mode == Mode.Control;
                 if (inGesture) UpdateCursor(ray, gesturePoint, true, pinched);
-                else UpdateCursor(ray, hasHit ? hit.point : Vector3.zero, hasHit, pinched);
+                else UpdateCursor(ray, hasHit ? surfacePoint : Vector3.zero, hasHit, pinched);
             }
 
             void Begin(RaycastHit hit, WindowPart part, float handDepth)
@@ -276,7 +284,7 @@ namespace SpatialLauncher.SpatialWindows
                 {
                     case Mode.Drag:
                         // Moving the hand away from the head pushes the window away (along its normal), and vice versa.
-                        float depth = (handDepth - startHandDistance) * owner.depthGain;
+                        float depth = (handDepth - startHandDistance) * owner.depthGain * Mathf.Clamp(owner.Sensitivity, 0.5f, 2f);
                         var plane = new Plane(dragNormal, dragOrigin + dragNormal * depth);
                         if (!plane.Raycast(ray, out float dragDistance)) break;
                         gesturePoint = ray.GetPoint(dragDistance);
@@ -292,9 +300,8 @@ namespace SpatialLauncher.SpatialWindows
                         break;
 
                     case Mode.Control:
-                        var t = activeControl.transform;
-                        if (!new Plane(t.forward, t.position).Raycast(ray, out float controlDistance)) break;
-                        gesturePoint = ray.GetPoint(controlDistance);
+                        // Through the window's surface, so a drag follows a curved window too.
+                        if (!WindowRaycast.TryProjectToLayout(activeControl.Window, ray, activeControl.transform, out gesturePoint)) break;
                         activeControl.Drag(gesturePoint);
                         break;
                 }

@@ -6,18 +6,23 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// A floating panel: a body quad that holds content, a title bar above it with a
-    /// close button, and a resize handle in the bottom-right corner.
+    /// A floating panel: a body quad that holds content, a title bar above it with an options
+    /// button and a close button, and a resize handle in the bottom-right corner. The options button
+    /// opens a strip under the body with the window's curve and aspect preset (<see cref="WindowOptions"/>).
     /// The window's +Z points away from the viewer, so its quads face the user.
     /// Built at runtime by <see cref="WindowManager"/>; place content under <see cref="ContentRoot"/>.
+    ///
+    /// <see cref="Curve"/> wraps the whole window (chrome and content) around a gentle vertical cylinder
+    /// (<see cref="WindowCurve"/>): <see cref="WindowCurver"/> bends what is drawn, while colliders stay flat in
+    /// layout space and <see cref="WindowRaycast"/> maps rays onto the cylinder analytically.
     /// </summary>
     public class SpatialWindow : MonoBehaviour
     {
-        const float TitleBarHeight = 0.06f;
-        const float TitleBarGap = 0.005f;
-        const float CloseButtonSize = 0.045f;
+        public const float TitleBarHeight = 0.06f;
+        public const float TitleBarGap = 0.005f;
+        public const float CloseButtonSize = 0.045f;
         const float ResizeHandleSize = 0.04f;
-        const float Margin = 0.008f;
+        public const float Margin = 0.008f;
         // Thin, so raycasts agree with what's drawn; a thick box would reach past the 1 cm focus push-forward.
         const float ColliderDepth = 0.001f;
         // Layers in front of the body, towards the viewer (-Z).
@@ -42,6 +47,14 @@ namespace SpatialLauncher.SpatialWindows
 
         /// <summary>Raised when the window's size changes, so content can lay itself out again.</summary>
         public event Action<SpatialWindow> SizeChanged;
+        /// <summary>The user picked an aspect preset in the options strip; <see cref="WindowManager"/> applies it.</summary>
+        public event Action<SpatialWindow, AspectPreset> AspectRequested;
+        /// <summary><see cref="Curve"/> or <see cref="Aspect"/> changed.</summary>
+        public event Action<SpatialWindow> ShapeChanged;
+
+        /// <summary>Windows with a curve above 0, which <see cref="WindowRaycast"/> hit-tests analytically.</summary>
+        public static IReadOnlyList<SpatialWindow> CurvedWindows => curvedWindows;
+        static readonly List<SpatialWindow> curvedWindows = new List<SpatialWindow>();
 
         public string Title { get; private set; }
         /// <summary>Size of the content body in metres (the title bar is extra).</summary>
@@ -49,6 +62,26 @@ namespace SpatialLauncher.SpatialWindows
         public bool IsFocused { get; private set; }
         /// <summary>Parent for window content. Origin is the body centre, unscaled, just in front of the body.</summary>
         public Transform ContentRoot { get; private set; }
+        /// <summary>Parent of everything drawn: its local space is the window's layout space (see <see cref="WindowCurve"/>).</summary>
+        public Transform Visual => visualRoot;
+        public WindowOptions Options { get; private set; }
+
+        /// <summary>0 = flat, 1 = wrapped around a cylinder of <see cref="WindowCurve.MinRadius"/>.</summary>
+        public float Curve { get; private set; }
+        public float CurveRadius => WindowCurve.Radius(Curve);
+        /// <summary>The fixed aspect of the content area, or Free. Resizing keeps it.</summary>
+        public AspectPreset Aspect { get; private set; }
+
+        /// <summary>Everything the window draws, in layout space: body, title bar, and the options strip when open.</summary>
+        public Rect LayoutBounds
+        {
+            get
+            {
+                float top = Size.y * 0.5f + TitleBarGap + TitleBarHeight;
+                float bottom = -Size.y * 0.5f - (Options != null ? Options.ExtraHeight : 0f);
+                return Rect.MinMaxRect(-Size.x * 0.5f, bottom, Size.x * 0.5f, top);
+            }
+        }
 
         public bool Billboard
         {
@@ -112,7 +145,32 @@ namespace SpatialLauncher.SpatialWindows
             ContentRoot = new GameObject("Content").transform;
             ContentRoot.SetParent(visualRoot, false);
             ContentRoot.localPosition = new Vector3(0f, 0f, -ContentDepth);
+
+            Options = gameObject.AddComponent<WindowOptions>();
+            Options.Build(this, baseMaterial);
+            gameObject.AddComponent<WindowCurver>();
         }
+
+        /// <summary>Curves the window (0 = flat, 1 = the gentlest cylinder radius, <see cref="WindowCurve.MinRadius"/>).</summary>
+        public void SetCurve(float curve)
+        {
+            curve = Mathf.Clamp01(curve);
+            if (Mathf.Approximately(curve, Curve)) return;
+            Curve = curve;
+            curvedWindows.Remove(this);
+            if (curve > 0f) curvedWindows.Add(this);
+            ShapeChanged?.Invoke(this);
+        }
+
+        /// <summary>Records the aspect preset (sizing is <see cref="WindowManager.SetAspect"/>'s job).</summary>
+        public void SetAspectPreset(AspectPreset preset)
+        {
+            if (preset == Aspect) return;
+            Aspect = preset;
+            ShapeChanged?.Invoke(this);
+        }
+
+        internal void RequestAspect(AspectPreset preset) => AspectRequested?.Invoke(this, preset);
 
         Transform CreateQuad(string quadName, Transform parent, Material material, WindowPartType partType)
         {
@@ -181,12 +239,15 @@ namespace SpatialLauncher.SpatialWindows
             closeButton.localPosition = new Vector3(w * 0.5f - Margin - CloseButtonSize * 0.5f, titleY, -DecorationDepth);
             closeButton.localScale = new Vector3(CloseButtonSize, CloseButtonSize, 1f);
 
-            float textWidth = Mathf.Max(0.01f, w - CloseButtonSize - Margin * 3f);
+            // Room for the options and close buttons on the right.
+            float textWidth = Mathf.Max(0.01f, w - CloseButtonSize * 2f - Margin * 4f);
             titleText.rectTransform.sizeDelta = new Vector2(textWidth, TitleBarHeight);
             titleText.transform.localPosition = new Vector3(-w * 0.5f + Margin + textWidth * 0.5f, titleY, -DecorationDepth);
 
             resizeHandle.localPosition = new Vector3(w * 0.5f - ResizeHandleSize * 0.5f, -h * 0.5f + ResizeHandleSize * 0.5f, -DecorationDepth);
             resizeHandle.localScale = new Vector3(ResizeHandleSize, ResizeHandleSize, 1f);
+
+            Options.Layout(Size, titleY, w * 0.5f - Margin * 2f - CloseButtonSize * 1.5f);
         }
 
         /// <summary>Moves the window. Body-locked windows keep the new offset from the head.</summary>
@@ -288,6 +349,7 @@ namespace SpatialLauncher.SpatialWindows
 
         void OnDestroy()
         {
+            curvedWindows.Remove(this);
             foreach (var material in materials)
                 Destroy(material);
             materials.Clear();
