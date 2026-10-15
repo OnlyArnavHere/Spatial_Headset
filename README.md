@@ -14,6 +14,8 @@ The window manager works in the Unity editor: spawning, focus, drag, resize and 
 
 With the iOS build target active, `com.unity.webrtc` 3.0.0 throws `EntryPointNotFoundException: RegisterDebugLog` in the editor, because `Runtime/Scripts/WebRTC.cs` line 732 uses `#if UNITY_IOS` where it needs `#if UNITY_IOS && !UNITY_EDITOR`. To fix it locally, copy `Library/PackageCache/com.unity.webrtc@*` to `Packages/com.unity.webrtc` and make that one-line change. The embedded copy is git-ignored.
 
+With the patched copy in place, `Packages/packages-lock.json` shows as modified: its `com.unity.webrtc` entry points at the embedded copy (`file:com.unity.webrtc`). Leave that change uncommitted. A clone without the patched copy resolves the registry version from `Packages/manifest.json` instead.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -5,9 +5,10 @@ using UnityEngine.Video;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// Opens the home panel: a launcher window whose icons open an Image window, a Video window, a blank
-    /// window or a Laptop window (a laptop's screen streamed by Tools/LaptopAgent, or a placeholder). Press H (or call
-    /// <see cref="OpenLauncher"/>) to bring the launcher back.
+    /// Opens the home panel: a launcher window whose icons open an Image window, a Video window, a blank window or the
+    /// Laptop picker, which lists the laptop's windows (and the whole desktop) streamed by Tools/LaptopAgent and opens
+    /// a stream window for each one picked. In Placeholder mode the Laptop icon opens a single "Not connected" screen.
+    /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
     {
@@ -27,10 +28,10 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] string sampleVideoUrl = "";
 
         [Header("Laptop (remote screen)")]
-        [Tooltip("Placeholder: a 'Not connected' screen only. WebRTC: video and input from the laptop agent " +
-                 "(Tools/LaptopAgent), with a connect panel. Needs the com.unity.webrtc package.")]
+        [Tooltip("Placeholder: a 'Not connected' screen only. WebRTC: a picker listing the laptop's windows, each " +
+                 "streamed with video and input from the laptop agent (Tools/LaptopAgent). Needs the com.unity.webrtc package.")]
         [SerializeField] LaptopStreaming laptopStreaming = LaptopStreaming.Placeholder;
-        [Tooltip("Defaults for the connect panel (host, ports, stream path).")]
+        [Tooltip("Defaults for the connect panels (host and ports).")]
         [SerializeField] RemoteConnectionSettings connectionSettings;
         [Tooltip("Optional: a component implementing IRemoteInputSink to receive the laptop screen's pointer input " +
                  "instead of the agent (for example LogRemoteInputSink while debugging).")]
@@ -130,23 +131,55 @@ namespace SpatialLauncher.SpatialWindows
 
         public SpatialWindow OpenBlankWindow() => manager.Spawn("Blank");
 
+        /// <summary>What the Laptop icon opens: the picker (WebRTC mode) or a "Not connected" screen (Placeholder mode).</summary>
         public SpatialWindow OpenLaptopWindow()
         {
-            bool webRtc = laptopStreaming == LaptopStreaming.WebRtc;
-            var resolution = webRtc && connectionSettings != null ? connectionSettings.expectedResolution : laptopResolution;
+            if (laptopStreaming == LaptopStreaming.WebRtc) return OpenLaptopPicker();
+
+            float aspect = laptopResolution.x / (float)Mathf.Max(1, laptopResolution.y);
+            var window = manager.Spawn("Laptop", MediaWindowSize(aspect, 0f));
+            if (window == null) return null;
+            var content = new GameObject().AddComponent<RemoteStreamContent>();
+            content.Init(window, manager.WindowMaterial, InputOverride(), laptopResolution);
+            return window;
+        }
+
+        /// <summary>A window that lists the laptop's windows and opens a stream window for each one picked.</summary>
+        public SpatialWindow OpenLaptopPicker()
+        {
+            var size = new Vector2(mediaWidth, LaptopPickerContent.ContentHeight) + Vector2.one * (WindowContent.Padding * 2f);
+            var window = manager.Spawn("Laptop", size);
+            if (window == null) return null;
+            var content = new GameObject().AddComponent<LaptopPickerContent>();
+            content.Init(window, manager.WindowMaterial, connectionSettings, (target, connection) => OpenLaptopStream(target, connection));
+            return window;
+        }
+
+        /// <summary>
+        /// A window streaming one laptop window (or the whole desktop) with its own video and input connection.
+        /// With a connection it connects at once; without, its connect panel waits for Connect.
+        /// </summary>
+        public SpatialWindow OpenLaptopStream(LaptopTarget target, LaptopConnection connection = null)
+        {
+            var resolution = target.width > 0 && target.height > 0 ? new Vector2Int(target.width, target.height)
+                : connectionSettings != null ? connectionSettings.expectedResolution : laptopResolution;
             float aspect = resolution.x / (float)Mathf.Max(1, resolution.y);
-            float panel = webRtc ? RemoteStreamContent.ConnectPanelHeight : 0f;
-            var window = manager.Spawn("Laptop", MediaWindowSize(aspect, panel));
+            string title = string.IsNullOrEmpty(target.title) ? "Laptop" : target.title.Length > 40 ? target.title.Substring(0, 39) + "…" : target.title;
+            var window = manager.Spawn(title, MediaWindowSize(aspect, RemoteStreamContent.ConnectPanelHeight));
             if (window == null) return null;
 
+            var content = new GameObject().AddComponent<RemoteStreamContent>();
+            content.InitConnected(window, manager.WindowMaterial, connectionSettings, InputOverride(), target);
+            if (connection != null) content.ConnectWith(connection);
+            return window;
+        }
+
+        IRemoteInputSink InputOverride()
+        {
             var sink = remoteInputSink as IRemoteInputSink;
             if (remoteInputSink != null && sink == null)
                 Debug.LogWarning($"{remoteInputSink.GetType().Name} does not implement IRemoteInputSink.", this);
-
-            var content = new GameObject().AddComponent<RemoteStreamContent>();
-            if (webRtc) content.InitConnected(window, manager.WindowMaterial, connectionSettings, sink);
-            else content.Init(window, manager.WindowMaterial, sink, resolution);
-            return window;
+            return sink;
         }
 
         // A window whose content area fits media of the given aspect at mediaWidth, plus any extra height.

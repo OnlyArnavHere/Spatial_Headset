@@ -9,7 +9,7 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public interface IRemoteVideoSource : IContentSource, IConnectionStatus
     {
-        /// <summary>The WHEP endpoint, e.g. http://192.168.1.5:8889/laptop/whep.</summary>
+        /// <summary>The WHEP endpoint of one laptop window's stream, e.g. http://192.168.1.5:8889/untitled-notepad/whep.</summary>
         string Url { get; set; }
         string User { get; set; }
         string Password { get; set; }

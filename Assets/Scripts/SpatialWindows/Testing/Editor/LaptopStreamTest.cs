@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using UnityEditor;
@@ -7,20 +8,23 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows.Testing.Editor
 {
     /// <summary>
-    /// End-to-end test of the Laptop window against a running laptop agent on this machine:
+    /// End-to-end test of the Laptop picker and several stream windows against a running laptop agent on this machine:
     ///
     ///   cd Tools/LaptopAgent
-    ///   python clock.py
-    ///   python agent.py --window "Spatial Launcher Test Clock" --input --dry-run-input
+    ///   python clock.py                                   (and open Notepad)
+    ///   python agent.py --input --dry-run-input
     ///
     /// then, in Play mode, Tools > Spatial Windows > Test Laptop Stream. It reads the current pairing token from the
-    /// agent's runtime config (Tools/LaptopAgent/.runtime/mediamtx.yml), connects through the panel, and checks video,
-    /// aspect, input round-trip time, the laptop clock readout, input mapping (dry run: nothing is clicked),
-    /// automatic reconnection and wrong-token handling. Results are logged with a [LaptopTest] prefix.
+    /// agent's runtime config (Tools/LaptopAgent/.runtime/mediamtx.yml), lists the laptop's windows through the picker,
+    /// opens the test clock and Notepad as two stream windows at once and checks for each: video, aspect, its own input
+    /// link and stream path, and that its clicks map to its own window's pixels (dry run: nothing is clicked). Then
+    /// automatic reconnection, wrong-token handling and the "Whole desktop" entry. Results use a [LaptopTest] prefix.
     /// </summary>
     static class LaptopStreamTest
     {
         const string AgentConfig = "Tools/LaptopAgent/.runtime/mediamtx.yml";
+        const string ClockTitle = "Spatial Launcher Test Clock";
+        const string NotepadTitle = "Notepad";
         const float Settle = 0.7f;
 
         [MenuItem("Tools/Spatial Windows/Test Laptop Stream (agent running)")]
@@ -44,113 +48,206 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             int previousInput = WindowTestUtil.SelectInput<MouseWindowInput>(manager);
             string savedHost = RemoteConnectionPrefs.Host(null), savedToken = RemoteConnectionPrefs.Token();
             int savedPort = RemoteConnectionPrefs.VideoPort(null);
-            var body = Body(launcher, manager, mouse, cam, token);
+            var opened = new List<SpatialWindow>();
             try
             {
-                while (body.MoveNext()) yield return body.Current;
+                yield return Body(launcher, manager, mouse, cam, token, opened);
             }
             finally
             {
+                foreach (var window in opened)
+                    if (window != null) manager.Close(window);
                 if (previousInput >= 0) manager.SetActiveInput(previousInput);
                 RemoteConnectionPrefs.Save(savedHost, savedPort, savedToken);
             }
         }
 
-        static IEnumerator Body(LauncherWindow launcher, WindowManager manager, MouseWindowInput mouse, Camera cam, string token)
+        static IEnumerator Body(LauncherWindow launcher, WindowManager manager, MouseWindowInput mouse, Camera cam, string token,
+            List<SpatialWindow> opened)
         {
-            var window = launcher.OpenLaptopWindow();
+            // The Laptop icon's picker lists what the laptop can stream.
+            var pickerWindow = launcher.OpenLaptopWindow();
+            opened.Add(pickerWindow);
             yield return Settle;
-            var laptop = window != null ? window.GetComponentInChildren<RemoteStreamContent>() : null;
-            Check(laptop != null && laptop.Video != null, "the Laptop window is in WebRTC mode (LauncherWindow > Laptop Streaming)");
-            if (laptop == null || laptop.Video == null) yield break;
+            var picker = pickerWindow != null ? pickerWindow.GetComponentInChildren<LaptopPickerContent>() : null;
+            Check(picker != null, "the Laptop icon opens the picker (LauncherWindow > Laptop Streaming is WebRTC)");
+            if (picker == null) yield break;
 
-            // Connect through the panel.
-            laptop.HostField.SetText("127.0.0.1");
-            laptop.PortField.SetText("8889");
-            laptop.TokenField.SetText(token);
-            Click(mouse, cam, laptop.ConnectButton.transform.position);
+            picker.HostField.SetText("127.0.0.1");
+            picker.PortField.SetText("8889");
+            picker.TokenField.SetText(token);
+            Click(mouse, cam, picker.ListButton.transform.position);
+            double deadline = EditorTestRunner.Now + 8.0;
+            while (picker.Targets.Count == 0 && EditorTestRunner.Now < deadline) yield return 0.1f;
+            var targets = picker.Targets;
+            Check(targets.Count > 0 && targets[0].id == "desktop" && targets[0].title == "Whole desktop",
+                $"the picker lists the whole desktop first ({targets.Count} entries; \"{picker.StatusLine}\")");
+            var clock = Find(targets, ClockTitle);
+            var notepad = Find(targets, NotepadTitle);
+            Check(clock != null && notepad != null,
+                $"it lists the test clock and Notepad (start clock.py and Notepad first): {Describe(clock)}, {Describe(notepad)}");
+            Check(EntriesMatch(picker), $"the entries show the targets' titles ({picker.EntryButtons.Count} on page {picker.Page + 1})");
+            if (clock == null || notepad == null) yield break;
 
-            double deadline = EditorTestRunner.Now + 15.0;
-            while (!laptop.Video.IsConnected && EditorTestRunner.Now < deadline) yield return 0.1f;
-            Check(laptop.Video.IsConnected, $"video arrives over WHEP ({laptop.Video.StatusText})");
-            if (!laptop.Video.IsConnected) yield break;
+            // Pick both: two stream windows at once, each with its own stream and input link.
+            var streams = new List<RemoteStreamContent>();
+            foreach (var target in new[] { clock, notepad })
+            {
+                SpatialWindow window = null;
+                yield return PickEntry(manager, mouse, cam, pickerWindow, picker, target, w => window = w);
+                if (window != null) opened.Add(window);
+                var stream = window != null ? window.GetComponentInChildren<RemoteStreamContent>() : null;
+                Check(stream != null && stream.Target != null && stream.Target.id == target.id && window.Title.StartsWith(target.title.Substring(0, Mathf.Min(20, target.title.Length))),
+                    $"picking \"{target.title}\" opens its own stream window (/{target.path})");
+                if (stream != null) streams.Add(stream);
+            }
+            if (streams.Count < 2) yield break;
 
-            deadline = EditorTestRunner.Now + 5.0;
-            while (!(laptop.InputLink.IsConnected && laptop.InputLink.RoundTripMs.HasValue) && EditorTestRunner.Now < deadline) yield return 0.1f;
-            Check(laptop.InputLink.IsConnected && laptop.InputLink.AgentDryRun,
-                $"input connects with the token ({laptop.InputLink.StatusText}; streaming {laptop.InputLink.TargetDescription})");
-
-            var size = laptop.Video.PixelSize;
-            float aspect = size.x / (float)size.y;
-            float shown = laptop.DisplaySize.x / laptop.DisplaySize.y;
-            Check(Mathf.Abs(shown - aspect) < aspect * 0.01f, $"the window shows the {size.x}x{size.y} stream at its aspect ({shown:F3})");
+            deadline = EditorTestRunner.Now + 20.0;
+            while (!streams.TrueForAll(s => s.Video != null && s.Video.IsConnected && s.InputLink.IsConnected && s.InputLink.RoundTripMs.HasValue)
+                   && EditorTestRunner.Now < deadline)
+                yield return 0.1f;
+            foreach (var stream in streams)
+            {
+                string name = stream.Target.title;
+                Check(stream.Video != null && stream.Video.IsConnected, $"{name}: video arrives over WHEP ({stream.Video?.StatusText})");
+                Check(stream.InputLink.IsConnected && stream.InputLink.AgentDryRun && stream.InputLink.StreamPath == stream.Target.path,
+                    $"{name}: its input link opened /{stream.InputLink.StreamPath} ({stream.InputLink.StatusText}; {stream.InputLink.TargetDescription})");
+                if (stream.Video == null || !stream.Video.IsConnected) continue;
+                var size = stream.Video.PixelSize;
+                float aspect = size.x / (float)size.y;
+                float shown = stream.DisplaySize.x / stream.DisplaySize.y;
+                Check(Mathf.Abs(shown - aspect) < aspect * 0.01f, $"{name}: shows the {size.x}x{size.y} stream at its aspect ({shown:F3})");
+            }
+            Check(streams.TrueForAll(s => s.Video != null && s.Video.IsConnected), "both windows stream at the same time");
 
             yield return 1.5f; // a few pings
-            var rtt = laptop.InputLink.RoundTripMs;
-            Check(rtt.HasValue && window.GetComponentInChildren<TMPro.TextMeshPro>() != null,
-                $"round-trip time is measured ({rtt:0.0} ms, best {laptop.InputLink.BestRoundTripMs:0.0} ms)");
-            var title = FindTitle(window);
-            Check(title != null && title.Contains("ms"), $"the title bar shows it (\"{title}\")");
-            Check(laptop.StatusLine.Contains("Laptop clock"), $"the status line shows the laptop clock (\"{laptop.StatusLine}\")");
-            var offsetMs = (laptop.InputLink.LaptopNow.Value - System.DateTime.UtcNow).TotalMilliseconds;
+            var first = streams[0];
+            Check(first.InputLink.RoundTripMs.HasValue, $"round-trip time is measured ({first.InputLink.RoundTripMs:0.0} ms, best {first.InputLink.BestRoundTripMs:0.0} ms)");
+            Check(first.StatusLine.Contains("Laptop clock"), $"the status line shows the laptop clock (\"{first.StatusLine}\")");
+            var offsetMs = (first.InputLink.LaptopNow.Value - System.DateTime.UtcNow).TotalMilliseconds;
             Check(Mathf.Abs((float)offsetMs) < 50f, $"same machine: the estimated laptop clock matches this one ({offsetMs:+0.0;-0.0} ms)");
 
-            // Input mapping (the agent is in dry-run mode, so these clicks are only logged).
-            manager.Focus(window);
-            yield return Settle;
-            var surface = laptop.Surface.transform;
-            Vector2Int? a = null, b = null;
-            yield return ClickAndAck(mouse, cam, laptop, surface.TransformPoint(new Vector3(0.25f, 0.25f, 0f)), p => a = p);
-            yield return ClickAndAck(mouse, cam, laptop, surface.TransformPoint(new Vector3(-0.25f, -0.25f, 0f)), p => b = p);
-            if (a.HasValue && b.HasValue)
+            // Each window's clicks go to its own laptop window (the agent is in dry-run mode, so they're only logged).
+            foreach (var stream in streams)
             {
-                // Screen (0.75, 0.25) to (0.25, 0.75): half the width left, half the height down, in laptop pixels.
-                var delta = b.Value - a.Value;
-                var expected = new Vector2Int(-size.x / 2, size.y / 2);
-                Check(Mathf.Abs(delta.x - expected.x) <= 3 && Mathf.Abs(delta.y - expected.y) <= 3,
-                    $"clicks map to the laptop's pixels: moved {delta} between two clicks, expected {expected}");
+                var window = stream.Window;
+                manager.Focus(window);
+                yield return Settle;
+                var surface = stream.Surface.transform;
+                Vector2Int? a = null, b = null;
+                string pathA = null, pathB = null;
+                yield return ClickAndAck(mouse, cam, stream, surface.TransformPoint(new Vector3(0.25f, 0.25f, 0f)), (p, path) => { a = p; pathA = path; });
+                yield return ClickAndAck(mouse, cam, stream, surface.TransformPoint(new Vector3(-0.25f, -0.25f, 0f)), (p, path) => { b = p; pathB = path; });
+                var target = stream.Target;
+                if (a.HasValue && b.HasValue)
+                {
+                    // Screen (0.75, 0.25) to (0.25, 0.75): half the width left, half the height down, in laptop pixels.
+                    var delta = b.Value - a.Value;
+                    var expected = new Vector2Int(-target.width / 2, target.height / 2);
+                    Check(pathA == target.path && pathB == target.path && Mathf.Abs(delta.x - expected.x) <= 3 && Mathf.Abs(delta.y - expected.y) <= 3,
+                        $"{target.title}: clicks go to /{pathA} and map to its pixels: moved {delta}, expected {expected}");
+                }
+                else Check(false, $"{target.title}: the agent acknowledged both clicks");
             }
-            else Check(false, "the agent acknowledged both clicks");
 
-            // Automatic reconnection after a dropped connection.
-            int before = laptop.Video.ConnectCount;
-            laptop.Video.SimulateDrop();
+            // Automatic reconnection after a dropped connection, while the other window keeps streaming.
+            var other = streams[1];
+            int before = first.Video.ConnectCount;
+            first.Video.SimulateDrop();
             deadline = EditorTestRunner.Now + 3.0;
-            while (laptop.Video.IsConnected && EditorTestRunner.Now < deadline) yield return 0.05f;
-            bool dropped = !laptop.Video.IsConnected;
+            while (first.Video.IsConnected && EditorTestRunner.Now < deadline) yield return 0.05f;
+            bool dropped = !first.Video.IsConnected;
             deadline = EditorTestRunner.Now + 15.0;
-            while (!laptop.Video.IsConnected && EditorTestRunner.Now < deadline) yield return 0.1f;
-            Check(dropped && laptop.Video.IsConnected && laptop.Video.ConnectCount == before + 1,
-                $"a dropped stream reconnects on its own ({laptop.Video.StatusText})");
+            while (!first.Video.IsConnected && EditorTestRunner.Now < deadline) yield return 0.1f;
+            Check(dropped && first.Video.IsConnected && first.Video.ConnectCount == before + 1 && other.Video.IsConnected,
+                $"a dropped stream reconnects on its own while the other keeps streaming ({first.Video.StatusText})");
 
             // Disconnect, then a wrong token: a clear message and no endless retrying.
-            Click(mouse, cam, laptop.ConnectButton.transform.position);
+            manager.Focus(first.Window);
+            yield return Settle;
+            Click(mouse, cam, first.ConnectButton.transform.position);
             yield return 0.3f;
-            Check(!laptop.IsActive && laptop.Video.Texture == null && laptop.StatusText == "Not connected", "Disconnect stops the stream");
+            Check(!first.IsActive && first.Video.Texture == null && first.StatusText == "Not connected" && other.Video.IsConnected,
+                "Disconnect stops that stream only");
 
-            laptop.TokenField.SetText("wrong-token");
-            Click(mouse, cam, laptop.ConnectButton.transform.position);
+            first.TokenField.SetText("wrong-token");
+            Click(mouse, cam, first.ConnectButton.transform.position);
             deadline = EditorTestRunner.Now + 8.0;
-            while ((laptop.Video.CurrentState != RemoteVideoState.Failed ||
-                    laptop.InputLink.CurrentState != WebSocketRemoteInputSink.State.Rejected) && EditorTestRunner.Now < deadline)
+            while ((first.Video.CurrentState != RemoteVideoState.Failed ||
+                    first.InputLink.CurrentState != WebSocketRemoteInputSink.State.Rejected) && EditorTestRunner.Now < deadline)
                 yield return 0.1f;
-            Check(laptop.Video.CurrentState == RemoteVideoState.Failed && laptop.Video.StatusText.StartsWith("Wrong token"),
-                $"a wrong token stops the video with a clear message (\"{laptop.Video.StatusText}\")");
-            Check(laptop.InputLink.CurrentState == WebSocketRemoteInputSink.State.Rejected,
-                $"and the input link stops retrying (\"{laptop.InputLink.StatusText}\")");
-            Click(mouse, cam, laptop.ConnectButton.transform.position); // Disconnect
-            yield return 0.2f;
-            manager.Close(window);
+            Check(first.Video.CurrentState == RemoteVideoState.Failed && first.Video.StatusText.StartsWith("Wrong token"),
+                $"a wrong token stops the video with a clear message (\"{first.Video.StatusText}\")");
+            Check(first.InputLink.CurrentState == WebSocketRemoteInputSink.State.Rejected,
+                $"and the input link stops retrying (\"{first.InputLink.StatusText}\")");
+
+            // The whole desktop streams too.
+            SpatialWindow desktopWindow = null;
+            yield return PickEntry(manager, mouse, cam, pickerWindow, picker, targets[0], w => desktopWindow = w);
+            if (desktopWindow != null) opened.Add(desktopWindow);
+            var desktop = desktopWindow != null ? desktopWindow.GetComponentInChildren<RemoteStreamContent>() : null;
+            deadline = EditorTestRunner.Now + 15.0;
+            while (desktop != null && desktop.Video != null && !desktop.Video.IsConnected && EditorTestRunner.Now < deadline) yield return 0.1f;
+            Check(desktop != null && desktop.Video != null && desktop.Video.IsConnected && desktop.InputLink.StreamPath == "desktop",
+                $"\"Whole desktop\" streams the screen on /desktop ({desktop?.Video?.StatusText})");
+        }
+
+        static LaptopTarget Find(IReadOnlyList<LaptopTarget> targets, string titlePart)
+        {
+            foreach (var target in targets)
+                if (target.kind == "window" && target.title.Contains(titlePart)) return target;
+            return null;
+        }
+
+        static string Describe(LaptopTarget target) => target == null ? "missing" : $"\"{target.title}\" on /{target.path}";
+
+        static bool EntriesMatch(LaptopPickerContent picker)
+        {
+            if (picker.EntryButtons.Count == 0 || picker.EntryButtons.Count != picker.PageTargets.Count) return false;
+            for (int i = 0; i < picker.EntryButtons.Count; i++)
+            {
+                var label = picker.transform.Find($"EntryLabel {i}")?.GetComponent<TMPro.TextMeshPro>();
+                if (label == null || !label.text.StartsWith(picker.PageTargets[i].title)) return false;
+            }
+            return true;
+        }
+
+        // Pages to the target in the picker and clicks its entry, like a user would; reports the window it opened.
+        static IEnumerator PickEntry(WindowManager manager, MouseWindowInput mouse, Camera cam, SpatialWindow pickerWindow,
+            LaptopPickerContent picker, LaptopTarget target, System.Action<SpatialWindow> result)
+        {
+            manager.Focus(pickerWindow);
+            yield return Settle;
+            for (int page = 0; page < 10 && IndexOnPage(picker, target) < 0; page++)
+            {
+                Click(mouse, cam, picker.MoreButton.transform.position);
+                yield return 0.1f;
+            }
+            int index = IndexOnPage(picker, target);
+            if (index < 0) yield break;
+            int count = manager.Windows.Count;
+            Click(mouse, cam, picker.EntryButtons[index].transform.position);
+            yield return Settle;
+            if (manager.Windows.Count == count + 1) result(manager.FocusedWindow);
+        }
+
+        static int IndexOnPage(LaptopPickerContent picker, LaptopTarget target)
+        {
+            for (int i = 0; i < picker.PageTargets.Count; i++)
+                if (picker.PageTargets[i] == target) return i;
+            return -1;
         }
 
         static IEnumerator ClickAndAck(MouseWindowInput mouse, Camera cam, RemoteStreamContent laptop, Vector3 point,
-            System.Action<Vector2Int> result)
+            System.Action<Vector2Int, string> result)
         {
             int acks = laptop.InputLink.AckCount;
             Click(mouse, cam, point);
             double deadline = EditorTestRunner.Now + 3.0;
             while (laptop.InputLink.AckCount < acks + 2 && EditorTestRunner.Now < deadline) yield return 0.05f; // down + up
-            if (laptop.InputLink.AckCount >= acks + 2 && laptop.InputLink.LastAck.HasValue) result(laptop.InputLink.LastAck.Value);
+            if (laptop.InputLink.AckCount >= acks + 2 && laptop.InputLink.LastAck.HasValue)
+                result(laptop.InputLink.LastAck.Value, laptop.InputLink.LastAckPath);
         }
 
         static void Click(MouseWindowInput mouse, Camera cam, Vector3 worldPoint)
@@ -158,12 +255,6 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Vector3 screen = cam.WorldToScreenPoint(worldPoint);
             mouse.PressAt(screen);
             mouse.ReleaseAt(screen);
-        }
-
-        static string FindTitle(SpatialWindow window)
-        {
-            var title = WindowTestUtil.Visual(window).Find("TitleText");
-            return title != null ? title.GetComponent<TMPro.TextMeshPro>().text : null;
         }
 
         // The agent writes this run's token into its MediaMTX config (git-ignored, deleted with .runtime).

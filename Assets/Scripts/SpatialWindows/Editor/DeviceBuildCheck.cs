@@ -21,7 +21,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
     /// Pre-flight check for an iOS device build of <see cref="ScenePath"/>: player settings, HoloKit's own
     /// build rules, the XR loader, the build scene list, the scene's contents, the materials and shaders it
     /// uses, video import settings and texture import settings. Logs one line per check with a
-    /// [DeviceCheck] prefix and a summary; changes nothing.
+    /// [DeviceCheck] prefix and a summary; changes nothing (<see cref="DeviceSettings"/> applies the settings).
     /// </summary>
     static class DeviceBuildCheck
     {
@@ -171,12 +171,19 @@ namespace SpatialLauncher.SpatialWindows.Editor
             Expect(PlayerSettings.GetArchitecture(ios) == 1, "target architecture is ARM64", false);
 
             if (System.Version.TryParse(PlayerSettings.iOS.targetOSVersionString, out var minimum))
-            {
-                Expect(minimum >= new System.Version(15, 0),
-                    $"minimum iOS version {minimum} is 15.0 or later (AR Foundation 6 / ARKit)", false);
-                if (minimum < new System.Version(18, 0))
-                    Debug.Log($"[DeviceCheck] INFO: minimum iOS is {minimum}; HoloKit hand tracking needs iOS 18 and LiDAR, so check at runtime before using it.");
-            }
+                Expect(minimum >= DeviceSettings.MinimumIos,
+                    $"minimum iOS version {minimum} is {DeviceSettings.MinimumIos} or later (HoloKit hand tracking, the device's input)", false);
+
+            Expect(PlayerSettings.defaultInterfaceOrientation == UIOrientation.LandscapeLeft,
+                $"default orientation is Landscape Left, as the phone sits in the viewer ({PlayerSettings.defaultInterfaceOrientation})", false);
+            Expect(PlayerSettings.insecureHttpOption == InsecureHttpOption.AlwaysAllowed,
+                $"HTTP is allowed: WHEP to the laptop agent is plain HTTP on the local network ({PlayerSettings.insecureHttpOption})");
+            Expect(PlayerSettings.iOS.requiresPersistentWiFi, "Requires Persistent WiFi is on (streams from the laptop)", false);
+
+            bool define = PlayerSettings.GetScriptingDefineSymbols(ios).Split(';').Contains("SPATIAL_LAUNCHER_WEBRTC");
+            bool webRtcPackage = System.Type.GetType("Unity.WebRTC.WebRTC, Unity.WebRTC") != null;
+            Expect(define && webRtcPackage, $"WebRTC streaming is compiled in for iOS (define {(define ? "set" : "missing")}, " +
+                                            $"com.unity.webrtc {(webRtcPackage ? "installed" : "missing")})");
 
             Expect(string.IsNullOrEmpty(PlayerSettings.iOS.appleDeveloperTeamID) == false,
                 "Apple Developer Team ID is set for automatic signing (otherwise set it in Xcode)", false);
@@ -292,7 +299,25 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 {
                     var so = new SerializedObject(hands);
                     Expect(so.FindProperty("head").objectReferenceValue != null, "HandWindowInput.head is assigned");
+                    var source = so.FindProperty("handSource").objectReferenceValue as HoloKitHandSource;
+                    Expect(source != null, "HandWindowInput takes its hands from HoloKitHandSource");
+                    if (source != null)
+                    {
+                        var sourceSettings = new SerializedObject(source);
+                        Expect(sourceSettings.FindProperty("handTracking").objectReferenceValue != null &&
+                               sourceSettings.FindProperty("head").objectReferenceValue != null,
+                            "HoloKitHandSource has its HandTrackingManager and head assigned");
+                    }
                 }
+                var eventSystems = Find<UnityEngine.EventSystems.EventSystem>();
+                Expect(Find<HoloKit.UI.HoloKitDefaultUICanvas>().Length == 1 && eventSystems.Length == 1 &&
+                       eventSystems[0].GetComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>() != null,
+                    "a Mono/Stereo button gets into stereo (HoloKit Default UI Canvas, EventSystem on the Input System); HoloKit starts in mono");
+                Expect(cameraManagers.Length == 1 && cameraManagers[0].GetComponent<AROcclusionManager>() != null,
+                    "the AR camera has an AROcclusionManager (LiDAR depth for HoloKit's 3D hand joints)");
+#if UNITY_IOS
+                Expect(Find<HoloKit.iOS.HandTrackingManager>().Length == 1, "scene has HoloKit's HandTrackingManager");
+#endif
 
                 var launchers = Find<LauncherWindow>();
                 Expect(launchers.Length == 1, "scene has one LauncherWindow");
@@ -302,6 +327,9 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     Expect(so.FindProperty("sampleImage").objectReferenceValue != null || so.FindProperty("sampleSprite").objectReferenceValue != null,
                         "LauncherWindow has a sample image");
                     Expect(so.FindProperty("sampleVideo").objectReferenceValue != null, "LauncherWindow has a sample video clip");
+                    Expect(so.FindProperty("laptopStreaming").enumValueIndex == (int)LauncherWindow.LaptopStreaming.WebRtc &&
+                           so.FindProperty("connectionSettings").objectReferenceValue != null,
+                        "LauncherWindow streams laptop windows over WebRTC and has its connection settings");
                 }
 
                 bool hasInput = managers.Length == 1 && managers[0].GetComponents<MonoBehaviour>().Any(c => c is IWindowInput);

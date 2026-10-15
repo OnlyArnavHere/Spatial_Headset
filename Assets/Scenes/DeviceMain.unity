@@ -508,6 +508,7 @@ GameObject:
   - component: {fileID: 1086100949}
   - component: {fileID: 1086100948}
   - component: {fileID: 1086100947}
+  - component: {fileID: 1086100953}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -750,6 +751,23 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
+--- !u!114 &1086100953
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1086100945}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b15f82cc229284894964d2d30806969d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.XR.ARFoundation::UnityEngine.XR.ARFoundation.AROcclusionManager
+  m_HumanSegmentationStencilMode: 0
+  m_HumanSegmentationDepthMode: 0
+  m_EnvironmentDepthMode: 1
+  m_EnvironmentDepthTemporalSmoothing: 1
+  m_OcclusionPreferenceMode: 2
 --- !u!1 &1132168297
 GameObject:
   m_ObjectHideFlags: 0
@@ -796,6 +814,7 @@ GameObject:
   - component: {fileID: 1133192947}
   - component: {fileID: 1133192946}
   - component: {fileID: 1133192945}
+  - component: {fileID: 1133192949}
   m_Layer: 0
   m_Name: Spatial Windows
   m_TagString: Untagged
@@ -820,6 +839,10 @@ MonoBehaviour:
   sampleSprite: {fileID: 0}
   sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
   sampleVideoUrl: 
+  laptopStreaming: 1
+  connectionSettings: {fileID: 11400000, guid: 6ea254d4367a7b34db54d7bc4100e6ab, type: 2}
+  remoteInputSink: {fileID: 0}
+  laptopResolution: {x: 1920, y: 1080}
   openOnStart: 1
   openKey: 22
   launcherSize: {x: 0.5, y: 0.3}
@@ -836,7 +859,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2e0db5da22ce5d34f80147be0fe91613, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  handSource: {fileID: 0}
+  handSource: {fileID: 1133192949}
   head: {fileID: 1086100946}
   raycastMask:
     serializedVersion: 2
@@ -897,6 +920,20 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1133192949
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1133192944}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 63008c87a4d7d074898262ffa43144af, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpatialLauncher.SpatialWindows.HoloKitHandSource
+  handTracking: {fileID: 1430564197}
+  head: {fileID: 1086100946}
 --- !u!1 &1418692277
 GameObject:
   m_ObjectHideFlags: 0
@@ -922,14 +959,14 @@ Light:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1418692277}
   m_Enabled: 1
-  serializedVersion: 11
+  serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 0.95686275, b: 0.8392157, a: 1}
   m_Intensity: 1
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
-  m_CookieSize: 10
+  m_CookieSize2D: {x: 10, y: 10}
   m_Shadows:
     m_Type: 2
     m_Resolution: -1
@@ -994,6 +1031,58 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 50, y: -30, z: 0}
+--- !u!1 &1430564196
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1430564198}
+  - component: {fileID: 1430564197}
+  m_Layer: 0
+  m_Name: Hand Tracking
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1430564197
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1430564196}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8c58731793f77423786ac8bbbdaa62ba, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: HoloKit::HoloKit.iOS.HandTrackingManager
+  m_MaxHandCount: 1
+  m_HandJointsVisibility: 0
+  m_FrameInterval: 3
+  m_SmoothJoints: 1
+  m_Smoothing:
+    MinimumCutoff: 1.5
+    Beta: 4
+    DerivativeCutoff: 1
+--- !u!4 &1430564198
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1430564196}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &1633452541
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -1210,7 +1299,7 @@ MonoBehaviour:
   m_StereoTriggerLabel: TRIGGER
   m_StereoTriggerPressedLabel: TRIGGERED
   m_ShowStereoBarTouchAreas: 0
-  m_SupportedMonoScreenOrientations: 9
+  m_SupportedMonoScreenOrientations: 8
   m_StereoFrameRate: 0
   m_AdaptStereoFrameRateToThermalState: 1
   m_HoloKitGeneration: 0
@@ -1310,3 +1399,4 @@ SceneRoots:
   - {fileID: 1633452541}
   - {fileID: 412739738}
   - {fileID: 1133192948}
+  - {fileID: 1430564198}

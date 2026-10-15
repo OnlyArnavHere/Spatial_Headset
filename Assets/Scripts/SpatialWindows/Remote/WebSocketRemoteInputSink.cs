@@ -11,9 +11,12 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// Sends pointer input to the laptop agent's input server (Tools/LaptopAgent) over a WebSocket, authenticated with
-    /// the pairing token, and measures the round-trip time with a ping every second. From the same pings it estimates
-    /// the laptop's clock (<see cref="LaptopNow"/>), so the Laptop window can show it next to the streamed test clock.
+    /// The connection to the laptop agent's control server (Tools/LaptopAgent) over a WebSocket, authenticated with
+    /// the pairing token. It can ask for the list of windows the laptop can stream (<see cref="RequestTargets"/>);
+    /// connected with a target id, it opens that stream (<see cref="StreamPath"/> says where to watch it) and sends the
+    /// window's pointer input to it, so each streamed window has its own link. It measures the round-trip time with a
+    /// ping every second and from the same pings estimates the laptop's clock (<see cref="LaptopNow"/>), so the window
+    /// can show it next to the streamed test clock.
     ///
     /// Moves are coalesced to at most one per <see cref="MoveInterval"/>; presses, releases and scrolls are sent at once
     /// (after any pending move, so the order is kept). Socket work runs on background tasks; state, events and sending
@@ -23,6 +26,7 @@ namespace SpatialLauncher.SpatialWindows
     {
         public enum State { Disconnected, Connecting, Connected, Rejected, Retrying }
 
+        const int ProtocolVersion = 2;
         const float MoveInterval = 1f / 60f;
         const float PingInterval = 1f;
         const int ConnectTimeoutMs = 5000;
@@ -39,14 +43,26 @@ namespace SpatialLauncher.SpatialWindows
         public double? BestRoundTripMs { get; private set; }
         /// <summary>The laptop's clock now, estimated from the ping with the lowest round-trip time; null until known.</summary>
         public DateTime? LaptopNow => clockOffsetMs.HasValue ? DateTime.UtcNow.AddMilliseconds(clockOffsetMs.Value) : (DateTime?)null;
-        /// <summary>What the agent said it streams (from its welcome message), e.g. "window 'Notepad'".</summary>
+        /// <summary>The target this link opens after connecting, or null for a list-only link (the picker).</summary>
+        public string TargetId { get; private set; }
+        /// <summary>The stream path the agent opened for <see cref="TargetId"/>; null until it answers.</summary>
+        public string StreamPath { get; private set; }
+        /// <summary>What the agent streams for this link, e.g. "window 'Notepad'".</summary>
         public string TargetDescription { get; private set; } = "";
+        /// <summary>False when the agent runs without --input: the stream can be watched but not clicked.</summary>
+        public bool InputAllowed { get; private set; }
         public bool AgentDryRun { get; private set; }
+        /// <summary>The last window list from <see cref="RequestTargets"/>: the whole desktop first, then the windows.</summary>
+        public IReadOnlyList<LaptopTarget> Targets { get; private set; } = Array.Empty<LaptopTarget>();
         /// <summary>The last dry-run acknowledgement: (screen x, screen y) the agent mapped an event to.</summary>
         public Vector2Int? LastAck { get; private set; }
+        /// <summary>The stream path of the last acknowledged event: the window the agent routed it to.</summary>
+        public string LastAckPath { get; private set; }
         public int AckCount { get; private set; }
 
         public event Action StatusChanged;
+        /// <summary>A new window list arrived (<see cref="Targets"/>).</summary>
+        public event Action TargetsReceived;
 
         readonly ConcurrentQueue<string> inbox = new ConcurrentQueue<string>();
         readonly ConcurrentQueue<string> outbox = new ConcurrentQueue<string>();
@@ -65,15 +81,24 @@ namespace SpatialLauncher.SpatialWindows
         int pingId;
         double? clockOffsetMs;
 
-        public void Connect(string laptopHost, int inputPort, string pairingToken)
+        /// <param name="streamTarget">The target to open (from the agent's list); null to only list windows.</param>
+        public void Connect(string laptopHost, int inputPort, string pairingToken, string streamTarget = null)
         {
             Disconnect();
             host = laptopHost;
             port = inputPort;
             token = pairingToken;
+            TargetId = streamTarget;
+            StreamPath = null;
             wanted = true;
             retryDelay = 1f;
             Open();
+        }
+
+        /// <summary>Asks the agent which windows it can stream; <see cref="TargetsReceived"/> fires with the answer.</summary>
+        public void RequestTargets()
+        {
+            if (IsConnected) Send("{\"type\":\"list\"}");
         }
 
         public void Disconnect()
@@ -151,21 +176,34 @@ namespace SpatialLauncher.SpatialWindows
             switch (message.type)
             {
                 case "welcome":
+                    if (message.version < ProtocolVersion)
+                    {
+                        Stop("The laptop agent is out of date: update Tools/LaptopAgent");
+                        break;
+                    }
                     retryDelay = 1f;
                     AgentDryRun = message.dry_run;
-                    TargetDescription = message.target != null ? message.target.description : "";
+                    InputAllowed = message.input;
                     nextPing = 0f;
-                    SetState(State.Connected, AgentDryRun ? "Connected (agent in dry-run mode)" : "Connected");
+                    if (TargetId != null) Send($"{{\"type\":\"open\",\"target\":\"{Escape(TargetId)}\"}}");
+                    SetState(State.Connected, !InputAllowed ? "Connected (view only: agent started without --input)"
+                        : AgentDryRun ? "Connected (agent in dry-run mode)" : "Connected");
+                    break;
+                case "opened":
+                    StreamPath = message.path;
+                    TargetDescription = message.target != null ? message.target.description : "";
+                    StatusChanged?.Invoke();
+                    break;
+                case "targets":
+                    Targets = message.targets ?? Array.Empty<LaptopTarget>();
+                    TargetsReceived?.Invoke();
                     break;
                 case "error":
-                    if (message.reason == "bad token")
-                    {
-                        // Don't retry: the agent locks a device out after a few wrong tokens.
-                        wanted = false;
-                        Close();
-                        SetState(State.Rejected, "Wrong token (the agent prints a new one every run)");
-                    }
-                    else if (message.reason == "busy") socketError = "Another headset is in control";
+                    // Don't retry a wrong token: the agent locks a device out after a few wrong tokens.
+                    if (message.reason == "bad token") Stop("Wrong token (the agent prints a new one every run)");
+                    else if (message.reason == "gone") Stop("That window is no longer open on the laptop");
+                    else if (message.reason == "minimized") Stop("That window is minimized on the laptop: restore it, then connect");
+                    else if (message.reason == "busy") socketError = "Another headset is connected to the laptop";
                     else socketError = $"Refused: {message.reason}";
                     break;
                 case "pong":
@@ -173,9 +211,18 @@ namespace SpatialLauncher.SpatialWindows
                     break;
                 case "ack":
                     LastAck = new Vector2Int(Mathf.RoundToInt(message.x), Mathf.RoundToInt(message.y));
+                    LastAckPath = message.path;
                     AckCount++;
                     break;
             }
+        }
+
+        // Ends the connection for a reason retrying can't fix.
+        void Stop(string why)
+        {
+            wanted = false;
+            Close();
+            SetState(State.Rejected, why);
         }
 
         void OnPong(double sentMs, double agentMs)
@@ -329,7 +376,7 @@ namespace SpatialLauncher.SpatialWindows
         static string Describe(Exception error, Uri uri)
         {
             for (var e = error; e != null; e = e.InnerException)
-                if (e is System.Net.Sockets.SocketException) return $"Can't reach {uri.Host}:{uri.Port} (is the agent running with --input?)";
+                if (e is System.Net.Sockets.SocketException) return $"Can't reach {uri.Host}:{uri.Port} (is the agent running?)";
             return $"Input connection failed ({error.GetBaseException().Message})";
         }
 
@@ -343,11 +390,15 @@ namespace SpatialLauncher.SpatialWindows
         {
             public string type;
             public string reason;
+            public int version;
             public double t;
             public double agent_ms;
             public float x, y;
             public bool dry_run;
+            public bool input;
+            public string path;
             public AgentTarget target;
+            public LaptopTarget[] targets;
         }
 
         [Serializable]

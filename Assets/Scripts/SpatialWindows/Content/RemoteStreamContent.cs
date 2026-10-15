@@ -9,11 +9,12 @@ namespace SpatialLauncher.SpatialWindows
     /// placeholder while there is no picture. Pointer move, press, release and scroll on the screen go to the
     /// source's <see cref="IRemoteInputSink"/> in remote-screen coordinates.
     ///
-    /// <see cref="InitConnected"/> adds the real connection to the laptop agent (Tools/LaptopAgent): video over WebRTC
-    /// (<c>WebRtcStreamSource</c>), input over a WebSocket (<see cref="WebSocketRemoteInputSink"/>), and a connect
-    /// panel under the screen with host, port and token fields, a Connect button and a status line. The title bar shows
-    /// the input round-trip time; the status line shows the laptop's clock as estimated over the input link, to
-    /// compare with Tools/LaptopAgent/clock.py in the stream.
+    /// <see cref="InitConnected"/> adds the real connection to the laptop agent (Tools/LaptopAgent) for one target
+    /// picked in the Laptop picker (a window or the whole desktop): video over WebRTC (<c>WebRtcStreamSource</c>) from
+    /// the target's own stream path, input over its own WebSocket (<see cref="WebSocketRemoteInputSink"/>), so several
+    /// of these windows can show different laptop windows at once. A connect panel under the screen has host, port and
+    /// token fields, a Connect button and a status line. The title bar shows the input round-trip time; the status line
+    /// shows the laptop's clock as estimated over the input link, to compare with Tools/LaptopAgent/clock.py.
     /// </summary>
     public class RemoteStreamContent : WindowContent
     {
@@ -51,8 +52,12 @@ namespace SpatialLauncher.SpatialWindows
         public string StatusLine => statusLine != null ? statusLine.text : "";
         /// <summary>True between Connect and Disconnect (whether or not the connection has succeeded yet).</summary>
         public bool IsActive { get; private set; }
+        /// <summary>What this window streams from the laptop; null if it wasn't opened from the picker.</summary>
+        public LaptopTarget Target { get; private set; }
 
         RemoteConnectionSettings settings;
+        string connectedHost;
+        int connectedPort;
         TextMeshPro statusLabel, statusLine, connectLabel;
         Transform panel;
         readonly List<(WindowTextField field, TextMeshPro label)> fields = new List<(WindowTextField, TextMeshPro)>();
@@ -66,18 +71,23 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         /// <summary>
-        /// A screen connected to the laptop agent, with a connect panel. Values typed in the panel are remembered on
-        /// this device. <paramref name="inputOverride"/> replaces the WebSocket input (for debugging); usually null.
+        /// A screen connected to the laptop agent for <paramref name="target"/>, with a connect panel. Values typed in
+        /// the panel are remembered on this device. <paramref name="inputOverride"/> replaces the WebSocket input (for
+        /// debugging); usually null.
         /// </summary>
         public void InitConnected(SpatialWindow window, Material baseMaterial, RemoteConnectionSettings connectionSettings,
-            IRemoteInputSink inputOverride = null)
+            IRemoteInputSink inputOverride = null, LaptopTarget target = null)
         {
             Attach(window, baseMaterial);
             settings = connectionSettings;
-            var expected = settings != null ? settings.expectedResolution : new Vector2Int(1920, 1080);
+            Target = target;
+            var expected = target != null && target.width > 0 && target.height > 0
+                ? new Vector2Int(target.width, target.height)
+                : settings != null ? settings.expectedResolution : new Vector2Int(1920, 1080);
             Video = CreateVideo(expected);
             InputLink = new WebSocketRemoteInputSink();
             InputLink.StatusChanged += RefreshStatus;
+            InputLink.StatusChanged += FollowStreamPath;
             Build(new RemoteStreamSource(Video, inputOverride ?? InputLink, expected));
             BuildPanel();
             RefreshStatus();
@@ -153,6 +163,16 @@ namespace SpatialLauncher.SpatialWindows
             return field;
         }
 
+        /// <summary>Fills in the panel and connects (used when the picker opens this window).</summary>
+        public void ConnectWith(LaptopConnection connection)
+        {
+            if (InputLink == null || connection == null) return;
+            HostField.SetText(connection.Host);
+            PortField.SetText(connection.VideoPort.ToString());
+            TokenField.SetText(connection.Token);
+            Connect();
+        }
+
         /// <summary>Saves the panel's values and connects video and input. Shows what's missing instead if incomplete.</summary>
         public void Connect()
         {
@@ -160,6 +180,11 @@ namespace SpatialLauncher.SpatialWindows
             WindowTextField.BlurAll();
             string host = HostField.Text.Trim();
             string token = TokenField.Text.Trim();
+            if (Target == null)
+            {
+                statusLine.text = "Open laptop windows from the Laptop picker (the Laptop icon)";
+                return;
+            }
             if (host.Length == 0 || !int.TryParse(PortField.Text, out int port) || port <= 0 || port > 65535 || token.Length == 0)
             {
                 statusLine.text = "Enter the laptop's address, port and the token printed by agent.py";
@@ -168,16 +193,30 @@ namespace SpatialLauncher.SpatialWindows
 
             RemoteConnectionPrefs.Save(host, port, token);
             Disconnect();
-            string path = settings != null ? settings.streamPath : "laptop";
-            if (Video != null)
-            {
-                Video.Url = $"http://{host}:{port}/{path}/whep";
-                Video.Password = token;
-                Video.Start();
-            }
-            InputLink.Connect(host, settings != null ? settings.inputPort : 8765, token);
+            connectedHost = host;
+            connectedPort = port;
+            StartVideo(Target.path, token);
+            InputLink.Connect(host, settings != null ? settings.inputPort : 8765, token, Target.id);
             IsActive = true;
             RefreshStatus();
+        }
+
+        void StartVideo(string path, string token)
+        {
+            if (Video == null) return;
+            Video.Stop();
+            Video.Url = $"http://{connectedHost}:{connectedPort}/{path}/whep";
+            Video.Password = token;
+            Video.Start();
+        }
+
+        // The agent names stream paths when it lists windows; if it restarted since, the window may have a new path.
+        void FollowStreamPath()
+        {
+            string path = InputLink.StreamPath;
+            if (!IsActive || Video == null || string.IsNullOrEmpty(path) || Target == null || path == Target.path) return;
+            Target.path = path;
+            StartVideo(path, TokenField.Text.Trim());
         }
 
         public void Disconnect()
@@ -282,6 +321,7 @@ namespace SpatialLauncher.SpatialWindows
             if (InputLink != null)
             {
                 InputLink.StatusChanged -= RefreshStatus;
+                InputLink.StatusChanged -= FollowStreamPath;
                 InputLink.Dispose();
             }
             Video?.Stop();

@@ -77,7 +77,19 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             var blankWindow = opened[2];
             var laptopWindow = opened[3];
 
-            // Laptop: a remote screen that isn't connected yet, forwarding pointer input to a sink.
+            // Laptop: in WebRTC mode the icon opens the picker, whose entries open stream windows; check one of those
+            // (opened as the picker would, without connecting). In Placeholder mode the icon opens the screen itself.
+            var picker = laptopWindow != null ? laptopWindow.GetComponentInChildren<LaptopPickerContent>() : null;
+            if (picker != null)
+            {
+                Check(picker.HostField != null && picker.PortField != null && picker.TokenField != null && picker.ListButton != null
+                      && picker.TokenField.Masked, "the Laptop icon opens the picker: host, port, masked token fields and a List button");
+                Check(picker.EntryButtons.Count == 0 && !picker.MoreButton.gameObject.activeSelf, "the picker lists nothing before List");
+                var testTarget = new LaptopTarget { id = "window:1", path = "test-window", title = "Test window", kind = "window", width = 1280, height = 720 };
+                laptopWindow = launcherWindow.OpenLaptopStream(testTarget);
+                yield return Settle;
+                Check(laptopWindow != null && laptopWindow.Title == "Test window", "a picked target opens a stream window titled after it");
+            }
             var remote = laptopWindow != null ? laptopWindow.GetComponentInChildren<RemoteStreamContent>() : null;
             Check(remote != null, "Laptop window has RemoteStreamContent");
             if (remote != null)
