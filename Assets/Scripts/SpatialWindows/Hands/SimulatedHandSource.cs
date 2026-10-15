@@ -57,7 +57,7 @@ namespace SpatialLauncher.SpatialWindows
                 return;
             }
 
-            if (keyboard != null && keyboard[twoHandKey].wasPressedThisFrame)
+            if (keyboard != null && !WindowTextField.IsTyping && keyboard[twoHandKey].wasPressedThisFrame)
                 twoHanded = !twoHanded;
 
             float scroll = mouse.scroll.ReadValue().y;

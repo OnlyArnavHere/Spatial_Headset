@@ -47,7 +47,7 @@ namespace SpatialLauncher.SpatialWindows.Testing
         void Update()
         {
             var keyboard = Keyboard.current;
-            if (keyboard == null || manager == null) return;
+            if (keyboard == null || manager == null || WindowTextField.IsTyping) return;
 
             if (keyboard[spawnKey].wasPressedThisFrame)
                 SpawnTestWindow();

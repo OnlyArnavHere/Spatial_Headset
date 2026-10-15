@@ -197,6 +197,15 @@ namespace SpatialLauncher.SpatialWindows
             if (!worldLocked) CaptureHeadOffset();
         }
 
+        /// <summary>
+        /// Extra text shown after the title in the title bar, e.g. a latency readout ("Laptop · 12 ms").
+        /// <see cref="Title"/> itself doesn't change. Empty or null shows the title alone.
+        /// </summary>
+        public void SetTitleDetail(string detail)
+        {
+            titleText.text = string.IsNullOrEmpty(detail) ? Title : $"{Title} · {detail}";
+        }
+
         public void SetFocused(bool focused)
         {
             IsFocused = focused;

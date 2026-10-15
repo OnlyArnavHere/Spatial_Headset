@@ -90,6 +90,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
                 // Click a quarter in from the top-right through the mouse input's click path.
                 var sink = new RecordingSink();
+                var originalSink = remote.Source.Sink;
                 remote.Source.Sink = sink;
                 var surface = remote.Surface.transform;
                 manager.Focus(laptopWindow);
@@ -112,7 +113,38 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 Check(sink.Scrolls.Count == 1 && Mathf.Approximately(sink.Scrolls[0].z, -2f) && Near(sink.Scrolls[0], hoverExpected),
                     "scroll sends -2 notches at the hovered point");
 
-                remote.Source.Sink = null;
+                remote.Source.Sink = originalSink;
+
+                // Connected mode (WebRTC): the connect panel, and a failed connection that explains itself and retries.
+                if (remote.Video != null)
+                {
+                    Check(remote.HostField != null && remote.PortField != null && remote.TokenField != null && remote.ConnectButton != null,
+                        "the Laptop window has host, port and token fields and a Connect button");
+                    Check(remote.TokenField.Masked, "the token field is masked");
+
+                    string savedHost = RemoteConnectionPrefs.Host(null), savedToken = RemoteConnectionPrefs.Token();
+                    int savedPort = RemoteConnectionPrefs.VideoPort(null);
+                    remote.HostField.SetText("127.0.0.1");
+                    remote.PortField.SetText("1"); // nothing listens on port 1
+                    remote.TokenField.SetText("test-token");
+                    manager.Focus(laptopWindow);
+                    yield return Settle;
+                    Click(input, cam, remote.ConnectButton.transform.position);
+                    double deadline = EditorTestRunner.Now + 8.0;
+                    while (remote.Video.CurrentState != RemoteVideoState.Retrying && EditorTestRunner.Now < deadline)
+                        yield return 0.1f;
+                    Check(remote.IsActive && remote.Video.CurrentState == RemoteVideoState.Retrying &&
+                          remote.Video.StatusText.Contains("Can't reach"),
+                        $"connecting to a closed port explains itself and retries (\"{remote.Video.StatusText}\")");
+                    Check(remote.StatusLine.Contains("Video:") && remote.StatusLine.Contains("Input:"),
+                        $"the status line shows video and input state (\"{remote.StatusLine}\")");
+
+                    Click(input, cam, remote.ConnectButton.transform.position);
+                    yield return 0.2f;
+                    Check(!remote.IsActive && remote.Video.CurrentState == RemoteVideoState.Stopped && remote.StatusText == "Not connected",
+                        "Disconnect stops trying and shows \"Not connected\" again");
+                    RemoteConnectionPrefs.Save(savedHost, savedPort, savedToken);
+                }
             }
 
             // Display-only content keeps clicks on the window body (selecting it), so its surface has no collider.
