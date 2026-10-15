@@ -45,6 +45,7 @@ the whole EditMode run 10 seconds.
 
 - [ ] **T07** EditMode test assembly with smoke tests for existing pure logic
   - plan: [Workflow](plan.md#workflow-vs-code-plus-unity-mcp), "the fastest loop" paragraph · size: S · tag: unattended-ok · depends-on: none
+  - first: First add ONE trivial test and confirm the Unity Test Runner/MCP lists it. If tests in the default Editor assembly aren't discovered, STOP (needs_human); do not create asmdefs.
   - accept:
     1. Unity Test Runner lists at least 5 EditMode tests in `Assets/Tests/Editor/` (our scripts have no asmdef, so the tests can't live in their own test assembly).
     2. They cover `RayFilter` and `HoloKitHandSource.FromJoints`, all pass, and the run finishes in under 10 s without entering Play mode.
