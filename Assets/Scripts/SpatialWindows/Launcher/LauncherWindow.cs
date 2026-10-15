@@ -8,6 +8,7 @@ namespace SpatialLauncher.SpatialWindows
     /// Opens the home panel: a launcher window whose icons open an Image window, a Video window, a blank window or the
     /// Laptop picker, which lists the laptop's windows (and the whole desktop) streamed by Tools/LaptopAgent and opens
     /// a stream window for each one picked. In Placeholder mode the Laptop icon opens a single "Not connected" screen.
+    /// A stream window's Keys button opens the virtual keyboard (<see cref="OpenKeyboard"/>, <see cref="RemoteKeyboard"/>).
     /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
@@ -18,6 +19,8 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color LaptopIconColor = new Color(0.30f, 0.42f, 0.70f);
 
         [SerializeField] WindowManager manager;
+        [Tooltip("Keyboard input for laptop windows. Added to this GameObject at start if not set.")]
+        [SerializeField] RemoteKeyboard keyboard;
 
         [Header("Sample content")]
         [SerializeField] Texture2D sampleImage;
@@ -50,10 +53,13 @@ namespace SpatialLauncher.SpatialWindows
 
         public SpatialWindow Launcher { get; private set; }
         public LauncherContent LauncherContent { get; private set; }
+        public RemoteKeyboard KeyboardInput => keyboard;
 
         void Awake()
         {
             if (manager == null) manager = GetComponent<WindowManager>();
+            if (keyboard == null && !TryGetComponent(out keyboard)) keyboard = gameObject.AddComponent<RemoteKeyboard>();
+            keyboard.Manager = manager;
         }
 
         void Start()
@@ -64,7 +70,7 @@ namespace SpatialLauncher.SpatialWindows
         void Update()
         {
             var keyboard = Keyboard.current;
-            if (keyboard != null && !WindowTextField.IsTyping && keyboard[openKey].wasPressedThisFrame)
+            if (keyboard != null && !KeyboardShortcuts.Blocked && keyboard[openKey].wasPressedThisFrame)
                 OpenLauncher();
         }
 
@@ -170,9 +176,13 @@ namespace SpatialLauncher.SpatialWindows
 
             var content = new GameObject().AddComponent<RemoteStreamContent>();
             content.InitConnected(window, manager.WindowMaterial, connectionSettings, InputOverride(), target);
+            content.KeyboardRequested += () => OpenKeyboard();
             if (connection != null) content.ConnectWith(connection);
             return window;
         }
+
+        /// <summary>Opens the virtual keyboard, which types into the front-most laptop window.</summary>
+        public SpatialWindow OpenKeyboard() => keyboard.Open();
 
         IRemoteInputSink InputOverride()
         {

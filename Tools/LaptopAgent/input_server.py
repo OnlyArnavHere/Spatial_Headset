@@ -1,9 +1,10 @@
 """WebSocket server the headset talks to: it lists what can be streamed, starts streams, and turns normalized pointer
-events into mouse input on this laptop (only when the agent runs with --input).
+events into mouse input on this laptop (only when the agent runs with --input) and key events into keyboard input
+(only with --input --keyboard).
 
-Protocol (JSON text messages), version 2:
+Protocol (JSON text messages), version 3:
   client -> agent  {"type": "hello", "token": "<pairing token>"}           must be the first message
-  agent  -> client {"type": "welcome", "version": 2, "input": bool, "dry_run": bool}
+  agent  -> client {"type": "welcome", "version": 3, "input": bool, "keyboard": bool, "dry_run": bool}
                    or {"type": "error", "reason": "bad token"|"busy"|...} then close
   client -> agent  {"type": "list"}
   agent  -> client {"type": "targets", "targets": [{"id", "path", "title", "kind", "description", "width", "height"}]}
@@ -14,9 +15,19 @@ Protocol (JSON text messages), version 2:
                    {"type": "error", "reason": "gone"} also arrives later if the window closes while streamed
   client -> agent  {"type": "move"|"down"|"up", "x": 0..1, "y": 0..1, "button": "left"|"right"}
                    {"type": "scroll", "x": 0..1, "y": 0..1, "delta": notches (positive = up)}
+                   {"type": "key", "code": "<name from keys.KEY_CODES>", "down": bool}
+                   {"type": "text", "text": "<up to 64 printable characters>"}
                    {"type": "ping", "id": n, "t": client_ms}
   agent  -> client {"type": "pong", "id": n, "t": client_ms, "agent_ms": unix_ms}
                    {"type": "ack", "event", "x", "y", "button", "path"} after each down/up/scroll in dry-run mode
+                   {"type": "ack", "event": "key", "code", "down", "path"} / {"type": "ack", "event": "text", "text",
+                   "path"} after each injected key or text in dry-run mode
+                   {"type": "throttled"} when key or text events were dropped by the rate limit (at most once a second)
+                   {"type": "input_stopped", "reason"} when the kill switch (Ctrl+Alt+Shift+Q on the laptop) turned
+                   all input off for the rest of the run; the connection stays open for video
+
+Keyboard input goes to the window the connection opened: the agent brings it to the foreground first and drops the key
+if it can't (so keys never land in another window). For the whole desktop it goes to whatever window is in front.
 
 Each connection opens at most one stream; a headset with several windows open uses one connection per window, so
 every window's input goes to its own target. Only one headset (one address) may be connected at a time.
@@ -34,17 +45,19 @@ from typing import Callable
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+import keys
 import winapi
 from streams import Stream, StreamManager, Target
 
 log = logging.getLogger("input")
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 HELLO_TIMEOUT_S = 5.0
 # A held button with no message for this long is released: the link may be dead before TCP notices.
 IDLE_RELEASE_S = 3.0
 MAX_FAILED_ATTEMPTS = 5
 FAILED_ATTEMPT_DELAY_S = 2.0
+THROTTLE_NOTICE_INTERVAL_S = 1.0
 
 
 def is_local_network(host: str) -> bool:
@@ -60,12 +73,17 @@ def is_local_network(host: str) -> bool:
 
 @dataclass(eq=False)
 class Session:
-    """One headset connection: the stream it opened and the buttons it holds down."""
+    """One headset connection: the stream it opened and the buttons and keys it holds down."""
     connection: ServerConnection
     peer: str
+    # Set only after the pairing token checked out; nothing reaches the keyboard without it.
+    paired: bool = False
     stream: Stream | None = None
     held: set = field(default_factory=set)
+    held_keys: dict = field(default_factory=dict)  # code -> keys.KeyEvent of the press
+    limiter: keys.RateLimiter = field(default_factory=keys.RateLimiter)
     last_message: float = field(default_factory=time.monotonic)
+    last_throttle_notice: float = 0.0
 
 
 @dataclass
@@ -75,7 +93,9 @@ class InputServer:
     host: str = "0.0.0.0"
     port: int = 8765
     input_enabled: bool = False
+    keyboard_enabled: bool = False
     dry_run: bool = False
+    input_stopped: bool = False
     _sessions: list = field(default_factory=list)
     _failed: dict = field(default_factory=dict)
 
@@ -83,9 +103,17 @@ class InputServer:
         self.streams.on_ended = self._stream_ended
         async with serve(self._handle, self.host, self.port, ping_interval=2, ping_timeout=4,
                          max_size=65536, max_queue=64) as server:
-            mode = ("DRY RUN: logging, not injecting" if self.dry_run else "injecting mouse input") \
-                if self.input_enabled else "view only: no mouse input"
+            what = "mouse and keyboard input" if self.keyboard_enabled else "mouse input"
+            mode = (f"DRY RUN: logging {what}, not injecting" if self.dry_run else f"injecting {what}") \
+                if self.input_enabled else "view only: no input"
             log.info("Control server listening on %s:%d (%s)", self.host, self.port, mode)
+            if self.input_enabled:
+                loop = asyncio.get_running_loop()
+                if winapi.watch_kill_switch(lambda: loop.call_soon_threadsafe(self.stop_input, "kill switch pressed")):
+                    log.info("Kill switch: press %s on this laptop to stop all input at once", winapi.KILL_SWITCH)
+                else:
+                    log.warning("Kill switch %s is taken by another program; stop the agent with Ctrl+C instead",
+                                winapi.KILL_SWITCH)
             watchdog = asyncio.create_task(self._release_when_idle())
             try:
                 await server.serve_forever()
@@ -113,12 +141,13 @@ class InputServer:
             await connection.close(code=1013, reason="busy")
             return
 
-        session = Session(connection, peer)
+        session = Session(connection, peer, paired=True)
         self._sessions.append(session)
         log.info("Headset %s connected (%d connection%s)", peer, len(self._sessions), "" if len(self._sessions) == 1 else "s")
         try:
             await self._send(connection, {"type": "welcome", "version": PROTOCOL_VERSION,
-                                          "input": self.input_enabled, "dry_run": self.dry_run})
+                                          "input": self.input_enabled, "dry_run": self.dry_run,
+                                          "keyboard": self.input_enabled and self.keyboard_enabled})
             async for raw in connection:
                 session.last_message = time.monotonic()
                 await self._dispatch(session, raw)
@@ -169,6 +198,9 @@ class InputServer:
         if kind == "open":
             await self._open(session, str(message.get("target", "")))
             return
+        if kind in ("key", "text"):
+            await self._keyboard(session, kind, message)
+            return
         if kind not in ("move", "down", "up", "scroll") or not self.input_enabled or session.stream is None:
             return
 
@@ -202,6 +234,79 @@ class InputServer:
         if self.dry_run and kind != "move":
             await self._send(connection, {"type": "ack", "event": kind, "x": x, "y": y, "button": button,
                                           "path": session.stream.path})
+
+    async def _keyboard(self, session: Session, kind: str, message: dict) -> None:
+        if not session.paired:
+            log.warning("Dropped a %s event from %s: not paired", kind, session.peer)
+            return
+        if not (self.input_enabled and self.keyboard_enabled) or session.stream is None:
+            return
+        target = session.stream.target
+        path = session.stream.path
+
+        if kind == "key":
+            event = keys.parse_key(message)
+            if event is None:
+                return
+            if not event.down:
+                # A release always goes through (never rate-limited), but only for a key this connection pressed.
+                press = session.held_keys.pop(event.code, None)
+                if press is not None:
+                    self._inject(lambda: winapi.key(press.vk, False, press.extended), f"key {event.code} up in /{path}")
+                    await self._ack(session, {"event": "key", "code": event.code, "down": False})
+                return
+            if event.code in session.held_keys or len(session.held_keys) >= keys.MAX_HELD_KEYS:
+                return
+            if not await self._within_rate(session, 1) or not self._focus(target):
+                return
+            if self._inject(lambda: winapi.key(event.vk, True, event.extended), f"key {event.code} down in /{path}"):
+                session.held_keys[event.code] = event
+                await self._ack(session, {"event": "key", "code": event.code, "down": True})
+            return
+
+        text = keys.parse_text(message)
+        if text is None or not await self._within_rate(session, len(text)) or not self._focus(target):
+            return
+        if self._inject(lambda: winapi.type_text(text), f"text, {len(text)} character(s), in /{path}"):
+            await self._ack(session, {"event": "text", "text": text})
+
+    async def _within_rate(self, session: Session, cost: int) -> bool:
+        if session.limiter.allow(cost):
+            return True
+        now = time.monotonic()
+        if now - session.last_throttle_notice >= THROTTLE_NOTICE_INTERVAL_S:
+            session.last_throttle_notice = now
+            log.warning("Dropping key events from %s: more than %g a second", session.peer, session.limiter.rate)
+            await self._send_quietly(session.connection, {"type": "throttled"})
+        return False
+
+    def _focus(self, target: Target) -> bool:
+        """Keyboard input goes to the foreground window: make that the streamed window, or drop the key.
+        (Dry runs change nothing on screen.)"""
+        if not target.usable():
+            return False  # window closed or minimized: drop the key rather than type into whatever is in front
+        if self.dry_run or target.kind != "window" or winapi.focus_window(target.handle):
+            return True
+        log.warning("Dropped a key: couldn't bring %s to the front", target.description)
+        return False
+
+    async def _ack(self, session: Session, fields: dict) -> None:
+        if self.dry_run and session.stream is not None:
+            await self._send_quietly(session.connection, {"type": "ack", **fields, "path": session.stream.path})
+
+    def stop_input(self, why: str) -> None:
+        """The kill switch: no more mouse or keyboard input for the rest of this run. Held buttons and keys are
+        released and every headset is told; video keeps streaming. Restart the agent to allow input again."""
+        if self.input_stopped:
+            return
+        self.input_stopped = True
+        self.input_enabled = False
+        self.keyboard_enabled = False
+        log.warning("INPUT STOPPED (%s): the headset can no longer move the mouse or type. Restart the agent to allow it.", why)
+        for session in self._sessions:
+            self._release_all(session, why)
+            asyncio.get_running_loop().create_task(
+                self._send_quietly(session.connection, {"type": "input_stopped", "reason": why}))
 
     async def _open(self, session: Session, target_id: str) -> None:
         try:
@@ -266,20 +371,24 @@ class InputServer:
             return False
 
     def _release_all(self, session: Session, why: str) -> None:
-        if not session.held:
+        if not session.held and not session.held_keys:
             return
-        log.info("Releasing held buttons (%s)", why)
-        rect = session.stream.target.rect() if session.stream else None
-        x, y = (rect.left + rect.width // 2, rect.top + rect.height // 2) if rect else (0, 0)
-        for button in list(session.held):
-            self._inject(lambda b=button: winapi.mouse_button(x, y, b, False), f"{button} up (release)")
-        session.held.clear()
+        log.info("Releasing held buttons and keys (%s)", why)
+        if session.held:
+            rect = session.stream.target.rect() if session.stream else None
+            x, y = (rect.left + rect.width // 2, rect.top + rect.height // 2) if rect else (0, 0)
+            for button in list(session.held):
+                self._inject(lambda b=button: winapi.mouse_button(x, y, b, False), f"{button} up (release)")
+            session.held.clear()
+        for press in list(session.held_keys.values()):
+            self._inject(lambda p=press: winapi.key(p.vk, False, p.extended), f"key {press.code} up (release)")
+        session.held_keys.clear()
 
     async def _release_when_idle(self) -> None:
         while True:
             await asyncio.sleep(0.5)
             for session in self._sessions:
-                if session.held and time.monotonic() - session.last_message > IDLE_RELEASE_S:
+                if (session.held or session.held_keys) and time.monotonic() - session.last_message > IDLE_RELEASE_S:
                     self._release_all(session, f"no input for {IDLE_RELEASE_S:g} s")
 
     @staticmethod

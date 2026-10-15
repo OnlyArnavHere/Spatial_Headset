@@ -285,9 +285,14 @@ class _MOUSEINPUT(ctypes.Structure):
                 ("time", wt.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
 
 
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD), ("time", wt.DWORD),
+                ("dwExtraInfo", ctypes.c_size_t)]
+
+
 class _INPUTUNION(ctypes.Union):
-    # The union must be as large as its largest member (KEYBDINPUT/HARDWAREINPUT are smaller than MOUSEINPUT).
-    _fields_ = [("mi", _MOUSEINPUT)]
+    # The union must be as large as its largest member (MOUSEINPUT; HARDWAREINPUT is smaller and unused).
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
 
 
 class _INPUT(ctypes.Structure):
@@ -324,3 +329,98 @@ def mouse_button(x: int, y: int, button: str, down: bool) -> None:
 
 def mouse_wheel(x: int, y: int, notches: float) -> None:
     _send(_MOUSEEVENTF_WHEEL, x, y, int(round(notches * _WHEEL_DELTA)))
+
+
+# --- Keyboard injection ----------------------------------------------------------------------
+
+_INPUT_KEYBOARD = 1
+_KEYEVENTF_EXTENDEDKEY = 0x0001
+_KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_UNICODE = 0x0004
+_MAPVK_VK_TO_VSC = 0
+
+
+def _send_keys(events: list[_KEYBDINPUT]) -> None:
+    array = (_INPUT * len(events))(*(_INPUT(_INPUT_KEYBOARD, _INPUTUNION(ki=e)) for e in events))
+    if user32.SendInput(len(events), array, ctypes.sizeof(_INPUT)) != len(events):
+        raise OSError(ctypes.get_last_error(), "SendInput failed (blocked by UIPI? a higher-privilege window may have focus)")
+
+
+def key(vk: int, down: bool, extended: bool = False) -> None:
+    """Presses or releases one key, by virtual-key code, in the foreground window."""
+    flags = (_KEYEVENTF_EXTENDEDKEY if extended else 0) | (0 if down else _KEYEVENTF_KEYUP)
+    scan = user32.MapVirtualKeyW(vk, _MAPVK_VK_TO_VSC)
+    _send_keys([_KEYBDINPUT(vk, scan, flags, 0, 0)])
+
+
+def type_text(text: str) -> None:
+    """Types text in the foreground window as Unicode characters, whatever the keyboard layout (no virtual keys, so
+    modifier keys held at the time don't change what's typed)."""
+    units = text.encode("utf-16-le")
+    events = []
+    for i in range(0, len(units), 2):
+        unit = int.from_bytes(units[i:i + 2], "little")
+        events.append(_KEYBDINPUT(0, unit, _KEYEVENTF_UNICODE, 0, 0))
+        events.append(_KEYBDINPUT(0, unit, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP, 0, 0))
+    if events:
+        _send_keys(events)
+
+
+user32.GetForegroundWindow.restype = wt.HWND
+user32.GetWindowThreadProcessId.restype = wt.DWORD
+kernel32.GetCurrentThreadId.restype = wt.DWORD
+
+
+def foreground_window() -> int:
+    return int(user32.GetForegroundWindow() or 0)
+
+
+def focus_window(handle: int) -> bool:
+    """Makes the window the foreground window (keyboard input goes there) and says whether it is. Windows only lets the
+    foreground app hand the foreground over, so this joins the foreground window's input queue for the call."""
+    if foreground_window() == handle:
+        return True
+    hwnd = wt.HWND(handle)
+    if user32.IsIconic(hwnd):
+        return False
+    current = user32.GetForegroundWindow()
+    theirs = user32.GetWindowThreadProcessId(current, None) if current else 0
+    ours = kernel32.GetCurrentThreadId()
+    attached = bool(theirs) and theirs != ours and bool(user32.AttachThreadInput(ours, theirs, True))
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(ours, theirs, False)
+    return foreground_window() == handle
+
+
+# --- Kill-switch hotkey ----------------------------------------------------------------------
+
+_MOD_ALT, _MOD_CONTROL, _MOD_SHIFT, _MOD_NOREPEAT = 0x0001, 0x0002, 0x0004, 0x4000
+_VK_Q = 0x51
+_WM_HOTKEY = 0x0312
+KILL_SWITCH = "Ctrl+Alt+Shift+Q"
+
+
+def watch_kill_switch(on_pressed) -> bool:
+    """Registers Ctrl+Alt+Shift+Q as a system-wide hotkey on a background thread and calls on_pressed (on that thread)
+    each time it's pressed, whichever window has focus. Returns False if another program already owns the hotkey."""
+    import threading
+    registered = threading.Event()
+    result = {"ok": False}
+
+    def run():
+        result["ok"] = bool(user32.RegisterHotKey(None, 1, _MOD_CONTROL | _MOD_ALT | _MOD_SHIFT | _MOD_NOREPEAT, _VK_Q))
+        registered.set()
+        if not result["ok"]:
+            return
+        msg = wt.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == _WM_HOTKEY:
+                on_pressed()
+
+    threading.Thread(target=run, name="kill-switch", daemon=True).start()
+    registered.wait(2.0)
+    return result["ok"]

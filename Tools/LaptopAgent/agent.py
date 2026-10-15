@@ -3,6 +3,7 @@
   python agent.py --list                          show monitors and windows
   python agent.py                                 let the headset pick what to stream (Laptop icon), view only
   python agent.py --input                         ...and let it move and click the mouse in the streamed windows
+  python agent.py --input --keyboard              ...and type into them (Ctrl+Alt+Shift+Q stops all input)
   python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
 
 Run `python agent.py --help` for every option. See README.md, especially the risks section, before using --input.
@@ -71,8 +72,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input", action="store_true",
                    help="let the paired headset move and click the mouse in the windows it streams")
     p.add_argument("--input-port", type=int, default=8765, help="control and input WebSocket port (default 8765)")
+    p.add_argument("--keyboard", action="store_true",
+                   help="with --input: also let the headset type into the windows it streams (unencrypted: no passwords)")
     p.add_argument("--dry-run-input", action="store_true",
-                   help="with --input: log the mapped mouse events instead of injecting them")
+                   help="with --input: log the mapped mouse and key events instead of injecting them")
     p.add_argument("--verbose", action="store_true", help="show ffmpeg and MediaMTX logs")
     return p.parse_args()
 
@@ -287,6 +290,8 @@ def main() -> None:
         return
     if args.dry_run_input and not args.input:
         raise SystemExit("--dry-run-input only makes sense together with --input.")
+    if args.keyboard and not args.input:
+        raise SystemExit("--keyboard only makes sense together with --input.")
     pinned = pinned_target(args)
     if args.no_picker and pinned is None:
         raise SystemExit("--no-picker needs --window or --monitor (otherwise there would be nothing to stream).")
@@ -302,8 +307,14 @@ def main() -> None:
             pinned_stream = streams.pin(pinned.id)
         except LookupError:
             raise SystemExit(f"Can't capture {pinned.description}: it has no usable size (minimized?).")
-    server = InputServer(token, streams, port=args.input_port, input_enabled=args.input, dry_run=args.dry_run_input)
+    server = InputServer(token, streams, port=args.input_port, input_enabled=args.input,
+                         keyboard_enabled=args.keyboard, dry_run=args.dry_run_input)
 
+    keyboard = "off (start with --input --keyboard to allow it)"
+    if args.keyboard:
+        keyboard = ("ON - " + ("DRY RUN, logging only" if args.dry_run_input else "the paired headset can type into streamed windows")
+                    + "\n                    UNENCRYPTED on the network: don't type passwords")
+    kill_switch = f"{winapi.KILL_SWITCH} stops all mouse and keyboard input for the rest of the run" if args.input else "-"
     hosts = lan_addresses()
     offered = f"only {pinned.description}" if args.no_picker else "the headset picks a window or the whole desktop"
     started = (f"\n Streaming now:     {pinned_stream.target.description} on /{pinned_stream.path}"
@@ -320,6 +331,8 @@ def main() -> None:
                     (same machine: 127.0.0.1; other adapters: {', '.join(hosts[1:]) or 'none'})
  Browser preview:   http://{hosts[0]}:{args.webrtc_port}/<path>/ while a stream runs (user: viewer, password: the token)
  Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse') if args.input else 'off (start with --input to allow it)'}
+ Keyboard input:    {keyboard}
+ Kill switch:       {kill_switch}
 
  Press Ctrl+C to stop.
 ==============================================================================
