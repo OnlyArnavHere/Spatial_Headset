@@ -815,6 +815,7 @@ GameObject:
   - component: {fileID: 1133192946}
   - component: {fileID: 1133192945}
   - component: {fileID: 1133192949}
+  - component: {fileID: 1133192950}
   m_Layer: 0
   m_Name: Spatial Windows
   m_TagString: Untagged
@@ -835,6 +836,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   manager: {fileID: 0}
+  keyboard: {fileID: 0}
+  immersion: {fileID: 0}
+  dialSize: {x: 0.5, y: 0.22}
   sampleImage: {fileID: 2800000, guid: aca6a1b85d6dc1549b0cd00b3c700df7, type: 3}
   sampleSprite: {fileID: 0}
   sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
@@ -934,6 +938,27 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SpatialLauncher.SpatialWindows.HoloKitHandSource
   handTracking: {fileID: 1430564197}
   head: {fileID: 1086100946}
+--- !u!114 &1133192950
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1133192944}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e011117553409bb43829a8f47d56ddfe, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpatialLauncher.SpatialWindows.ImmersionController
+  head: {fileID: 0}
+  environmentMaterial: {fileID: 2100000, guid: bfafb1c7e71dfb64790074ac47ebf381, type: 2}
+  manager: {fileID: 0}
+  environment: 0
+  level: 0
+  lessKey: 11
+  moreKey: 12
+  eyeHeight: 1.5
+  skyRadius: 18
 --- !u!1 &1418692277
 GameObject:
   m_ObjectHideFlags: 0
