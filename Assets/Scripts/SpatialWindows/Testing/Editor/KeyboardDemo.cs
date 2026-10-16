@@ -64,6 +64,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             yield return LaptopStreamTest.PickEntry(manager, mouse, cam, pickerWindow, picker, notepad, w => window = w);
             var stream = window != null ? window.GetComponentInChildren<RemoteStreamContent>() : null;
             if (stream == null) yield break;
+            yield return LaptopStreamTest.ApproveIfAsked(manager, mouse, cam);
             manager.Close(pickerWindow);
             deadline = EditorTestRunner.Now + 15.0;
             while (!(stream.InputLink.IsConnected && stream.Video != null && stream.Video.IsConnected) && EditorTestRunner.Now < deadline)

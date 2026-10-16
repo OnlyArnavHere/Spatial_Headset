@@ -38,6 +38,16 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             public bool Lost;
         }
 
+        sealed class PanicSession : IRemoteSession
+        {
+            public string SourceName => "Gesture test stream";
+            public string Address => "127.0.0.1";
+            public string ModeLabel => "full control";
+            public SpatialWindow Window { get; set; }
+            public int Stops;
+            public void StopForPanic() => Stops++;
+        }
+
         /// <summary>Scripted hands: joints from <see cref="Pose"/>s, with noise and random dropped frames, through FromJoints.</summary>
         sealed class ScriptedHands : IHandSource
         {
@@ -507,6 +517,23 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             gestures.CrossSweep.Enabled = false;
             yield return Cross(scripted, head, 0.45f, 0.3f);
             Check(!manager.WindowsHidden, "turned off, the gesture does nothing");
+
+            // While a remote screen is live the gesture is the panic stop, even switched off.
+            var gate = ConsentGate.Current;
+            if (gate != null)
+            {
+                yield return gestures.Config.crossCooldown;
+                var stream = Spawn(manager, "Live stream", opened);
+                var live = new PanicSession { Window = stream };
+                gate.BeginLive(live);
+                events.Clear();
+                yield return Cross(scripted, head, 0.45f, 0.3f);
+                Check(live.Stops == 1 && stream == null && !gate.IsActive && !manager.WindowsHidden &&
+                      events.Contains("panic stop: remote screens disconnected") && manager.FocusedWindow == launcher.Launcher,
+                    $"with a remote screen live, cross and sweep is the panic stop even when switched off: it disconnects, closes the stream and returns Home ({string.Join("; ", events)})");
+                gate.EndLive(live);
+            }
+            else Check(false, "the launcher has a consent gate");
             gestures.CrossSweep.Enabled = true;
 
             // The launcher's Hide all icon does the same.
