@@ -51,15 +51,14 @@ namespace SpatialLauncher.SpatialWindows
         [Tooltip("Hand-scale depth thresholds and Vision's image-to-viewport mapping. Defaults if empty.")]
         [SerializeField] GestureConfig gestureConfig;
 
-        /// <summary>Pinch starts below this thumb-to-index distance, as a fraction of the hand's size (wrist to middle knuckle, about 9 cm).</summary>
+        /// <summary>
+        /// Pinch starts below this thumb-to-index distance, as a fraction of the hand's size (wrist to middle knuckle,
+        /// about 9 cm), unless Hand Setup measured the user's own (<see cref="Thresholds"/>).
+        /// </summary>
         public const float PinchOn = 0.25f;
         /// <summary>A pinch ends above this fraction, so it doesn't flicker at the threshold.</summary>
         public const float PinchOff = 0.40f;
         const float StrengthZeroAt = 0.6f, StrengthOneAt = 0.2f;
-        /// <summary>A finger is curled when its tip is no further from the wrist than this times its knuckle.</summary>
-        const float CurledRatio = 1.15f;
-        /// <summary>A finger is fully extended at this ratio (for <see cref="HandState.Openness"/>).</summary>
-        const float ExtendedRatio = 1.7f;
         /// <summary>The right shoulder relative to the head, in the head's axes (x mirrored for the left hand).</summary>
         static readonly Vector3 ShoulderOffset = new Vector3(0.15f, -0.18f, 0f);
 
@@ -79,6 +78,12 @@ namespace SpatialLauncher.SpatialWindows
         public const int DefaultVisionFrameInterval = 2;
 
         public HandState GetHand(Handedness hand) => hand == Handedness.Left ? left : right;
+
+        /// <summary>
+        /// Pinch, curl and openness thresholds and the hand length for hand-size depth: the defaults, or what Hand Setup
+        /// measured (Settings > Hands > Hand setup, applied by <see cref="SettingsService"/>).
+        /// </summary>
+        public HandThresholds Thresholds { get; set; } = HandThresholds.Default;
 
         public enum DepthSource { Auto, LiDAR, HandScale }
 
@@ -224,7 +229,7 @@ namespace SpatialLauncher.SpatialWindows
                                  resultTime, out var directions))
                     {
                         var estimator = hand == Handedness.Left ? leftDepth : rightDepth;
-                        float depth = estimator.Update(ApparentSizeOf(directions), Time.deltaTime, config);
+                        float depth = estimator.Update(ApparentSizeOf(directions), Time.deltaTime, config, Thresholds.HandLength);
                         joints = JointsAtDepth(directions, head.position, depth);
                         status.DepthPath = "hand size";
                     }
@@ -233,7 +238,8 @@ namespace SpatialLauncher.SpatialWindows
                         status.HandsRejected++;
                         continue;
                     }
-                    var state = FromJoints(joints, hand, headPose, GetHand(hand).IsPinched);
+                    var state = FromJoints(joints, hand, headPose, GetHand(hand).IsPinched, Thresholds);
+                    state.MetricDepth = status.DepthPath == "LiDAR";
                     if (!state.IsTracked) status.HandsRejected++; // collapsed joints
                     else if (hand == Handedness.Left) nextLeft = state;
                     else nextRight = state;
@@ -314,28 +320,34 @@ namespace SpatialLauncher.SpatialWindows
         /// One hand's state from its joints. <paramref name="wasPinched"/> is the hand's pinch in the previous update
         /// (for the hysteresis); <paramref name="head"/> is the head pose the pointing ray's shoulder is estimated from.
         /// </summary>
-        public static HandState FromJoints(in HandJoints j, Handedness hand, Pose head, bool wasPinched)
+        public static HandState FromJoints(in HandJoints j, Handedness hand, Pose head, bool wasPinched) =>
+            FromJoints(j, hand, head, wasPinched, HandThresholds.Default);
+
+        /// <summary>As above, with the user's own thresholds (Hand Setup).</summary>
+        public static HandState FromJoints(in HandJoints j, Handedness hand, Pose head, bool wasPinched, HandThresholds t)
         {
             var wrist = j.Wrist;
             float size = Vector3.Distance(wrist, j.MiddleMCP);
             if (size < 0.03f) return HandState.Untracked; // collapsed joints: not a real hand
 
-            bool Curled(Vector3 tip, Vector3 knuckle) => Vector3.Distance(wrist, tip) < Vector3.Distance(wrist, knuckle) * CurledRatio;
+            float Ratio(Vector3 tip, Vector3 knuckle) => Vector3.Distance(wrist, tip) / Mathf.Max(1e-4f, Vector3.Distance(wrist, knuckle));
+            bool Curled(Vector3 tip, Vector3 knuckle) => Ratio(tip, knuckle) < t.CurledRatio;
             int otherCurled = (Curled(j.MiddleTip, j.MiddleMCP) ? 1 : 0) + (Curled(j.RingTip, j.RingMCP) ? 1 : 0) +
                               (Curled(j.LittleTip, j.LittleMCP) ? 1 : 0);
             // The index must be curled too: people often pinch with the other fingers folded.
             bool grab = Curled(j.IndexTip, j.IndexMCP) && otherCurled >= 2;
 
             float pinchDistance = Vector3.Distance(j.ThumbTip, j.IndexTip) / size;
-            bool pinched = !grab && pinchDistance < (wasPinched ? PinchOff : PinchOn);
+            bool pinched = !grab && pinchDistance < (wasPinched ? t.PinchOff : t.PinchOn);
 
             float side = hand == Handedness.Right ? 1f : -1f;
             var shoulder = head.position + head.rotation * new Vector3(ShoulderOffset.x * side, ShoulderOffset.y, ShoulderOffset.z);
             var direction = j.IndexMCP - shoulder;
             if (direction.sqrMagnitude < 1e-6f) direction = head.forward;
 
-            float Extension(Vector3 tip, Vector3 knuckle) =>
-                Mathf.InverseLerp(CurledRatio, ExtendedRatio, Vector3.Distance(wrist, tip) / Mathf.Max(1e-4f, Vector3.Distance(wrist, knuckle)));
+            float meanRatio = (Ratio(j.IndexTip, j.IndexMCP) + Ratio(j.MiddleTip, j.MiddleMCP) +
+                               Ratio(j.RingTip, j.RingMCP) + Ratio(j.LittleTip, j.LittleMCP)) * 0.25f;
+            float Extension(Vector3 tip, Vector3 knuckle) => Mathf.InverseLerp(t.CurledRatio, t.ExtendedRatio, Ratio(tip, knuckle));
             float openness = (Extension(j.IndexTip, j.IndexMCP) + Extension(j.MiddleTip, j.MiddleMCP) +
                               Extension(j.RingTip, j.RingMCP) + Extension(j.LittleTip, j.LittleMCP)) * 0.25f;
 
@@ -352,6 +364,9 @@ namespace SpatialLauncher.SpatialWindows
                 Openness = openness,
                 ApparentSize = ApparentSize(wrist - head.position, j.IndexMCP - head.position, j.MiddleMCP - head.position,
                     j.RingMCP - head.position, j.LittleMCP - head.position),
+                PinchRatio = pinchDistance,
+                FingerExtension = meanRatio,
+                HandSize = size,
             };
         }
 

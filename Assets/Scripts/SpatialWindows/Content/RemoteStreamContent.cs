@@ -18,8 +18,11 @@ namespace SpatialLauncher.SpatialWindows
     /// status line. The title bar shows the input round-trip time; the status line shows the laptop's clock as estimated
     /// over the input link, to compare with Tools/LaptopAgent/clock.py. Keyboard input reaches the laptop through
     /// <see cref="KeyboardSink"/> (see <see cref="RemoteKeyboard"/>).
+    ///
+    /// Connect asks <see cref="ConsentGate"/> first: video and input connect only after the user approves, every
+    /// session. Deny or a timeout leaves both disconnected; without a gate in the scene nothing connects.
     /// </summary>
-    public class RemoteStreamContent : WindowContent
+    public class RemoteStreamContent : WindowContent, IRemoteSession
     {
         static readonly Color PlaceholderColor = new Color(0.07f, 0.08f, 0.10f);
         static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
@@ -65,6 +68,16 @@ namespace SpatialLauncher.SpatialWindows
         public bool IsActive { get; private set; }
         /// <summary>What this window streams from the laptop; null if it wasn't opened from the picker.</summary>
         public LaptopTarget Target { get; private set; }
+        /// <summary>Waiting for the user to approve (<see cref="ConsentGate"/>); nothing is connected yet.</summary>
+        public bool AwaitingConsent { get; private set; }
+        /// <summary>How the last approval request ended: "approved", "denied", "timed out"... or "" before any.</summary>
+        public string ConsentOutcome { get; private set; } = "";
+
+        // IRemoteSession: what the consent question and the live indicator name.
+        public string SourceName => Target != null && !string.IsNullOrEmpty(Target.title) ? Target.title : "Laptop";
+        public string Address => connectedHost ?? (HostField != null ? HostField.Text.Trim() : "");
+        /// <summary>"full control": the laptop window takes pointer and keyboard input.</summary>
+        public virtual string ModeLabel => "full control";
 
         RemoteConnectionSettings settings;
         string connectedHost;
@@ -210,11 +223,37 @@ namespace SpatialLauncher.SpatialWindows
             Disconnect();
             connectedHost = host;
             connectedPort = port;
-            StartVideo(Target.path, token);
-            InputLink.Connect(host, settings != null ? settings.inputPort : 8765, token, Target.id);
-            IsActive = true;
-            RefreshStatus();
+            var gate = ConsentGate.Current;
+            if (gate == null)
+            {
+                ConsentOutcome = "no consent gate";
+                statusLine.text = "Not connected: nothing can show here without the headset's approval (no consent gate in this scene).";
+                return;
+            }
+            AwaitingConsent = true;
+            statusLine.text = $"Waiting for approval on the headset ({gate.TimeoutSeconds:0} s)...";
+            gate.Request(this, () =>
+            {
+                AwaitingConsent = false;
+                ConsentOutcome = "approved";
+                if (this == null || InputLink == null) return;
+                StartVideo(Target.path, token);
+                InputLink.Connect(host, settings != null ? settings.inputPort : 8765, token, Target.id);
+                IsActive = true;
+                gate.BeginLive(this);
+                RefreshStatus();
+            }, reason =>
+            {
+                AwaitingConsent = false;
+                ConsentOutcome = reason;
+                if (this == null || statusLine == null) return;
+                statusLine.text = $"Not allowed ({reason}). Nothing was connected.";
+                RefreshStatus();
+            });
         }
+
+        /// <summary>Panic stop: disconnects video and input at once (the gate closes the window).</summary>
+        public void StopForPanic() => Disconnect();
 
         void StartVideo(string path, string token)
         {
@@ -237,6 +276,13 @@ namespace SpatialLauncher.SpatialWindows
         public void Disconnect()
         {
             if (InputLink == null) return;
+            var gate = ConsentGate.Current;
+            if (gate != null)
+            {
+                if (AwaitingConsent) gate.Withdraw(this);
+                gate.EndLive(this);
+            }
+            AwaitingConsent = false;
             Video?.Stop();
             InputLink.Disconnect();
             IsActive = false;
@@ -273,7 +319,8 @@ namespace SpatialLauncher.SpatialWindows
             if (statusLine == null) return;
             if (!IsActive)
             {
-                if (!statusLine.text.StartsWith("Enter")) statusLine.text = "Start agent.py on the laptop, then enter its address and token.";
+                if (!statusLine.text.StartsWith("Enter") && !statusLine.text.StartsWith("Waiting") && !statusLine.text.StartsWith("Not "))
+                    statusLine.text = "Start agent.py on the laptop, then enter its address and token.";
                 return;
             }
             string clock = InputLink.LaptopNow is System.DateTime now
@@ -339,6 +386,12 @@ namespace SpatialLauncher.SpatialWindows
 
         protected override void OnDestroy()
         {
+            var gate = ConsentGate.Current;
+            if (gate != null)
+            {
+                gate.Withdraw(this);
+                gate.EndLive(this);
+            }
             if (InputLink != null)
             {
                 InputLink.StatusChanged -= RefreshStatus;

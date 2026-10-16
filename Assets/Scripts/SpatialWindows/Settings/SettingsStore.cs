@@ -106,6 +106,10 @@ namespace SpatialLauncher.SpatialWindows
             if (!Enum.IsDefined(typeof(Handedness), s.hands.dominantHand)) s.hands.dominantHand = Handedness.Right;
             if (s.hands.visionFrameInterval < 1 || s.hands.visionFrameInterval > 3)
                 s.hands.visionFrameInterval = HoloKitHandSource.DefaultVisionFrameInterval;
+            if (!Enum.IsDefined(typeof(PointerMode), s.hands.pointerMode)) s.hands.pointerMode = PointerMode.Absolute;
+            s.hands.relativeGain = float.IsNaN(s.hands.relativeGain) ? 1.5f : Mathf.Clamp(s.hands.relativeGain, 0.5f, 3f);
+            s.hands.calibration ??= new HandCalibration();
+            s.hands.calibration.Sanitize();
             s.windows.defaultCurve = Mathf.Clamp01(s.windows.defaultCurve);
             if (!Enum.IsDefined(typeof(AspectPreset), s.windows.defaultAspect)) s.windows.defaultAspect = AspectPreset.Free;
             if (!Enum.IsDefined(typeof(ImmersiveEnvironment), s.immersion.environment)) s.immersion.environment = ImmersiveEnvironment.Void;

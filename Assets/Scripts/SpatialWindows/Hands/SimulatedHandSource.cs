@@ -134,6 +134,11 @@ namespace SpatialLauncher.SpatialWindows
                 Openness = fist ? 0f : 1f,
                 PalmCenter = palm,
                 ApparentSize = handLength / Mathf.Max(0.05f, Vector3.Distance(palm, cam.position)),
+                // Typical raw measures, so Hand Setup can run in the editor (G for the fist, the mouse button to pinch).
+                PinchRatio = pinched ? 0.1f : 0.9f,
+                FingerExtension = fist ? 0.95f : 1.8f,
+                HandSize = handLength,
+                MetricDepth = true,
             };
         }
 

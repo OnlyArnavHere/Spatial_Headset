@@ -23,12 +23,18 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         /// <summary>The raw estimate for an apparent size, clamped to the configured range.</summary>
-        public static float DepthFor(float apparentSize, GestureConfig config) =>
-            Mathf.Clamp(config.handLength / Mathf.Max(apparentSize, 1e-3f), config.minHandDepth, config.maxHandDepth);
+        public static float DepthFor(float apparentSize, GestureConfig config) => DepthFor(apparentSize, config, config.handLength);
 
-        public float Update(float apparentSize, float deltaTime, GestureConfig config)
+        /// <summary>As above for a hand of <paramref name="handLength"/> metres (the user's own, from Hand Setup).</summary>
+        public static float DepthFor(float apparentSize, GestureConfig config, float handLength) =>
+            Mathf.Clamp(handLength / Mathf.Max(apparentSize, 1e-3f), config.minHandDepth, config.maxHandDepth);
+
+        public float Update(float apparentSize, float deltaTime, GestureConfig config) =>
+            Update(apparentSize, deltaTime, config, config.handLength);
+
+        public float Update(float apparentSize, float deltaTime, GestureConfig config, float handLength)
         {
-            RawDepth = DepthFor(apparentSize, config);
+            RawDepth = DepthFor(apparentSize, config, handLength);
             if (!HasValue || deltaTime <= 0f)
             {
                 Depth = RawDepth;

@@ -9,6 +9,7 @@ namespace SpatialLauncher.SpatialWindows
     /// to the next preset (Wide, Normal, Close, then Wide again). In Stereo it is HoloKit's stereo bar TRIGGER, relabelled
     /// ZOOM (the wearer can reach the phone's top edge in the headset); in Mono it is a small button at the bottom right of
     /// the screen (tap or click); F5 works in both. Only in scenes with HoloKit, where there is passthrough to zoom.
+    /// While <see cref="ConsentGate"/> asks for approval, TRIGGER is ALLOW instead and doesn't zoom.
     /// </summary>
     public class PassthroughZoomControl : MonoBehaviour
     {
@@ -59,6 +60,8 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>Steps the zoom to the next preset, as each input does.</summary>
         public void Step()
         {
+            var gate = ConsentGate.Current;
+            if (gate != null && (gate.HasPending || gate.TriggerUsedThisFrame)) return; // TRIGGER is ALLOW right now
             Presses++;
             SettingsStore.Update(s => s.display.passthroughZoom = DisplaySettings.NextZoomPreset(s.display.passthroughZoom));
         }
@@ -83,9 +86,12 @@ namespace SpatialLauncher.SpatialWindows
         void Update()
         {
             if (holoKit == null) return;
+            var gate = ConsentGate.Current;
+            bool asking = gate != null && gate.HasPending;
             // The stereo bar shows the pressed label briefly after each press: the zoom it switched to.
-            if (useStereoTrigger)
+            if (useStereoTrigger && !asking)
             {
+                holoKit.StereoTriggerLabel = TriggerLabel;
                 float zoom = SettingsStore.Current.display.passthroughZoom;
                 int preset = DisplaySettings.ZoomPresetIndex(zoom);
                 holoKit.StereoTriggerPressedLabel = preset >= 0 ? DisplaySettings.ZoomPresetNames[preset].ToUpperInvariant() : $"{zoom:0.00}x";
