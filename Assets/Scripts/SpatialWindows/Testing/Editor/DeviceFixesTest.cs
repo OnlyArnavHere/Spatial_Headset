@@ -411,6 +411,9 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
             bool wasVisible = hud.Visible;
             hud.Visible = true;
+            // These checks are for zoom 1 (Mono leaves the camera background alone); PassthroughZoomTest covers zoom.
+            float zoom = SettingsStore.Current.display.passthroughZoom;
+            SettingsStore.Update(x => x.display.passthroughZoom = 1f);
             var holoKit = Object.FindFirstObjectByType<HoloKitCameraManager>();
             try
             {
@@ -463,6 +466,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             finally
             {
                 hud.Visible = wasVisible;
+                SettingsStore.Update(x => x.display.passthroughZoom = zoom);
                 if (holoKit != null) holoKit.ScreenRenderMode = ScreenRenderMode.Mono;
             }
         }
