@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 #if UNITY_IOS
 using HoloKit.iOS;
 #endif
@@ -24,10 +26,15 @@ namespace SpatialLauncher.SpatialWindows
     /// editor scenes keep using <see cref="SimulatedHandSource"/>. HoloKit tracks one hand unless its Max Hand Count
     /// says two, at about 20 Hz. Untested on a device so far: thresholds may need tuning.
     ///
-    /// Phones without LiDAR (iPhone 16): with Depth Source on Auto (the default) a hand without LiDAR joints is built
-    /// from Apple Vision's 2D pose instead: each joint is placed on its viewing ray at a depth estimated from the hand's
+    /// Phones without LiDAR (iPhone 16): with Depth Source on Auto (the default) hands are built from Apple Vision's 2D
+    /// pose: each joint is placed on its viewing ray at a depth estimated from the hand's
     /// apparent size (<see cref="HandDepthEstimator"/>; thresholds in <see cref="GestureConfig"/>, which also says how
-    /// Vision's image coordinates map to the camera's viewport, to be checked on the device).
+    /// Vision's image coordinates map to the camera's viewport, to be checked on the device). HoloKit fills its 3D joints
+    /// even without LiDAR (on a fixed 0.65 m plane), so Auto takes them only when the AR camera has scene depth
+    /// (<see cref="ResolveDepth"/>).
+    ///
+    /// <see cref="Status"/> says how far the device pipeline gets (HoloKit's hand tracking found, enabled and started; AR
+    /// frames; Vision requests; hands seen and mapped), for <see cref="DeviceStatusHud"/>.
     /// </summary>
     public class HoloKitHandSource : MonoBehaviour, IHandSource
     {
@@ -55,10 +62,24 @@ namespace SpatialLauncher.SpatialWindows
 
         HandState left, right;
         readonly HandDepthEstimator leftDepth = new HandDepthEstimator(), rightDepth = new HandDepthEstimator();
+        ARCameraManager arCamera;
+        AROcclusionManager occlusion;
+        HandTrackingStatus status;
 
         public HandState GetHand(Handedness hand) => hand == Handedness.Left ? left : right;
 
         public enum DepthSource { Auto, LiDAR, HandScale }
+
+        /// <summary>How far the device's hand pipeline gets, updated every frame.</summary>
+        public HandTrackingStatus Status => status;
+
+        /// <summary>
+        /// Where a hand's joint depth comes from: LiDAR when forced, or on Auto when the AR camera has scene depth (a
+        /// LiDAR iPhone); otherwise the hand's apparent size. Without LiDAR HoloKit's 3D joints sit on a fixed plane, so
+        /// Auto mustn't take them just because they exist.
+        /// </summary>
+        public static DepthSource ResolveDepth(DepthSource setting, bool sceneDepthSupported) =>
+            setting == DepthSource.Auto ? (sceneDepthSupported ? DepthSource.LiDAR : DepthSource.HandScale) : setting;
 
         public DepthSource Depth
         {
@@ -84,25 +105,51 @@ namespace SpatialLauncher.SpatialWindows
             return image;
         }
 
+        void OnEnable()
+        {
+            if (head == null && Camera.main != null) head = Camera.main.transform;
+            arCamera = head != null ? head.GetComponent<ARCameraManager>() : null;
+            if (arCamera == null) arCamera = FindFirstObjectByType<ARCameraManager>();
+            occlusion = arCamera != null ? arCamera.GetComponent<AROcclusionManager>() : null;
+            if (arCamera != null) arCamera.frameReceived += OnFrameReceived;
+        }
+
+        void OnDisable()
+        {
+            if (arCamera != null) arCamera.frameReceived -= OnFrameReceived;
+        }
+
+        void OnFrameReceived(ARCameraFrameEventArgs args) => status.ArFrames++;
+
         void Update()
         {
             var nextLeft = HandState.Untracked;
             var nextRight = HandState.Untracked;
+            status.SceneDepth = occlusion != null && occlusion.descriptor?.environmentDepthImageSupported == Supported.Supported;
+            status.DepthPath = "-";
+            status.HandsSeen = status.HandsRejected = 0;
 #if UNITY_IOS
-            if (!Application.isEditor && handTracking is HandTrackingManager tracking && tracking.HandPoseDetector != null && head != null)
+            var tracking = handTracking as HandTrackingManager;
+            status.TrackingFound = tracking != null;
+            status.TrackingEnabled = tracking != null && tracking.isActiveAndEnabled;
+            status.DetectorCreated = tracking != null && tracking.HandPoseDetector != null;
+            if (status.DetectorCreated) status.VisionRequests = tracking.HandPoseDetector.CompletedRequests;
+            if (!Application.isEditor && status.DetectorCreated && head != null)
             {
+                var use = ResolveDepth(depthSource, status.SceneDepth);
                 var chiralities = tracking.HandPoseDetector.HandChiralities;
                 var headPose = new Pose(head.position, head.rotation);
                 var camera = head.GetComponent<Camera>();
                 var poses3D = tracking.HandPoses3D;
                 var poses2D = tracking.HandPoseDetector.HandPoses2D;
+                status.HandsSeen = tracking.HandCount;
                 for (int i = 0; i < tracking.HandCount; i++)
                 {
                     bool isLeft = i < chiralities.Count && chiralities[i] == HandChirality.Left;
                     HandJoints joints;
-                    if (depthSource != DepthSource.HandScale && poses3D != null && i < poses3D.Count && TryGetJoints(poses3D[i], out joints))
+                    if (use == DepthSource.LiDAR && poses3D != null && i < poses3D.Count && TryGetJoints(poses3D[i], out joints))
                     {
-                        // LiDAR depth.
+                        status.DepthPath = "LiDAR";
                     }
                     else if (depthSource != DepthSource.LiDAR && camera != null && poses2D != null && i < poses2D.Count
                              && TryGetDirections(poses2D[i], camera, out var directions))
@@ -110,10 +157,18 @@ namespace SpatialLauncher.SpatialWindows
                         var estimator = isLeft ? leftDepth : rightDepth;
                         float depth = estimator.Update(ApparentSizeOf(directions), Time.deltaTime, Config);
                         joints = JointsAtDepth(directions, head.position, depth);
+                        status.DepthPath = "hand size";
                     }
-                    else continue;
-                    if (isLeft && !nextLeft.IsTracked) nextLeft = FromJoints(joints, Handedness.Left, headPose, left.IsPinched);
-                    else if (!isLeft && !nextRight.IsTracked) nextRight = FromJoints(joints, Handedness.Right, headPose, right.IsPinched);
+                    else
+                    {
+                        status.HandsRejected++;
+                        continue;
+                    }
+                    var hand = isLeft ? Handedness.Left : Handedness.Right;
+                    var state = FromJoints(joints, hand, headPose, GetHand(hand).IsPinched);
+                    if (!state.IsTracked) status.HandsRejected++; // collapsed joints
+                    else if (isLeft && !nextLeft.IsTracked) nextLeft = state;
+                    else if (!isLeft && !nextRight.IsTracked) nextRight = state;
                 }
             }
 #endif
@@ -244,5 +299,39 @@ namespace SpatialLauncher.SpatialWindows
             float span = Vector3.Angle(index, little) * LengthToSpan;
             return Mathf.Max(length, span) * Mathf.Deg2Rad;
         }
+    }
+
+    /// <summary>How far <see cref="HoloKitHandSource"/>'s device pipeline gets (shown by <see cref="DeviceStatusHud"/>).</summary>
+    public struct HandTrackingStatus
+    {
+        /// <summary>HoloKit's HandTrackingManager is assigned.</summary>
+        public bool TrackingFound;
+        /// <summary>
+        /// It is enabled. HoloKit's stereo bar can switch it off (OPTIONS > HANDS), and Unity disables it if its Awake
+        /// throws (in the editor, where HoloKit's native Vision code doesn't exist).
+        /// </summary>
+        public bool TrackingEnabled;
+        /// <summary>Its Vision detector exists: its Awake found an ARCameraManager and an AROcclusionManager.</summary>
+        public bool DetectorCreated;
+        /// <summary>AR camera frames received while this source was enabled (Vision runs on every 3rd).</summary>
+        public int ArFrames;
+        /// <summary>Vision requests finished, with or without a hand.</summary>
+        public int VisionRequests;
+        /// <summary>Hands Vision reports this frame, and how many of them didn't become a tracked hand.</summary>
+        public int HandsSeen, HandsRejected;
+        /// <summary>The AR camera has LiDAR scene depth.</summary>
+        public bool SceneDepth;
+        /// <summary>Where the last mapped hand's depth came from: "LiDAR", "hand size", or "-" for none this frame.</summary>
+        public string DepthPath;
+
+        /// <summary>Hand tracking runs: the manager is assigned and enabled, and its detector was created.</summary>
+        public bool Started => TrackingFound && TrackingEnabled && DetectorCreated;
+
+        /// <summary>Why hand tracking hasn't started, or "" once it has.</summary>
+        public string NotStartedReason =>
+            !TrackingFound ? "no HandTrackingManager assigned"
+            : !TrackingEnabled ? "HandTrackingManager disabled (its Awake failed, or stereo bar OPTIONS > HANDS is off)"
+            : !DetectorCreated ? "no Vision detector (needs ARCameraManager and AROcclusionManager at start)"
+            : "";
     }
 }
