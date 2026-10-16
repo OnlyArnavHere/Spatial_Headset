@@ -2,9 +2,10 @@
 events into mouse input on this laptop (only when the agent runs with --input) and key events into keyboard input
 (only with --input --keyboard).
 
-Protocol (JSON text messages), version 3:
+Protocol (JSON text messages), version 4:
   client -> agent  {"type": "hello", "token": "<pairing token>"}           must be the first message
-  agent  -> client {"type": "welcome", "version": 3, "input": bool, "keyboard": bool, "dry_run": bool}
+  agent  -> client {"type": "welcome", "version": 4, "input": bool, "keyboard": bool, "dry_run": bool,
+                   "cast_only": bool, "media": bool}
                    or {"type": "error", "reason": "bad token"|"busy"|...} then close
   client -> agent  {"type": "list"}
   agent  -> client {"type": "targets", "targets": [{"id", "path", "title", "kind", "description", "width", "height"}]}
@@ -17,6 +18,7 @@ Protocol (JSON text messages), version 3:
                    {"type": "scroll", "x": 0..1, "y": 0..1, "delta": notches (positive = up)}
                    {"type": "key", "code": "<name from keys.KEY_CODES>", "down": bool}
                    {"type": "text", "text": "<up to 64 printable characters>"}
+                   {"type": "media", "action": "<name from keys.MEDIA_ACTIONS>"}  (cast controls; see below)
                    {"type": "ping", "id": n, "t": client_ms}
   agent  -> client {"type": "pong", "id": n, "t": client_ms, "agent_ms": unix_ms}
                    {"type": "ack", "event", "x", "y", "button", "path"} after each down/up/scroll in dry-run mode
@@ -25,6 +27,12 @@ Protocol (JSON text messages), version 3:
                    {"type": "throttled"} when key or text events were dropped by the rate limit (at most once a second)
                    {"type": "input_stopped", "reason"} when the kill switch (Ctrl+Alt+Shift+Q on the laptop) turned
                    all input off for the rest of the run; the connection stays open for video
+
+Cast only (agent.py --cast-only): the server accepts hello, ping, list, one open per connection (it can't switch to
+another target afterwards) and media actions: play/pause, next, previous, volume up/down, mute, seek back/forward.
+Every other message (keys, text, mouse moves, clicks, scrolls, unknown media actions) is dropped here, before anything
+reaches Windows, and counted in `dropped`. Media actions are a single press and release of one whitelisted key, never
+with a modifier. Without --cast-only, media actions are accepted only with --input --keyboard.
 
 Keyboard input goes to the window the connection opened: the agent brings it to the foreground first and drops the key
 if it can't (so keys never land in another window). For the whole desktop it goes to whatever window is in front.
@@ -51,7 +59,9 @@ from streams import Stream, StreamManager, Target
 
 log = logging.getLogger("input")
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
+# What a cast-only connection may send; everything else is dropped.
+CAST_ALLOWED = ("ping", "list", "open", "media")
 HELLO_TIMEOUT_S = 5.0
 # A held button with no message for this long is released: the link may be dead before TCP notices.
 IDLE_RELEASE_S = 3.0
@@ -95,9 +105,17 @@ class InputServer:
     input_enabled: bool = False
     keyboard_enabled: bool = False
     dry_run: bool = False
+    cast_only: bool = False
     input_stopped: bool = False
+    # Messages dropped in cast-only mode, by kind ("key", "text", "move", "down", "media:power"...).
+    dropped: dict = field(default_factory=dict)
     _sessions: list = field(default_factory=list)
     _failed: dict = field(default_factory=dict)
+
+    @property
+    def media_enabled(self) -> bool:
+        """Media actions are accepted: always in cast-only mode, else only with --input --keyboard; never after the kill switch."""
+        return not self.input_stopped and (self.cast_only or (self.input_enabled and self.keyboard_enabled))
 
     async def run(self) -> None:
         self.streams.on_ended = self._stream_ended
@@ -106,8 +124,10 @@ class InputServer:
             what = "mouse and keyboard input" if self.keyboard_enabled else "mouse input"
             mode = (f"DRY RUN: logging {what}, not injecting" if self.dry_run else f"injecting {what}") \
                 if self.input_enabled else "view only: no input"
+            if self.cast_only:
+                mode = "CAST ONLY: media controls only" + (" (dry run)" if self.dry_run else "")
             log.info("Control server listening on %s:%d (%s)", self.host, self.port, mode)
-            if self.input_enabled:
+            if self.input_enabled or self.cast_only:
                 loop = asyncio.get_running_loop()
                 if winapi.watch_kill_switch(lambda: loop.call_soon_threadsafe(self.stop_input, "kill switch pressed")):
                     log.info("Kill switch: press %s on this laptop to stop all input at once", winapi.KILL_SWITCH)
@@ -147,7 +167,8 @@ class InputServer:
         try:
             await self._send(connection, {"type": "welcome", "version": PROTOCOL_VERSION,
                                           "input": self.input_enabled, "dry_run": self.dry_run,
-                                          "keyboard": self.input_enabled and self.keyboard_enabled})
+                                          "keyboard": self.input_enabled and self.keyboard_enabled,
+                                          "cast_only": self.cast_only, "media": self.media_enabled})
             async for raw in connection:
                 session.last_message = time.monotonic()
                 await self._dispatch(session, raw)
@@ -188,6 +209,9 @@ class InputServer:
         except (ValueError, KeyError, TypeError):
             return
         connection = session.connection
+        if self.cast_only and kind not in CAST_ALLOWED:
+            self._drop(session, str(kind))
+            return
         if kind == "ping":
             await self._send(connection, {"type": "pong", "id": message.get("id"), "t": message.get("t"),
                                           "agent_ms": time.time() * 1000.0})
@@ -196,7 +220,15 @@ class InputServer:
             await self._send(connection, {"type": "targets", "targets": self.streams.listing()})
             return
         if kind == "open":
-            await self._open(session, str(message.get("target", "")))
+            target_id = str(message.get("target", ""))
+            if self.cast_only and session.stream is not None and session.stream.target.id != target_id:
+                self._drop(session, "open (switch)")
+                await self._send(connection, {"type": "error", "reason": "cast locked"})
+                return
+            await self._open(session, target_id)
+            return
+        if kind == "media":
+            await self._media(session, message)
             return
         if kind in ("key", "text"):
             await self._keyboard(session, kind, message)
@@ -234,6 +266,37 @@ class InputServer:
         if self.dry_run and kind != "move":
             await self._send(connection, {"type": "ack", "event": kind, "x": x, "y": y, "button": button,
                                           "path": session.stream.path})
+
+    def _drop(self, session: Session, kind: str) -> None:
+        """Cast-only mode: a message that isn't a media control. Nothing is injected; it is only counted and logged."""
+        self.dropped[kind] = self.dropped.get(kind, 0) + 1
+        now = time.monotonic()
+        if now - session.last_throttle_notice >= THROTTLE_NOTICE_INTERVAL_S:
+            session.last_throttle_notice = now
+            log.warning("Dropped %s from %s: cast only (media controls only)", kind, session.peer)
+
+    async def _media(self, session: Session, message: dict) -> None:
+        action = keys.parse_media(message)
+        if action is None:
+            if self.cast_only:
+                self._drop(session, f"media:{message.get('action')}")
+            return
+        if not self.media_enabled or session.stream is None:
+            if self.cast_only:
+                self._drop(session, f"media:{action.action} (not allowed now)")
+            return
+        if not await self._within_rate(session, 1):
+            return
+        target = session.stream.target
+        if action.to_window and not self._focus(target):
+            return
+
+        def press() -> None:
+            winapi.key(action.vk, True, action.extended)
+            winapi.key(action.vk, False, action.extended)
+
+        if self._inject(press, f"media {action.action} for /{session.stream.path}"):
+            await self._ack(session, {"event": "media", "action": action.action})
 
     async def _keyboard(self, session: Session, kind: str, message: dict) -> None:
         if not session.paired:
