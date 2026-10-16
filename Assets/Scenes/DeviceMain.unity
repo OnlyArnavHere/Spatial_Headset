@@ -1124,7 +1124,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8c58731793f77423786ac8bbbdaa62ba, type: 3}
   m_Name: 
   m_EditorClassIdentifier: HoloKit::HoloKit.iOS.HandTrackingManager
-  m_MaxHandCount: 1
+  m_MaxHandCount: 2
   m_HandJointsVisibility: 0
   m_FrameInterval: 3
   m_SmoothJoints: 1

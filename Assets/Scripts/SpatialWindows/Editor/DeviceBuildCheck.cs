@@ -320,7 +320,11 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 Expect(cameraManagers.Length == 1 && cameraManagers[0].GetComponent<AROcclusionManager>() != null,
                     "the AR camera has an AROcclusionManager (LiDAR depth for HoloKit's 3D hand joints)");
 #if UNITY_IOS
-                Expect(Find<HoloKit.iOS.HandTrackingManager>().Length == 1, "scene has HoloKit's HandTrackingManager");
+                var handTracking = Find<HoloKit.iOS.HandTrackingManager>();
+                Expect(handTracking.Length == 1, "scene has HoloKit's HandTrackingManager");
+                if (handTracking.Length == 1)
+                    Expect(new SerializedObject(handTracking[0]).FindProperty("m_MaxHandCount").intValue == (int)HoloKit.iOS.MaxHandCount.Both,
+                        "HoloKit's HandTrackingManager tracks two hands (two-hand stretch, cross to hide)");
 #endif
 
                 var launchers = Find<LauncherWindow>();

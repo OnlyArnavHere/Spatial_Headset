@@ -41,6 +41,25 @@ namespace SpatialLauncher.SpatialWindows
         [Tooltip("2D joints from Apple Vision to camera viewport: swap x and y (portrait image, landscape screen).")]
         public bool imageSwapXY;
 
+        [Header("2D joint smoothing (no LiDAR)")]
+        [Tooltip("One-euro filter on Apple Vision's 2D joints (image units, 0..1 across the camera image).")]
+        public bool smoothJoints2D = true;
+        [Tooltip("Cutoff (Hz) for a still hand: lower is steadier and lags more.")]
+        public float jointMinCutoff = 1.5f;
+        [Tooltip("How fast the cutoff rises with speed (per image width per second): higher lags less in fast moves.")]
+        public float jointBeta = 8f;
+        [Tooltip("Cutoff (Hz) for the speed estimate itself.")]
+        public float jointDerivativeCutoff = 1f;
+
+        [Header("Two hands")]
+        [Tooltip("A hand keeps its identity (left or right) while it moves less than this (image units) between Vision " +
+                 "results, even when Vision's own left/right guess flips.")]
+        public float identityMaxJump = 0.2f;
+        [Tooltip("A hand's identity is kept this long after it was last seen, so a short drop doesn't swap hands.")]
+        public float identityMemory = 0.4f;
+        [Tooltip("Vision must call a hand the other side this many results in a row before its identity follows.")]
+        public int identitySwitchAfter = 6;
+
         [Header("1. Fist grab")]
         [Tooltip("Metres the window moves in or out per metre the fist moves in or out.")]
         public float grabDepthGain = 3f;
