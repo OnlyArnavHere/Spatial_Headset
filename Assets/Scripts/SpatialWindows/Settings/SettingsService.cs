@@ -6,7 +6,7 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// Puts <see cref="SettingsStore.Current"/> into effect and keeps it saved. On start and after every change it
     /// applies: window defaults (curve, aspect) to the <see cref="WindowManager"/>; hand sensitivity, the pinch toggle
-    /// and the dominant hand to the hand input; the environment (and, if asked, the level) to the
+    /// and the dominant hand to the hand input; the hand tracking rate to <see cref="HoloKitHandSource"/>; the environment (and, if asked, the level) to the
     /// <see cref="ImmersionController"/>, whose own changes are recorded back; the phone's brightness; and IPD and
     /// viewport offsets to HoloKit's stereo cameras. Changes are saved half a second after the last one (and when the
     /// app pauses or quits), so dragging a slider doesn't write the file every frame.
@@ -112,6 +112,8 @@ namespace SpatialLauncher.SpatialWindows
             }
             foreach (var simulated in GetComponentsInChildren<SimulatedHandSource>(true))
                 simulated.DominantHand = s.hands.dominantHand;
+            foreach (var device in GetComponentsInChildren<HoloKitHandSource>(true))
+                device.VisionFrameInterval = s.hands.visionFrameInterval;
             if (TryGetComponent<GestureRecognizers>(out var gestures))
             {
                 gestures.FistGrab.Enabled = s.hands.fistGrab;

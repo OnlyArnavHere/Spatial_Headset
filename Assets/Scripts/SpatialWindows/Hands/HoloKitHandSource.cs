@@ -24,12 +24,15 @@ namespace SpatialLauncher.SpatialWindows
     ///
     /// Reading HoloKit needs its iOS API (UNITY_IOS). Without it, and in the editor, both hands are untracked, so
     /// editor scenes keep using <see cref="SimulatedHandSource"/>. HoloKit tracks one hand unless its Max Hand Count
-    /// says two, at about 20 Hz. Untested on a device so far: thresholds may need tuning.
+    /// says two (DeviceMain: two), on every <see cref="VisionFrameInterval"/>-th ARKit frame. Each Vision result's hands
+    /// are matched to the previous result's by <see cref="HandIdentityTracker"/>, so a hand keeps its identity when
+    /// Vision's left/right guess flips. Untested on a device so far: thresholds may need tuning.
     ///
     /// Phones without LiDAR (iPhone 16): with Depth Source on Auto (the default) hands are built from Apple Vision's 2D
     /// pose: each joint is placed on its viewing ray at a depth estimated from the hand's
     /// apparent size (<see cref="HandDepthEstimator"/>; thresholds in <see cref="GestureConfig"/>, which also says how
-    /// Vision's image coordinates map to the camera's viewport, to be checked on the device). HoloKit fills its 3D joints
+    /// Vision's image coordinates map to the camera's viewport, to be checked on the device). Those 2D joints are
+    /// one-euro filtered per hand (<see cref="OneEuroFilter2D"/>, settings in the config). HoloKit fills its 3D joints
     /// even without LiDAR (on a fixed 0.65 m plane), so Auto takes them only when the AR camera has scene depth
     /// (<see cref="ResolveDepth"/>).
     ///
@@ -65,6 +68,15 @@ namespace SpatialLauncher.SpatialWindows
         ARCameraManager arCamera;
         AROcclusionManager occlusion;
         HandTrackingStatus status;
+        int visionFrameInterval = DefaultVisionFrameInterval;
+        readonly HandIdentityTracker identities = new HandIdentityTracker();
+        readonly List<HandIdentityTracker.Observation> observations = new List<HandIdentityTracker.Observation>();
+        readonly List<Handedness> assigned = new List<Handedness>();
+        readonly OneEuroFilter2D[][] jointFilters = { NewJointFilters(), NewJointFilters() };
+        double lastResultTime = double.NaN;
+
+        /// <summary>Vision runs on every this-many-th ARKit frame unless Settings says otherwise (2: about 30 Hz at 60 fps).</summary>
+        public const int DefaultVisionFrameInterval = 2;
 
         public HandState GetHand(Handedness hand) => hand == Handedness.Left ? left : right;
 
@@ -72,6 +84,31 @@ namespace SpatialLauncher.SpatialWindows
 
         /// <summary>How far the device's hand pipeline gets, updated every frame.</summary>
         public HandTrackingStatus Status => status;
+
+        /// <summary>
+        /// Vision runs on every this-many-th ARKit frame (1..3; HoloKit's HandTrackingManager.FrameInterval). Lower tracks
+        /// hands more often and heats the phone more (Settings > Hands > Tracking rate).
+        /// </summary>
+        public int VisionFrameInterval
+        {
+            get => visionFrameInterval;
+            set => visionFrameInterval = Mathf.Clamp(value, 1, 3);
+        }
+
+        /// <summary>Matches hands to identities from one result to the next (two-hand tracking).</summary>
+        public HandIdentityTracker Identities => identities;
+
+        static OneEuroFilter2D[] NewJointFilters()
+        {
+            var filters = new OneEuroFilter2D[21];
+            for (int i = 0; i < filters.Length; i++) filters[i] = new OneEuroFilter2D();
+            return filters;
+        }
+
+        void ResetJointFilters(Handedness hand)
+        {
+            foreach (var filter in jointFilters[(int)hand]) filter.Reset();
+        }
 
         /// <summary>
         /// Where a hand's joint depth comes from: LiDAR when forced, or on Auto when the AR camera has scene depth (a
@@ -128,34 +165,66 @@ namespace SpatialLauncher.SpatialWindows
             status.SceneDepth = occlusion != null && occlusion.descriptor?.environmentDepthImageSupported == Supported.Supported;
             status.DepthPath = "-";
             status.HandsSeen = status.HandsRejected = 0;
+            status.VisionFrameInterval = visionFrameInterval;
+            status.Smoothing2D = Config.smoothJoints2D;
 #if UNITY_IOS
             var tracking = handTracking as HandTrackingManager;
             status.TrackingFound = tracking != null;
             status.TrackingEnabled = tracking != null && tracking.isActiveAndEnabled;
             status.DetectorCreated = tracking != null && tracking.HandPoseDetector != null;
             if (status.DetectorCreated) status.VisionRequests = tracking.HandPoseDetector.CompletedRequests;
+            if (tracking != null && tracking.FrameInterval != visionFrameInterval) tracking.FrameInterval = visionFrameInterval;
+            status.VisionFrameInterval = tracking != null ? tracking.FrameInterval : visionFrameInterval;
+            status.MaxHands = MaxHandsOf(tracking);
             if (!Application.isEditor && status.DetectorCreated && head != null)
             {
+                var detector = tracking.HandPoseDetector;
                 var use = ResolveDepth(depthSource, status.SceneDepth);
-                var chiralities = tracking.HandPoseDetector.HandChiralities;
                 var headPose = new Pose(head.position, head.rotation);
                 var camera = head.GetComponent<Camera>();
                 var poses3D = tracking.HandPoses3D;
-                var poses2D = tracking.HandPoseDetector.HandPoses2D;
+                var poses2D = detector.HandPoses2D;
+                var config = Config;
                 status.HandsSeen = tracking.HandCount;
-                for (int i = 0; i < tracking.HandCount; i++)
+
+                // A new Vision result: match its hands to the identities they had in the last one.
+                double resultTime = detector.LastUpdateTime;
+                bool newResult = resultTime != lastResultTime;
+                if (newResult && tracking.HandCount > 0)
                 {
-                    bool isLeft = i < chiralities.Count && chiralities[i] == HandChirality.Left;
+                    lastResultTime = resultTime;
+                    observations.Clear();
+                    for (int i = 0; i < tracking.HandCount && poses2D != null && i < poses2D.Count; i++)
+                    {
+                        int chirality = i < detector.HandChiralities.Count ? (int)detector.HandChiralities[i] : 0;
+                        observations.Add(new HandIdentityTracker.Observation(PalmImagePoint(poses2D[i]), chirality));
+                    }
+                    identities.MaxJump = config.identityMaxJump;
+                    identities.Memory = config.identityMemory;
+                    identities.SwitchAfter = config.identitySwitchAfter;
+                    identities.Update(observations, resultTime, assigned);
+                    foreach (var started in GestureRecognizers.Hands)
+                        if (identities.Started(started))
+                        {
+                            ResetJointFilters(started);
+                            (started == Handedness.Left ? leftDepth : rightDepth).Reset();
+                        }
+                }
+
+                for (int i = 0; i < tracking.HandCount && i < assigned.Count; i++)
+                {
+                    var hand = assigned[i];
                     HandJoints joints;
                     if (use == DepthSource.LiDAR && poses3D != null && i < poses3D.Count && TryGetJoints(poses3D[i], out joints))
                     {
                         status.DepthPath = "LiDAR";
                     }
                     else if (depthSource != DepthSource.LiDAR && camera != null && poses2D != null && i < poses2D.Count
-                             && TryGetDirections(poses2D[i], camera, out var directions))
+                             && TryGetDirections(poses2D[i], camera, config.smoothJoints2D ? jointFilters[(int)hand] : null,
+                                 resultTime, out var directions))
                     {
-                        var estimator = isLeft ? leftDepth : rightDepth;
-                        float depth = estimator.Update(ApparentSizeOf(directions), Time.deltaTime, Config);
+                        var estimator = hand == Handedness.Left ? leftDepth : rightDepth;
+                        float depth = estimator.Update(ApparentSizeOf(directions), Time.deltaTime, config);
                         joints = JointsAtDepth(directions, head.position, depth);
                         status.DepthPath = "hand size";
                     }
@@ -164,11 +233,10 @@ namespace SpatialLauncher.SpatialWindows
                         status.HandsRejected++;
                         continue;
                     }
-                    var hand = isLeft ? Handedness.Left : Handedness.Right;
                     var state = FromJoints(joints, hand, headPose, GetHand(hand).IsPinched);
                     if (!state.IsTracked) status.HandsRejected++; // collapsed joints
-                    else if (isLeft && !nextLeft.IsTracked) nextLeft = state;
-                    else if (!isLeft && !nextRight.IsTracked) nextRight = state;
+                    else if (hand == Handedness.Left) nextLeft = state;
+                    else nextRight = state;
                 }
             }
 #endif
@@ -179,12 +247,15 @@ namespace SpatialLauncher.SpatialWindows
         }
 
 #if UNITY_IOS
-        // Viewing directions (from the camera) of the 2D joints; the struct's positions hold directions here.
-        bool TryGetDirections(Dictionary<JointName, Vector2> pose, Camera camera, out HandJoints directions)
+        // Viewing directions (from the camera) of the 2D joints; the struct's positions hold directions here. With
+        // filters, each joint's image point is one-euro smoothed first (time = the Vision result's).
+        bool TryGetDirections(Dictionary<JointName, Vector2> pose, Camera camera, OneEuroFilter2D[] filters, double time,
+            out HandJoints directions)
         {
             directions = default;
             if (pose == null) return false;
             bool ok = true;
+            var config = Config;
             Vector3 Direction(JointName joint)
             {
                 if (!pose.TryGetValue(joint, out var image))
@@ -192,7 +263,9 @@ namespace SpatialLauncher.SpatialWindows
                     ok = false;
                     return Vector3.forward;
                 }
-                return camera.ViewportPointToRay(ImageToViewport(image, Config)).direction;
+                if (filters != null)
+                    image = filters[(int)joint].Filter(image, time, config.jointMinCutoff, config.jointBeta, config.jointDerivativeCutoff);
+                return camera.ViewportPointToRay(ImageToViewport(image, config)).direction;
             }
             directions.Wrist = Direction(JointName.Wrist);
             directions.ThumbTip = Direction(JointName.ThumbTip);
@@ -205,6 +278,24 @@ namespace SpatialLauncher.SpatialWindows
             directions.LittleMCP = Direction(JointName.LittleMCP);
             directions.LittleTip = Direction(JointName.LittleTip);
             return ok;
+        }
+
+        // Where a hand is in the image, for matching identities: between the wrist and the middle knuckle.
+        static Vector2 PalmImagePoint(Dictionary<JointName, Vector2> pose)
+        {
+            if (pose == null || !pose.TryGetValue(JointName.Wrist, out var wrist)) return new Vector2(0.5f, 0.5f);
+            return pose.TryGetValue(JointName.MiddleMCP, out var middle) ? (wrist + middle) * 0.5f : wrist;
+        }
+
+        static System.Reflection.FieldInfo maxHandCountField;
+
+        // HoloKit keeps its Max Hand Count private; read it for the status line.
+        static int MaxHandsOf(HandTrackingManager tracking)
+        {
+            if (tracking == null) return 0;
+            maxHandCountField ??= typeof(HandTrackingManager).GetField("m_MaxHandCount",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            return maxHandCountField != null ? System.Convert.ToInt32(maxHandCountField.GetValue(tracking)) : 0;
         }
 
         static bool TryGetJoints(Dictionary<JointName, Vector3> pose, out HandJoints joints)
@@ -323,6 +414,12 @@ namespace SpatialLauncher.SpatialWindows
         public bool SceneDepth;
         /// <summary>Where the last mapped hand's depth came from: "LiDAR", "hand size", or "-" for none this frame.</summary>
         public string DepthPath;
+        /// <summary>Vision runs on every this-many-th ARKit frame.</summary>
+        public int VisionFrameInterval;
+        /// <summary>HoloKit's Max Hand Count (1 or 2; 0 if unknown).</summary>
+        public int MaxHands;
+        /// <summary>The 2D joints are one-euro filtered.</summary>
+        public bool Smoothing2D;
 
         /// <summary>Hand tracking runs: the manager is assigned and enabled, and its detector was created.</summary>
         public bool Started => TrackingFound && TrackingEnabled && DetectorCreated;

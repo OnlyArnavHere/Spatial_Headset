@@ -4,6 +4,7 @@ using HoloKit;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 
 namespace SpatialLauncher.SpatialWindows
 {
@@ -24,12 +25,19 @@ namespace SpatialLauncher.SpatialWindows
         public string Passthrough;
         public int Frame;
         public float Fps;
+        /// <summary>Vision results per second, measured.</summary>
+        public float VisionHz;
+        /// <summary>ARKit's camera format now ("1920x1440 @ 60 fps"), or null when unknown.</summary>
+        public string CameraFormat;
+        /// <summary>The camera formats this phone offers, or null when unknown.</summary>
+        public List<string> CameraFormats;
     }
 
     /// <summary>
     /// Status lines on screen, so the device can be checked without Xcode: render mode, AR session, whether HoloKit's hand
-    /// tracking started (and why not), AR frames, Vision requests, hands seen and tracked, where hand depth comes from,
-    /// the window input, stereo passthrough, and the frame count. Shown by default on the device (hidden in the editor,
+    /// tracking started (and why not), AR frames, Vision requests and rate, hands seen and tracked, where hand depth comes
+    /// from, ARKit's camera format and the formats the phone offers, the window input, stereo passthrough, and the frame
+    /// count. Shown by default on the device (hidden in the editor,
     /// F3 there); a three-finger tap toggles it. In Stereo it is drawn inside each eye's viewport, so it reads in the
     /// headset (IMGUI across the whole screen would be split between the eyes).
     /// </summary>
@@ -56,6 +64,10 @@ namespace SpatialLauncher.SpatialWindows
         WindowManager manager;
         HoloKitCameraManager holoKit;
         StereoPassthrough passthrough;
+        ARCameraManager cameraManager;
+        List<string> cameraFormats;
+        int visionRequestsAt;
+        float visionTimeAt, visionHz;
         float nextText, fps;
         bool threeFingers;
         GUIStyle style;
@@ -72,6 +84,36 @@ namespace SpatialLauncher.SpatialWindows
             deviceSource = FindFirstObjectByType<HoloKitHandSource>();
             holoKit = FindFirstObjectByType<HoloKitCameraManager>();
             passthrough = GetComponent<StereoPassthrough>();
+            cameraManager = FindFirstObjectByType<ARCameraManager>();
+        }
+
+        /// <summary>A camera format as the status line shows it.</summary>
+        public static string FormatName(XRCameraConfiguration configuration) =>
+            $"{configuration.width}x{configuration.height}" + (configuration.framerate.HasValue ? $" @ {configuration.framerate.Value} fps" : "");
+
+        // The formats don't change while the app runs: read them once the camera reports some.
+        List<string> CameraFormats()
+        {
+            if (cameraFormats != null || cameraManager == null || cameraManager.subsystem == null || !cameraManager.subsystem.running) return cameraFormats;
+            using (var configurations = cameraManager.GetConfigurations(Unity.Collections.Allocator.Temp))
+            {
+                if (!configurations.IsCreated || configurations.Length == 0) return null;
+                cameraFormats = new List<string>();
+                foreach (var configuration in configurations) cameraFormats.Add(FormatName(configuration));
+            }
+            return cameraFormats;
+        }
+
+        // Vision results per second over the last second or so.
+        void MeasureVision()
+        {
+            if (deviceSource == null) return;
+            int requests = deviceSource.Status.VisionRequests;
+            float now = Time.unscaledTime;
+            if (now - visionTimeAt < 1f) return;
+            if (visionTimeAt > 0f && requests >= visionRequestsAt) visionHz = (requests - visionRequestsAt) / (now - visionTimeAt);
+            visionRequestsAt = requests;
+            visionTimeAt = now;
         }
 
         void Update()
@@ -82,6 +124,7 @@ namespace SpatialLauncher.SpatialWindows
             var keyboard = Keyboard.current;
             if (keyboard != null && !KeyboardShortcuts.Blocked && keyboard[toggleKey].wasPressedThisFrame) Visible = !Visible;
             if (ThreeFingerTap()) Visible = !Visible;
+            MeasureVision();
 
             if (Visible && Time.unscaledTime >= nextText)
             {
@@ -108,12 +151,16 @@ namespace SpatialLauncher.SpatialWindows
             var s = new StatusReading
             {
                 Mode = holoKit == null ? "no HoloKit" : holoKit.ScreenRenderMode == ScreenRenderMode.Stereo ? "Stereo" : "Mono",
-                Session = ARSession.state + (ARSession.notTrackingReason != UnityEngine.XR.ARSubsystems.NotTrackingReason.None
+                Session = ARSession.state + (ARSession.notTrackingReason != NotTrackingReason.None
                     ? $" ({ARSession.notTrackingReason})" : ""),
                 Input = manager != null ? manager.ActiveInputName : "none",
                 Passthrough = passthrough != null ? passthrough.Status : "not in scene",
                 Frame = Time.frameCount,
                 Fps = fps,
+                VisionHz = visionHz,
+                CameraFormat = cameraManager != null && cameraManager.currentConfiguration.HasValue
+                    ? FormatName(cameraManager.currentConfiguration.Value) : null,
+                CameraFormats = CameraFormats(),
             };
             var source = hands != null ? hands.HandSource : null;
             s.HandSource = source != null ? source.GetType().Name : "none";
@@ -150,15 +197,26 @@ namespace SpatialLauncher.SpatialWindows
                 text.AppendLine($"Hand tracking started: {YesNo(h.Started)}{(h.Started ? "" : " - " + h.NotStartedReason)}");
                 text.AppendLine($"Vision requests: {h.VisionRequests}   hands seen: {h.HandsSeen}" +
                                 $"{(h.HandsRejected > 0 ? $" ({h.HandsRejected} rejected)" : "")}");
-                text.AppendLine($"Depth: {h.DepthPath ?? "-"}   LiDAR: {YesNo(h.SceneDepth)}");
+                text.AppendLine($"Vision: {EveryNthFrame(h.VisionFrameInterval)}, {s.VisionHz:0.0} Hz   max hands: {h.MaxHands}");
+                text.AppendLine($"Depth: {h.DepthPath ?? "-"}   LiDAR: {YesNo(h.SceneDepth)}   2D smoothing: {(h.Smoothing2D ? "on" : "off")}");
             }
             else text.AppendLine($"Hand source: {s.HandSource} (no device hand tracking)");
             text.AppendLine($"Hands tracked: left {Hand(s.LeftTracked, s.LeftOnWindow, s.LeftPaused)}, " +
                             $"right {Hand(s.RightTracked, s.RightOnWindow, s.RightPaused)}");
             text.AppendLine($"Input: {s.Input}{(s.HandInputActive ? "" : " (hand input off)")}");
-            text.Append($"Passthrough: {s.Passthrough}");
+            text.AppendLine($"Passthrough: {s.Passthrough}");
+            text.Append($"Camera: {s.CameraFormat ?? "unknown"}");
+            if (s.CameraFormats != null && s.CameraFormats.Count > 0)
+            {
+                // Three formats per line, so the list fits an eye's half of the screen.
+                text.Append($"\nFormats ({s.CameraFormats.Count}):");
+                for (int i = 0; i < s.CameraFormats.Count; i++)
+                    text.Append(i % 3 == 0 ? "\n  " : ",  ").Append(s.CameraFormats[i]);
+            }
             return text.ToString();
         }
+
+        static string EveryNthFrame(int n) => n switch { 1 => "every frame", 2 => "every 2nd frame", 3 => "every 3rd frame", _ => $"every {n}th frame" };
 
         /// <summary>
         /// Where to draw the text (IMGUI rects, top-left origin): once at the top left of the screen, or in Stereo once at

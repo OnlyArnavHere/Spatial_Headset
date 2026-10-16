@@ -57,6 +57,22 @@ namespace SpatialLauncher.SpatialWindows
         public bool crossSweepHide = true;
         /// <summary>Shows hand state and gesture recognizer outputs on screen, for tuning thresholds.</summary>
         public bool debugOverlay;
+        /// <summary>
+        /// Apple Vision looks for hands on every this-many-th camera frame, 1..3 (about 60, 30 or 20 Hz at ARKit's 60
+        /// fps). More often follows hands more closely and heats the phone more.
+        /// </summary>
+        public int visionFrameInterval = HoloKitHandSource.DefaultVisionFrameInterval;
+
+        /// <summary>Settings > Hands > Tracking rate: the choices, in order, and what each one costs in heat.</summary>
+        public static readonly int[] VisionFrameIntervals = { 3, 2, 1 };
+        public static readonly string[] VisionRateLabels = { "20 Hz", "30 Hz", "60 Hz" };
+
+        public static string HeatNote(int interval) => interval switch
+        {
+            1 => "Every frame: hottest. Short sessions only; watch About.",
+            2 => "Warmer than 20 Hz; watch Thermal state in About.",
+            _ => "Coolest; hands lag a little more.",
+        };
     }
 
     [Serializable]

@@ -205,6 +205,10 @@ namespace SpatialLauncher.SpatialWindows
             Toggle("Two-hand stretch", () => S.hands.twoHandStretch, v => SettingsStore.Update(x => x.hands.twoHandStretch = v));
             Toggle("Cross to hide all", () => S.hands.crossSweepHide, v => SettingsStore.Update(x => x.hands.crossSweepHide = v));
             Toggle("Debug overlay", () => S.hands.debugOverlay, v => SettingsStore.Update(x => x.hands.debugOverlay = v));
+            Choice("Tracking rate", HandSettings.VisionRateLabels,
+                () => Array.IndexOf(HandSettings.VisionFrameIntervals, S.hands.visionFrameInterval),
+                i => SettingsStore.Update(x => x.hands.visionFrameInterval = HandSettings.VisionFrameIntervals[i]));
+            Value("Heat", () => HandSettings.HeatNote(S.hands.visionFrameInterval));
         }
 
         void BuildWindows(Section s)

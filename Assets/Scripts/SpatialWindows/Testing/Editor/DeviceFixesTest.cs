@@ -11,7 +11,9 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     /// plane) and its pipeline status; the status HUD's lines and its layout (once, or once per eye in Stereo); and
     /// StereoPassthrough's rules and geometry (the whole camera image from AR Foundation's display matrix, the plane
     /// matching the camera's frustum). Run in the editor test scene; in DeviceMain it also switches HoloKit to Stereo and
-    /// checks the HUD is drawn in each eye and passthrough reacts. Results use a [DeviceFixesTest] prefix.
+    /// checks the HUD is drawn in each eye and passthrough reacts. Also: the one-euro filter on 2D joints, two-hand
+    /// identity matching, the tracking rate setting (Settings > Hands, with its heat note) and the camera format lines.
+    /// Results use a [DeviceFixesTest] prefix.
     /// </summary>
     static class DeviceFixesTest
     {
@@ -38,7 +40,11 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 CheckLayout();
                 CheckPassthroughRules();
                 CheckPassthroughGeometry();
+                CheckOneEuroFilter();
+                CheckIdentityTracking();
+                CheckCameraFormatLines();
                 yield return CheckHandSourceStatus();
+                yield return CheckTrackingRateSetting();
                 yield return CheckScene();
             }
             finally
@@ -194,6 +200,189 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             }
         }
 
+        static void CheckOneEuroFilter()
+        {
+            const float rate = 30f, minCutoff = 1.5f, beta = 8f, dCutoff = 1f;
+            var filter = new OneEuroFilter2D();
+            var first = filter.Filter(new Vector2(0.4f, 0.6f), 1.0, minCutoff, beta, dCutoff);
+            var repeat = filter.Filter(new Vector2(0.9f, 0.1f), 1.0, minCutoff, beta, dCutoff);
+            Check(first == new Vector2(0.4f, 0.6f) && repeat == first,
+                "the first joint sample passes through, and a repeated Vision result (same time) doesn't move it");
+
+            // A still hand with Vision's jitter (about 1% of the image): the output is much steadier.
+            filter.Reset();
+            var random = new System.Random(7);
+            float inSpread = 0f, outSpread = 0f;
+            var centre = new Vector2(0.5f, 0.5f);
+            for (int i = 0; i < 90; i++)
+            {
+                var noisy = centre + new Vector2((float)random.NextDouble() - 0.5f, (float)random.NextDouble() - 0.5f) * 0.02f;
+                var output = filter.Filter(noisy, i / rate, minCutoff, beta, dCutoff);
+                if (i < 30) continue;
+                inSpread += (noisy - centre).sqrMagnitude;
+                outSpread += (output - centre).sqrMagnitude;
+            }
+            float ratio = Mathf.Sqrt(outSpread / inSpread);
+            Check(ratio < 0.4f, $"a still hand's joint jitter is cut to {ratio:P0} of Vision's");
+
+            // A fast sweep (half the image per second): speed raises the cutoff, so it lags less than a fixed filter.
+            float Lag(float b)
+            {
+                var f = new OneEuroFilter2D();
+                Vector2 output = default, target = default;
+                for (int i = 0; i <= 15; i++)
+                {
+                    target = new Vector2(0.2f + 0.5f * i / rate, 0.5f);
+                    output = f.Filter(target, i / rate, minCutoff, b, dCutoff);
+                }
+                return target.x - output.x;
+            }
+            float lag = Lag(beta), fixedLag = Lag(0f);
+            Check(lag < fixedLag * 0.6f && lag < 0.03f,
+                $"a fast hand lags {lag:F3} of the image ({fixedLag:F3} without the speed term)");
+        }
+
+        static void CheckIdentityTracking()
+        {
+            var tracker = new HandIdentityTracker { MaxJump = 0.2f, Memory = 0.4f, SwitchAfter = 6 };
+            var result = new List<Handedness>();
+            double t = 0;
+            Handedness One(Vector2 at, int chirality)
+            {
+                t += 1.0 / 30.0;
+                tracker.Update(new[] { new HandIdentityTracker.Observation(at, chirality) }, t, result);
+                return result[0];
+            }
+
+            bool steady = One(new Vector2(0.7f, 0.5f), 1) == Handedness.Right && tracker.Started(Handedness.Right);
+            for (int i = 0; i < 4; i++) steady &= One(new Vector2(0.7f, 0.5f), -1) == Handedness.Right && !tracker.Started(Handedness.Right);
+            Check(steady, "a hand keeps its identity when Vision calls it the other side for a few results");
+            int switchedAt = -1;
+            bool stays = true;
+            for (int i = 0; i < 4; i++)
+            {
+                bool left = One(new Vector2(0.7f, 0.5f), -1) == Handedness.Left;
+                if (left && switchedAt < 0 && tracker.Started(Handedness.Left)) switchedAt = i;
+                else if (switchedAt >= 0) stays &= left && !tracker.Started(Handedness.Left);
+            }
+            Check(switchedAt == 1 && stays,
+                $"but follows Vision on its 6th disagreement in a row, then stays (switched at {switchedAt + 5})");
+
+            tracker.Reset();
+            Check(One(new Vector2(0.25f, 0.5f), 0) == Handedness.Left && One(new Vector2(0.27f, 0.5f), 0) == Handedness.Left,
+                "a new hand Vision can't place takes the side of the image it is on");
+            t += 1.0; // lost for longer than the memory
+            Check(One(new Vector2(0.8f, 0.5f), 1) == Handedness.Right && tracker.Started(Handedness.Right) && !tracker.IsActive(Handedness.Left),
+                "after the memory runs out, a hand elsewhere starts a fresh track");
+
+            // Two hands crossing, listed in Vision's order (which swaps every result), with no side from Vision.
+            tracker.Reset();
+            bool crossed = true;
+            for (int i = 0; i <= 20; i++)
+            {
+                t += 1.0 / 30.0;
+                var a = new Vector2(0.3f + 0.02f * i, 0.4f); // starts on the left, moves right
+                var b = new Vector2(0.7f - 0.02f * i, 0.6f); // starts on the right, moves left
+                bool swap = i % 2 == 1;
+                var observations = swap
+                    ? new[] { new HandIdentityTracker.Observation(b, 0), new HandIdentityTracker.Observation(a, 0) }
+                    : new[] { new HandIdentityTracker.Observation(a, 0), new HandIdentityTracker.Observation(b, 0) };
+                tracker.Update(observations, t, result);
+                var aHand = swap ? result[1] : result[0];
+                var bHand = swap ? result[0] : result[1];
+                crossed &= aHand == Handedness.Left && bHand == Handedness.Right && (i == 0 || !tracker.Started(Handedness.Left));
+            }
+            Check(crossed, "two hands keep their identities while crossing, whatever order Vision lists them in");
+
+            tracker.Reset();
+            t += 1.0 / 30.0;
+            tracker.Update(new[] { new HandIdentityTracker.Observation(new Vector2(0.4f, 0.5f), 1),
+                new HandIdentityTracker.Observation(new Vector2(0.6f, 0.5f), -1) }, t, result);
+            Check(result[0] == Handedness.Right && result[1] == Handedness.Left,
+                "new hands take Vision's side when it gives one, even on the 'wrong' side of the image");
+        }
+
+        static void CheckCameraFormatLines()
+        {
+            Check(DeviceStatusHud.FormatName(new UnityEngine.XR.ARSubsystems.XRCameraConfiguration(System.IntPtr.Zero, new Vector2Int(1920, 1440), 60))
+                  == "1920x1440 @ 60 fps", "a camera format reads as width x height @ fps");
+            var reading = new StatusReading
+            {
+                Mode = "Mono", HasDevicePipeline = true, Passthrough = "off", Input = "HandWindowInput", HandInputActive = true,
+                VisionHz = 29.6f, CameraFormat = "1920x1440 @ 60 fps",
+                CameraFormats = new List<string> { "1920x1440 @ 60 fps", "1920x1080 @ 60 fps", "1280x720 @ 60 fps", "3840x2160 @ 30 fps" },
+                Hands = new HandTrackingStatus { TrackingFound = true, TrackingEnabled = true, DetectorCreated = true, VisionFrameInterval = 2, MaxHands = 2, Smoothing2D = true },
+            };
+            string text = DeviceStatusHud.Describe(reading);
+            Check(text.Contains("Vision: every 2nd frame, 29.6 Hz   max hands: 2") && text.Contains("2D smoothing: on"),
+                $"the HUD shows Vision's frame interval, measured rate and hand count (\"{OneLine(text)}\")");
+            Check(text.Contains("Camera: 1920x1440 @ 60 fps") && text.Contains("Formats (4):") && text.Contains("3840x2160 @ 30 fps"),
+                "and ARKit's current camera format with the list the phone offers");
+        }
+
+        static IEnumerator CheckTrackingRateSetting()
+        {
+            var launcher = Object.FindFirstObjectByType<LauncherWindow>();
+            if (launcher == null)
+            {
+                Check(false, "scene has a LauncherWindow");
+                yield break;
+            }
+            int before = SettingsStore.Current.hands.visionFrameInterval;
+            Check(before >= 1 && before <= 3 && new HandSettings().visionFrameInterval == 2,
+                $"the tracking rate setting is in range (every {before} frames) and defaults to every 2nd frame");
+
+            // A device hand source under the launcher, as in DeviceMain, follows the setting.
+            var existing = launcher.GetComponentInChildren<HoloKitHandSource>(true);
+            var temporary = existing == null ? new GameObject("DeviceFixesTest Device Hands") : null;
+            if (temporary != null) temporary.transform.SetParent(launcher.transform, false);
+            var device = existing != null ? existing : temporary.AddComponent<HoloKitHandSource>();
+            var window = launcher.OpenSettings();
+            try
+            {
+                yield return 0.3f;
+                var content = Object.FindFirstObjectByType<SettingsContent>();
+                content.Select("Hands");
+                yield return 0.3f;
+                var twenty = content.Control("Hands", "Tracking rate", "20 Hz");
+                var sixty = content.Control("Hands", "Tracking rate", "60 Hz");
+                Check(twenty != null && sixty != null && content.ValueText("Hands", "Heat") != null,
+                    "Settings > Hands has a Tracking rate choice and a Heat note");
+                if (twenty == null || sixty == null) yield break;
+
+                sixty.Press(sixty.transform.position);
+                sixty.Release(true);
+                yield return 0.4f;
+                string heat = content.ValueText("Hands", "Heat");
+                Check(SettingsStore.Current.hands.visionFrameInterval == 1 && device.VisionFrameInterval == 1 && heat.Contains("hottest"),
+                    $"60 Hz runs Vision on every frame and warns about heat (\"{heat}\")");
+                twenty.Press(twenty.transform.position);
+                twenty.Release(true);
+                yield return 0.4f;
+                heat = content.ValueText("Hands", "Heat");
+                Check(SettingsStore.Current.hands.visionFrameInterval == 3 && device.VisionFrameInterval == 3 && device.Status.VisionFrameInterval == 3 &&
+                      heat.Contains("Coolest"), $"20 Hz runs it on every 3rd frame (\"{heat}\")");
+
+                // The two new rows fit inside the window with the rest of Hands.
+                var value = FindDeep(content.transform, "Row Heat").Find("Value");
+                float bottom = content.transform.InverseTransformPoint(value.position).y - 0.018f; // half a row
+                Check(bottom >= -SettingsContent.PreferredSize.y * 0.5f, $"the Heat row fits in the Settings window ({bottom:F3} m from the middle)");
+            }
+            finally
+            {
+                SettingsStore.Update(x => x.hands.visionFrameInterval = before);
+                if (window != null) launcher.Settings.Manager.Close(window);
+                if (temporary != null) Object.Destroy(temporary);
+            }
+        }
+
+        static Transform FindDeep(Transform root, string name)
+        {
+            foreach (var child in root.GetComponentsInChildren<Transform>(true))
+                if (child.name == name) return child;
+            return null;
+        }
+
         static IEnumerator CheckHandSourceStatus()
         {
             var go = new GameObject("DeviceFixesTest Hands");
@@ -235,6 +424,12 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                         $"without HoloKit, passthrough does nothing ({passthrough.Status})");
                     yield break;
                 }
+
+                var deviceHands = Object.FindFirstObjectByType<HoloKitHandSource>();
+                Check(deviceHands != null && deviceHands.Status.MaxHands == 2 &&
+                      deviceHands.Status.VisionFrameInterval == SettingsStore.Current.hands.visionFrameInterval,
+                    $"DeviceMain tracks two hands at the Settings rate (max hands {deviceHands?.Status.MaxHands}, " +
+                    $"every {deviceHands?.Status.VisionFrameInterval} frames)");
 
                 // DeviceMain: switch HoloKit to Stereo and back.
                 holoKit.ScreenRenderMode = ScreenRenderMode.Stereo;

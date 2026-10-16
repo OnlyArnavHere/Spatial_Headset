@@ -237,8 +237,15 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 trackingSettings.FindProperty("m_HandJointsVisibility").boolValue = false; // debug spheres would show in the headset
                 trackingSettings.ApplyModifiedPropertiesWithoutUndo();
                 changes++;
-                Debug.Log("[DeviceSettings] DeviceMain: added Hand Tracking (HoloKit HandTrackingManager, one hand, joints hidden)");
+                Debug.Log("[DeviceSettings] DeviceMain: added Hand Tracking (HoloKit HandTrackingManager, joints hidden)");
             }
+
+            // Two hands: two-hand stretch and cross-to-hide need both.
+            var trackingSettings2 = new SerializedObject(tracking);
+            var maxHands = trackingSettings2.FindProperty("m_MaxHandCount");
+            Change("DeviceMain HandTrackingManager max hand count (two-hand gestures)", maxHands.intValue, (int)HoloKit.iOS.MaxHandCount.Both,
+                () => maxHands.intValue = (int)HoloKit.iOS.MaxHandCount.Both);
+            trackingSettings2.ApplyModifiedPropertiesWithoutUndo();
 
             var source = hands.GetComponent<HoloKitHandSource>();
             if (source == null)

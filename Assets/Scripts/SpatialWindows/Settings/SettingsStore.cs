@@ -103,6 +103,8 @@ namespace SpatialLauncher.SpatialWindows
                 Mathf.Clamp(s.display.viewportOffsetMm.y, -10f, 10f));
             s.hands.sensitivity = Mathf.Clamp(s.hands.sensitivity, 0.5f, 2f);
             if (!Enum.IsDefined(typeof(Handedness), s.hands.dominantHand)) s.hands.dominantHand = Handedness.Right;
+            if (s.hands.visionFrameInterval < 1 || s.hands.visionFrameInterval > 3)
+                s.hands.visionFrameInterval = HoloKitHandSource.DefaultVisionFrameInterval;
             s.windows.defaultCurve = Mathf.Clamp01(s.windows.defaultCurve);
             if (!Enum.IsDefined(typeof(AspectPreset), s.windows.defaultAspect)) s.windows.defaultAspect = AspectPreset.Free;
             if (!Enum.IsDefined(typeof(ImmersiveEnvironment), s.immersion.environment)) s.immersion.environment = ImmersiveEnvironment.Void;
