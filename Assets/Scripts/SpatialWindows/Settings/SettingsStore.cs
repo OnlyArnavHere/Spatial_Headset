@@ -101,6 +101,7 @@ namespace SpatialLauncher.SpatialWindows
             s.display.ipdMm = Mathf.Clamp(s.display.ipdMm, 54f, 74f);
             s.display.viewportOffsetMm = new Vector2(Mathf.Clamp(s.display.viewportOffsetMm.x, -10f, 10f),
                 Mathf.Clamp(s.display.viewportOffsetMm.y, -10f, 10f));
+            s.display.passthroughZoom = StereoPassthrough.ClampZoom(s.display.passthroughZoom);
             s.hands.sensitivity = Mathf.Clamp(s.hands.sensitivity, 0.5f, 2f);
             if (!Enum.IsDefined(typeof(Handedness), s.hands.dominantHand)) s.hands.dominantHand = Handedness.Right;
             if (s.hands.visionFrameInterval < 1 || s.hands.visionFrameInterval > 3)

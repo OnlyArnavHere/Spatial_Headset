@@ -6,7 +6,7 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// Puts <see cref="SettingsStore.Current"/> into effect and keeps it saved. On start and after every change it
     /// applies: window defaults (curve, aspect) to the <see cref="WindowManager"/>; hand sensitivity, the pinch toggle
-    /// and the dominant hand to the hand input; the hand tracking rate to <see cref="HoloKitHandSource"/>; the environment (and, if asked, the level) to the
+    /// and the dominant hand to the hand input; the hand tracking rate to <see cref="HoloKitHandSource"/>; the passthrough zoom to <see cref="StereoPassthrough"/>; the environment (and, if asked, the level) to the
     /// <see cref="ImmersionController"/>, whose own changes are recorded back; the phone's brightness; and IPD and
     /// viewport offsets to HoloKit's stereo cameras. Changes are saved half a second after the last one (and when the
     /// app pauses or quits), so dragging a slider doesn't write the file every frame.
@@ -122,6 +122,7 @@ namespace SpatialLauncher.SpatialWindows
                 gestures.CrossSweep.Enabled = s.hands.crossSweepHide;
             }
             if (TryGetComponent<GestureDebugOverlay>(out var overlay)) overlay.Visible = s.hands.debugOverlay;
+            if (TryGetComponent<StereoPassthrough>(out var passthrough)) passthrough.Zoom = s.display.passthroughZoom;
 
             if (immersion != null && !applying && immersion.Environment != s.immersion.environment)
             {

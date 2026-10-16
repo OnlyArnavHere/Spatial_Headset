@@ -42,6 +42,38 @@ namespace SpatialLauncher.SpatialWindows
         public float ipdMm = 64f;
         /// <summary>Shift of both stereo viewports on the screen, millimetres, for a printed helmet's lens position.</summary>
         public Vector2 viewportOffsetMm;
+        /// <summary>
+        /// Size of the camera image (passthrough), 0.5..1.5: 1 matches the camera's field of view (real-world scale),
+        /// less shrinks it with black around it, more magnifies it. Windows and hand tracking don't change.
+        /// </summary>
+        public float passthroughZoom = 1f;
+
+        /// <summary>Settings > Display > Zoom preset: the choices, in order, and their names.</summary>
+        public static readonly float[] ZoomPresets = { 0.7f, 1f, 1.3f };
+        public static readonly string[] ZoomPresetNames = { "Wide", "Normal", "Close" };
+
+        /// <summary>The preset a zoom is at, or -1.</summary>
+        public static int ZoomPresetIndex(float zoom)
+        {
+            for (int i = 0; i < ZoomPresets.Length; i++)
+                if (Mathf.Abs(zoom - ZoomPresets[i]) < 0.005f) return i;
+            return -1;
+        }
+
+        /// <summary>The quick toggle's next zoom: the next larger preset, back to the first after the last.</summary>
+        public static float NextZoomPreset(float zoom)
+        {
+            foreach (float preset in ZoomPresets)
+                if (preset > zoom + 0.005f) return preset;
+            return ZoomPresets[0];
+        }
+
+        /// <summary>"Wide (0.70x)", or just "0.85x" between presets.</summary>
+        public static string ZoomLabel(float zoom)
+        {
+            int preset = ZoomPresetIndex(zoom);
+            return preset >= 0 ? $"{ZoomPresetNames[preset]} ({zoom:0.00}x)" : $"{zoom:0.00}x";
+        }
     }
 
     [Serializable]

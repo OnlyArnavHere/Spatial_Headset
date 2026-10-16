@@ -31,12 +31,23 @@ namespace SpatialLauncher.SpatialWindows
         public string CameraFormat;
         /// <summary>The camera formats this phone offers, or null when unknown.</summary>
         public List<string> CameraFormats;
+        /// <summary>The camera image's field of view from ARKit's intrinsics (degrees along its width and height), or null.</summary>
+        public Vector2? CameraFov;
+        /// <summary>Passthrough zoom (1 = real size).</summary>
+        public float Zoom;
+        /// <summary>Degrees across and up the screen that the shown passthrough image spans, or null while it isn't shown.</summary>
+        public Vector2? ImageFov;
+        /// <summary>Degrees the whole camera image spans at zoom 1, from the AR camera's projection, or null.</summary>
+        public Vector2? FullImageFov;
+        /// <summary>Degrees across and up that one eye (Stereo) or the screen (Mono) shows, or null.</summary>
+        public Vector2? ViewFov;
     }
 
     /// <summary>
     /// Status lines on screen, so the device can be checked without Xcode: render mode, AR session, whether HoloKit's hand
     /// tracking started (and why not), AR frames, Vision requests and rate, hands seen and tracked, where hand depth comes
-    /// from, ARKit's camera format and the formats the phone offers, the window input, stereo passthrough, and the frame
+    /// from, ARKit's camera format, its field of view and the formats the phone offers, the passthrough zoom with the
+    /// angles the image and an eye's view span, the window input, stereo passthrough, and the frame
     /// count. Shown by default on the device (hidden in the editor,
     /// F3 there); a three-finger tap toggles it. In Stereo it is drawn inside each eye's viewport, so it reads in the
     /// headset (IMGUI across the whole screen would be split between the eyes).
@@ -161,6 +172,11 @@ namespace SpatialLauncher.SpatialWindows
                 CameraFormat = cameraManager != null && cameraManager.currentConfiguration.HasValue
                     ? FormatName(cameraManager.currentConfiguration.Value) : null,
                 CameraFormats = CameraFormats(),
+                CameraFov = IntrinsicsFov(),
+                Zoom = passthrough != null ? passthrough.Zoom : SettingsStore.Current.display.passthroughZoom,
+                ImageFov = passthrough != null ? passthrough.ImageFov : null,
+                FullImageFov = passthrough != null ? passthrough.CameraFov : null,
+                ViewFov = ViewFov(holoKit != null && holoKit.ScreenRenderMode == ScreenRenderMode.Stereo),
             };
             var source = hands != null ? hands.HandSource : null;
             s.HandSource = source != null ? source.GetType().Name : "none";
@@ -205,7 +221,15 @@ namespace SpatialLauncher.SpatialWindows
                             $"right {Hand(s.RightTracked, s.RightOnWindow, s.RightPaused)}");
             text.AppendLine($"Input: {s.Input}{(s.HandInputActive ? "" : " (hand input off)")}");
             text.AppendLine($"Passthrough: {s.Passthrough}");
-            text.Append($"Camera: {s.CameraFormat ?? "unknown"}");
+            // The zoom, what the image spans now, and what one eye (or the screen) shows: below "fits at", all of the
+            // camera image is in view.
+            text.Append($"Zoom: {DisplaySettings.ZoomLabel(s.Zoom)}   image {Degrees(s.ImageFov)}   " +
+                        $"{(s.Mode == "Stereo" ? "eye" : "screen")} {Degrees(s.ViewFov)}");
+            if (s.FullImageFov is Vector2 full && s.ViewFov is Vector2 view && full.x > 0f && full.y > 0f)
+                text.Append($"   whole image fits at {StereoPassthrough.FitZoom(full, view):0.00}x");
+            // ARKit's intrinsics, and the plane's own angles at 1x (they should agree: 1x is the camera's real size).
+            text.Append($"\nCamera: {s.CameraFormat ?? "unknown"}   FOV {Degrees(s.CameraFov)}");
+            if (s.FullImageFov.HasValue) text.Append($" (plane at 1x: {Degrees(s.FullImageFov)})");
             if (s.CameraFormats != null && s.CameraFormats.Count > 0)
             {
                 // Three formats per line, so the list fits an eye's half of the screen.
@@ -214,6 +238,31 @@ namespace SpatialLauncher.SpatialWindows
                     text.Append(i % 3 == 0 ? "\n  " : ",  ").Append(s.CameraFormats[i]);
             }
             return text.ToString();
+        }
+
+        static string Degrees(Vector2? fov) => fov is Vector2 f && f.x > 0f && f.y > 0f ? $"{f.x:0.0}° x {f.y:0.0}°" : "-";
+
+        // The camera image's field of view, from ARKit's focal length and principal point for the current format.
+        Vector2? IntrinsicsFov()
+        {
+            if (cameraManager == null || cameraManager.subsystem == null || !cameraManager.subsystem.running) return null;
+            if (!cameraManager.TryGetIntrinsics(out var k)) return null;
+            var fov = StereoPassthrough.IntrinsicsFov(k.focalLength, k.principalPoint, k.resolution);
+            return fov.x > 0f ? fov : (Vector2?)null;
+        }
+
+        // What one eye (HoloKit's left eye camera) or, in Mono, the AR camera shows.
+        Vector2? ViewFov(bool stereo)
+        {
+            Camera view = null;
+            if (stereo)
+            {
+                foreach (var camera in Camera.allCameras)
+                    if (camera.cullingMask != 0 && camera.rect.width < 0.99f && (view == null || camera.rect.x < view.rect.x))
+                        view = camera;
+            }
+            else if (cameraManager != null) view = cameraManager.GetComponent<Camera>();
+            return view != null ? StereoPassthrough.ProjectionFov(view.projectionMatrix) : (Vector2?)null;
         }
 
         static string EveryNthFrame(int n) => n switch { 1 => "every frame", 2 => "every 2nd frame", 3 => "every 3rd frame", _ => $"every {n}th frame" };
