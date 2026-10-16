@@ -161,6 +161,10 @@ namespace SpatialLauncher.SpatialWindows.Editor
             var ios = NamedBuildTarget.iOS;
             Expect(!string.IsNullOrWhiteSpace(PlayerSettings.iOS.cameraUsageDescription),
                 $"Camera Usage Description is set (\"{PlayerSettings.iOS.cameraUsageDescription}\")");
+            Expect(!string.IsNullOrWhiteSpace(PlayerSettings.iOS.microphoneUsageDescription),
+                $"Microphone Usage Description is set for voice typing (\"{PlayerSettings.iOS.microphoneUsageDescription}\")");
+            Expect(System.IO.File.Exists("Assets/Plugins/iOS/SpatialSpeech.mm"),
+                "the voice typing plugin is in Assets/Plugins/iOS (Speech.framework and ARC are set after each build)");
 
             string bundleId = PlayerSettings.GetApplicationIdentifier(ios);
             Expect(!bundleId.StartsWith("com.unity.template"),

@@ -89,6 +89,7 @@ namespace SpatialLauncher.SpatialWindows
             if (settings.ConnectionSettings == null) settings.ConnectionSettings = connectionSettings;
             if (!TryGetComponent<GestureRecognizers>(out _)) gameObject.AddComponent<GestureRecognizers>();
             if (!TryGetComponent<GestureDebugOverlay>(out _)) gameObject.AddComponent<GestureDebugOverlay>();
+            if (!TryGetComponent<VoiceTyping>(out _)) gameObject.AddComponent<VoiceTyping>();
         }
 
         void OnEnable()

@@ -32,9 +32,12 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
         /// <summary>
         /// Finds a point on the target that is visibly front-most when seen from the viewpoint,
-        /// using the windows' drawn rectangles. Returns false if the target is fully covered.
+        /// using the windows' drawn rectangles. Returns false if the target is fully covered. With a camera, the point
+        /// must also be inside its view, so a simulated click there isn't ignored (spawn cascades can push windows
+        /// partly off screen).
         /// </summary>
-        public static bool TryFindVisiblePoint(WindowManager manager, SpatialWindow target, Vector3 viewpoint, out Vector3 worldPoint)
+        public static bool TryFindVisiblePoint(WindowManager manager, SpatialWindow target, Vector3 viewpoint, out Vector3 worldPoint,
+            Camera onScreenFor = null)
         {
             const int steps = 9;
             var visual = Visual(target);
@@ -45,6 +48,11 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 float y = Mathf.Lerp(-target.Size.y * 0.5f, target.Size.y * 0.5f + TitleBarExtent, iy / (float)steps);
                 worldPoint = visual.TransformPoint(new Vector3(x, y, 0f));
                 var ray = new Ray(viewpoint, worldPoint - viewpoint);
+                if (onScreenFor != null)
+                {
+                    var viewport = onScreenFor.WorldToViewportPoint(worldPoint);
+                    if (viewport.z <= 0f || viewport.x < 0.02f || viewport.x > 0.98f || viewport.y < 0.02f || viewport.y > 0.98f) continue;
+                }
                 if (VisualPick(manager, ray) == target)
                     return true;
             }

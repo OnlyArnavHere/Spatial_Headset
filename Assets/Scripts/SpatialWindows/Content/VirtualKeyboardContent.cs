@@ -9,7 +9,8 @@ namespace SpatialLauncher.SpatialWindows
     /// A floating QWERTY keyboard (<see cref="VirtualKeyboardLayout"/>) for laptop stream windows: a status line naming
     /// the window it types into, then five rows of keys. Each key is a <see cref="WindowButton"/>, so the mouse and a
     /// pinch both press it. Shift, Ctrl and Alt are one-shot toggles that light up and apply to the next key; tapping one
-    /// again cancels it. Character labels follow Shift.
+    /// again cancels it. Character labels follow Shift. Talk is push to talk (<see cref="VoiceTyping"/>): hold it, speak,
+    /// let go; the status line shows what is being heard.
     /// </summary>
     public class VirtualKeyboardContent : WindowContent
     {
@@ -19,6 +20,8 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color ModifierColor = new Color(0.32f, 0.34f, 0.40f);
         static readonly Color ModifierOnColor = new Color(0.16f, 0.36f, 0.95f);
         static readonly Color StatusColor = new Color(0.75f, 0.77f, 0.82f);
+        static readonly Color TalkColor = new Color(0.20f, 0.55f, 0.35f);
+        static readonly Color ListeningColor = new Color(0.85f, 0.25f, 0.25f);
 
         const float StatusHeight = 0.03f;
         const float KeyGap = 0.004f;
@@ -29,19 +32,23 @@ namespace SpatialLauncher.SpatialWindows
 
         Func<IReadOnlyList<KeyStroke>, bool> send;
         Func<RemoteStreamContent> target;
+        VoiceTyping voice;
+        Material talkMaterial;
         TextMeshPro status;
         Transform panel;
-        readonly List<(VirtualKey key, WindowButton button, TextMeshPro label, Material material)> keys =
-            new List<(VirtualKey, WindowButton, TextMeshPro, Material)>();
+        readonly List<(VirtualKey key, WindowControl button, TextMeshPro label, Material material)> keys =
+            new List<(VirtualKey, WindowControl, TextMeshPro, Material)>();
 
         /// <param name="sendStrokes">Sends what a key press means; false if there is no window to send to.</param>
         /// <param name="currentTarget">The stream window keys go to now (for the status line).</param>
+        /// <param name="voiceTyping">Voice typing for the Talk key; null leaves the key inactive.</param>
         public void Init(SpatialWindow window, Material baseMaterial, Func<IReadOnlyList<KeyStroke>, bool> sendStrokes,
-            Func<RemoteStreamContent> currentTarget)
+            Func<RemoteStreamContent> currentTarget, VoiceTyping voiceTyping = null)
         {
             Attach(window, baseMaterial);
             send = sendStrokes;
             target = currentTarget;
+            voice = voiceTyping;
 
             panel = CreateQuad("KeyboardPanel", transform, CreateMaterial(PanelColor));
             status = CreateLabel("Status", transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
@@ -52,21 +59,34 @@ namespace SpatialLauncher.SpatialWindows
             foreach (var key in VirtualKeyboardLayout.Keys)
             {
                 var material = key.Kind == VirtualKeyKind.Modifier ? CreateMaterial(ModifierColor)
+                    : key.Kind == VirtualKeyKind.Voice ? talkMaterial = CreateMaterial(TalkColor)
                     : key.Kind == VirtualKeyKind.Character ? characterMaterial : specialMaterial;
-                var button = CreateControl<WindowButton>($"Key {key.Id}", transform, material);
                 var label = CreateLabel($"KeyLabel {key.Id}", transform, key.Id == "Space" ? "Space" : key.Label, 0.18f,
                     TextAlignmentOptions.Center);
-                var pressed = key;
-                button.Clicked += () => Press(pressed);
-                keys.Add((key, button, label, material));
+                WindowControl control;
+                if (key.Kind == VirtualKeyKind.Voice)
+                {
+                    var talk = CreateControl<WindowHoldButton>($"Key {key.Id}", transform, material);
+                    talk.Pressed += () => voice?.StartListening();
+                    talk.Released += () => voice?.StopListening();
+                    control = talk;
+                }
+                else
+                {
+                    var button = CreateControl<WindowButton>($"Key {key.Id}", transform, material);
+                    var pressed = key;
+                    button.Clicked += () => Press(pressed);
+                    control = button;
+                }
+                keys.Add((key, control, label, material));
             }
             RefreshKeys();
             RefreshStatus();
             Relayout();
         }
 
-        /// <summary>The button for a key id from <see cref="VirtualKeyboardLayout"/> (e.g. "A", "Enter", "Shift").</summary>
-        public WindowButton Button(string id)
+        /// <summary>The control for a key id from <see cref="VirtualKeyboardLayout"/> (e.g. "A", "Enter", "Shift", "Talk").</summary>
+        public WindowControl Button(string id)
         {
             foreach (var entry in keys)
                 if (entry.key.Id == id) return entry.button;
@@ -94,9 +114,12 @@ namespace SpatialLauncher.SpatialWindows
         void RefreshStatus()
         {
             if (status == null) return;
+            bool listening = voice != null && voice.IsListening;
+            if (talkMaterial != null) talkMaterial.color = listening ? ListeningColor : TalkColor;
             var stream = target?.Invoke();
             string text;
-            if (stream == null) text = "Open a laptop window to type into it";
+            if (listening) text = $"{voice.Status}: {voice.Partial}";
+            else if (stream == null) text = "Open a laptop window to type into it";
             else if (stream.InputLink != null && !stream.InputLink.IsConnected) text = $"Typing into: {stream.Window.Title} (not connected)";
             else if (stream.InputLink != null && !stream.InputLink.KeyboardAllowed)
                 text = $"Typing into: {stream.Window.Title} (keyboard off: start agent.py with --input --keyboard)";

@@ -16,6 +16,8 @@ namespace SpatialLauncher.SpatialWindows
         Modifier,
         /// <summary>An empty gap in the row.</summary>
         Spacer,
+        /// <summary>Push to talk: hold it to speak (<see cref="VoiceTyping"/>).</summary>
+        Voice,
     }
 
     /// <summary>One key of the virtual keyboard.</summary>
@@ -102,7 +104,8 @@ namespace SpatialLauncher.SpatialWindows
         public static List<KeyStroke> Resolve(VirtualKey key, KeyModifiers modifiers)
         {
             var strokes = new List<KeyStroke>();
-            if (key == null || key.Kind == VirtualKeyKind.Modifier || key.Kind == VirtualKeyKind.Spacer) return strokes;
+            if (key == null || key.Kind == VirtualKeyKind.Modifier || key.Kind == VirtualKeyKind.Spacer || key.Kind == VirtualKeyKind.Voice)
+                return strokes;
 
             bool shift = (modifiers & KeyModifiers.Shift) != 0;
             bool chord = (modifiers & (KeyModifiers.Ctrl | KeyModifiers.Alt)) != 0;
@@ -137,7 +140,8 @@ namespace SpatialLauncher.SpatialWindows
                 Row(Modifier("Shift", KeyModifiers.Shift, 2.25f), Letters("zxcvbnm"), Char(",<", "Comma"), Char(".>", "Period"),
                     Char("/?", "Slash"), Special("Up", "^", 1f), Special("Delete", "Del", 1.75f)),
                 Row(Modifier("Ctrl", KeyModifiers.Ctrl, 1.5f), Modifier("Alt", KeyModifiers.Alt, 1.5f),
-                    new VirtualKey { Id = "Space", Label = " ", ShiftLabel = " ", Code = "Space", Kind = VirtualKeyKind.Character, Width = 6.25f },
+                    new VirtualKey { Id = "Space", Label = " ", ShiftLabel = " ", Code = "Space", Kind = VirtualKeyKind.Character, Width = 4.5f },
+                    new VirtualKey { Id = "Talk", Label = "Talk", ShiftLabel = "Talk", Kind = VirtualKeyKind.Voice, Width = 1.75f },
                     Special("Home", "Home", 1f), Special("End", "End", 1f),
                     Special("Left", "<", 1f), Special("Down", "v", 1f), Special("Right", ">", 1f),
                     new VirtualKey { Id = "Spacer", Kind = VirtualKeyKind.Spacer, Width = 0.75f }),

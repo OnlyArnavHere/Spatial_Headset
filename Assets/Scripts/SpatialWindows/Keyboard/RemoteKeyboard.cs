@@ -97,7 +97,7 @@ namespace SpatialLauncher.SpatialWindows
             }
 
             KeyboardContent = new GameObject().AddComponent<VirtualKeyboardContent>();
-            KeyboardContent.Init(KeyboardWindow, manager.WindowMaterial, Send, () => Target);
+            KeyboardContent.Init(KeyboardWindow, manager.WindowMaterial, Send, () => Target, GetComponent<VoiceTyping>());
             return KeyboardWindow;
         }
 
@@ -124,8 +124,10 @@ namespace SpatialLauncher.SpatialWindows
 
             var sink = Target.KeyboardSink;
             bool chord = keyboard.ctrlKey.isPressed || keyboard.altKey.isPressed;
+            var reserved = VoiceTyping.ReservedKey;
             foreach (var pair in PhysicalKeyMap.Codes)
             {
+                if (pair.Key == reserved) continue; // the editor's voice-typing key
                 var control = keyboard[pair.Key];
                 if (control.wasPressedThisFrame && !held.ContainsKey(pair.Key))
                 {
