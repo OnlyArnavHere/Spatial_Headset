@@ -1,31 +1,49 @@
 # Features
 
-Planned work that was deferred, with enough context to pick it up later.
+Planned work that was deferred, with enough context to pick it up later, and how the finished items work.
 
-## Deferred
+## Done
 
-### Hand calibration (open, pinch, fist)
+### Hand Setup: calibration of open palm, pinch and fist
 
-Hand thresholds are fixed today:
+Settings > Hands > Hand setup > Calibrate opens a guided window (`HandSetupContent`). For each pose (open palm, pinch,
+fist) it counts down while a hand is in view, then takes about a second of samples while a progress ring fills; a
+lost hand pauses the ring and a pose not done within 15 s ends the run. While it measures, the hand pointers and
+gestures are paused, so the pinch and fist can't press buttons or move windows.
 
-- Pinch is fixed in code: `HoloKitHandSource.PinchOn` 0.25 and `PinchOff` 0.40, both as a fraction of wrist-to-middle-knuckle.
-- The fist's curl ratio (1.15) is fixed in code.
-- Fist and open-palm openness (0.25 and 0.65) and the 9 cm hand length used for hand-size depth live in
-  `Assets/Settings/GestureConfig.asset`.
-
-A calibration step would have the user hold an open hand, a pinch and a fist for a second each. It would measure their own
-values, set thresholds between them, and save the result per user in `SpatialSettings` (Settings > Hands > Calibrate).
-The hand length would make hand-size depth more accurate on phones without LiDAR (iPhone 16).
-
-Needs: a guided window (one step per pose, with a progress ring), per-user threshold fields in `HandSettings`, and
-`HoloKitHandSource` / `GestureRecognizers` reading them instead of the constants.
+`HandCalibrator` sets the thresholds between the user's own poses: pinch on at 30% and off at 50% of the way from
+their pinch to their open hand (thumb to index as a fraction of wrist to middle knuckle); a finger is curled at 25% and
+fully open at 90% of the way from their fist to their open hand (tip-to-wrist over knuckle-to-wrist), so openness and
+the fist/open-palm thresholds in `GestureConfig` fall at the same places in the user's own range. The hand length for
+hand-size depth is measured only with LiDAR depth; on the iPhone 16 it is typed in on the intro page (wrist crease to
+the middle finger's knuckle). The result is saved in `SpatialSettings.hands.calibration`; Reset puts the defaults back.
+`HoloKitHandSource.Thresholds` and `GestureRecognizers.HandLength` apply it.
 
 ### Relative pointer that freezes during a pinch
 
-The hand pointer is absolute today: a ray from an estimated shoulder through the index knuckle, smoothed with a dead
-zone (`RayFilter`). It keeps moving while a pinch closes, so a pinch can land slightly off target.
+Settings > Hands > Pointer: Absolute (the ray from the estimated shoulder through the index knuckle) or Relative
+(`RelativePointer`). Relative moves the cursor by the hand's motion times Relative speed (0.5 to 3), freezes it from the
+start of a pinch (pinch strength rising fast) until the pinch opens (a click) or the pinched hand turns more than 3
+degrees (a drag), stays within 30 degrees of where the hand really points, and re-anchors when the hand comes back.
 
-A relative mode would move the cursor by the hand's motion (with gain), hold it still from the start of a pinch
-until it either clicks or turns into a drag, and re-anchor when the hand comes back. That needs a cursor state per hand
-in `HandWindowInput`, a pinch-onset detector (pinch strength rising quickly), and a setting to choose absolute or
-relative.
+### Consent gate, live indicator and panic stop
+
+Nothing from another device shows in the headset until the user allows it, every session (`ConsentGate`). A remote
+screen asks before it connects: a modal window "Allow <source> (<address>) to show its screen on this headset?
+(<mode>)" with Approve and Deny, answered by pinch or mouse, the stereo bar's TRIGGER (reads ALLOW while asking), or in
+Mono the on-screen Approve/Deny buttons. Deny, closing the modal, or 30 s without an answer connects nothing. An
+approval covers that source in that mode only while one of its screens stays live; nothing is remembered. While live, a
+red "LIVE: <source>" line is drawn at the top of the view (in each eye in Stereo). Panic stop disconnects every remote
+screen, closes their windows, refuses anything waiting and brings Home to the front: cross and sweep (on even when the
+gesture is switched off in Settings), F8, or in Mono the indicator's Stop.
+
+The laptop picker's list connection (window titles only) and Settings > Laptop's latency link show no screen and are
+not gated.
+
+## Deferred
+
+### Other devices' screens
+
+See the feasibility notes in the device-fixes-4 report: AirPlay mirroring to the laptop and streaming that window
+through the agent needs no new code; a ReplayKit broadcast extension on a second iPhone/iPad needs a Mac, Xcode and
+most likely a paid developer account; a web view window needs a paid plugin (3D WebView) and renders slowly on iOS.
