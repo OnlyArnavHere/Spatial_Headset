@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -13,8 +14,10 @@ namespace SpatialLauncher.SpatialWindows
     /// picked in the Laptop picker (a window or the whole desktop): video over WebRTC (<c>WebRtcStreamSource</c>) from
     /// the target's own stream path, input over its own WebSocket (<see cref="WebSocketRemoteInputSink"/>), so several
     /// of these windows can show different laptop windows at once. A connect panel under the screen has host, port and
-    /// token fields, a Connect button and a status line. The title bar shows the input round-trip time; the status line
-    /// shows the laptop's clock as estimated over the input link, to compare with Tools/LaptopAgent/clock.py.
+    /// token fields, a Connect button, a Keys button (opens the virtual keyboard: <see cref="KeyboardRequested"/>) and a
+    /// status line. The title bar shows the input round-trip time; the status line shows the laptop's clock as estimated
+    /// over the input link, to compare with Tools/LaptopAgent/clock.py. Keyboard input reaches the laptop through
+    /// <see cref="KeyboardSink"/> (see <see cref="RemoteKeyboard"/>).
     /// </summary>
     public class RemoteStreamContent : WindowContent
     {
@@ -23,12 +26,14 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color FieldColor = new Color(0.20f, 0.21f, 0.25f);
         static readonly Color ConnectColor = new Color(0.20f, 0.55f, 0.35f);
         static readonly Color DisconnectColor = new Color(0.60f, 0.25f, 0.25f);
+        static readonly Color KeysColor = new Color(0.32f, 0.34f, 0.40f);
 
         const float RowHeight = 0.04f;
         const float StatusHeight = 0.03f;
         const float Gap = 0.01f;
         const float PanelHeight = RowHeight + StatusHeight + Gap;
         const float ButtonWidth = 0.11f;
+        const float KeysButtonWidth = 0.07f;
         const float PortWidth = 0.08f;
         const float TextInset = 0.008f;
 
@@ -49,6 +54,12 @@ namespace SpatialLauncher.SpatialWindows
         public WindowTextField PortField { get; private set; }
         public WindowTextField TokenField { get; private set; }
         public WindowButton ConnectButton { get; private set; }
+        /// <summary>Opens the virtual keyboard for this window.</summary>
+        public WindowButton KeysButton { get; private set; }
+        /// <summary>The Keys button was clicked.</summary>
+        public event Action KeyboardRequested;
+        /// <summary>Where keyboard input for this screen goes: the input sink, if it takes keys (null otherwise).</summary>
+        public IRemoteKeyboardSink KeyboardSink => Source?.Sink as IRemoteKeyboardSink;
         public string StatusLine => statusLine != null ? statusLine.text : "";
         /// <summary>True between Connect and Disconnect (whether or not the connection has succeeded yet).</summary>
         public bool IsActive { get; private set; }
@@ -58,7 +69,7 @@ namespace SpatialLauncher.SpatialWindows
         RemoteConnectionSettings settings;
         string connectedHost;
         int connectedPort;
-        TextMeshPro statusLabel, statusLine, connectLabel;
+        TextMeshPro statusLabel, statusLine, connectLabel, keysLabel;
         Transform panel;
         readonly List<(WindowTextField field, TextMeshPro label)> fields = new List<(WindowTextField, TextMeshPro)>();
 
@@ -148,6 +159,10 @@ namespace SpatialLauncher.SpatialWindows
                 if (IsActive) Disconnect();
                 else Connect();
             };
+
+            KeysButton = CreateControl<WindowButton>("KeysButton", transform, CreateMaterial(KeysColor));
+            keysLabel = CreateLabel("KeysLabel", transform, "Keys", 0.22f, TextAlignmentOptions.Center);
+            KeysButton.Clicked += () => KeyboardRequested?.Invoke();
 
             statusLine = CreateLabel("StatusLine", transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
             statusLine.color = new Color(0.75f, 0.77f, 0.82f);
@@ -266,7 +281,8 @@ namespace SpatialLauncher.SpatialWindows
                 : "";
             string rtt = InputLink.BestRoundTripMs is double best ? $" ({best:0} ms)" : "";
             string video = Video != null ? Video.StatusText : "needs WebRTC (SPATIAL_LAUNCHER_WEBRTC)";
-            statusLine.text = $"Video: {video}   Input: {InputLink.StatusText}{rtt}{clock}";
+            string throttled = InputLink.ThrottledCount > 0 ? " (keys throttled)" : "";
+            statusLine.text = $"Video: {video}   Input: {InputLink.StatusText}{throttled}{rtt}{clock}";
         }
 
         protected override void Layout(Vector2 size)
@@ -294,7 +310,7 @@ namespace SpatialLauncher.SpatialWindows
 
             float rowY = panelTop - Gap * 0.5f - RowHeight * 0.5f;
             float left = -size.x * 0.5f + Gap;
-            float textWidth = Mathf.Max(0.04f, (size.x - ButtonWidth - PortWidth - Gap * 5f) * 0.5f);
+            float textWidth = Mathf.Max(0.04f, (size.x - ButtonWidth - KeysButtonWidth - PortWidth - Gap * 6f) * 0.5f);
             float[] widths = { textWidth, PortWidth, textWidth };
             for (int i = 0; i < fields.Count; i++)
             {
@@ -310,6 +326,11 @@ namespace SpatialLauncher.SpatialWindows
             ConnectButton.transform.localScale = new Vector3(ButtonWidth, RowHeight, 1f);
             connectLabel.transform.localPosition = new Vector3(left + ButtonWidth * 0.5f, rowY, -0.003f);
             connectLabel.rectTransform.sizeDelta = new Vector2(ButtonWidth, RowHeight);
+            left += ButtonWidth + Gap;
+            KeysButton.transform.localPosition = new Vector3(left + KeysButtonWidth * 0.5f, rowY, -0.002f);
+            KeysButton.transform.localScale = new Vector3(KeysButtonWidth, RowHeight, 1f);
+            keysLabel.transform.localPosition = new Vector3(left + KeysButtonWidth * 0.5f, rowY, -0.003f);
+            keysLabel.rectTransform.sizeDelta = new Vector2(KeysButtonWidth, RowHeight);
 
             float statusY = -size.y * 0.5f + Gap * 0.5f + StatusHeight * 0.5f;
             statusLine.transform.localPosition = new Vector3(0f, statusY, -0.003f);

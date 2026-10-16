@@ -8,6 +8,9 @@ namespace SpatialLauncher.SpatialWindows
     /// Opens the home panel: a launcher window whose icons open an Image window, a Video window, a blank window or the
     /// Laptop picker, which lists the laptop's windows (and the whole desktop) streamed by Tools/LaptopAgent and opens
     /// a stream window for each one picked. In Placeholder mode the Laptop icon opens a single "Not connected" screen.
+    /// A stream window's Keys button opens the virtual keyboard (<see cref="OpenKeyboard"/>, <see cref="RemoteKeyboard"/>).
+    /// The Void, Cinema and Sky icons select an immersive environment and open the immersion dial
+    /// (<see cref="SelectEnvironment"/>, <see cref="ImmersionController"/>).
     /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
@@ -16,8 +19,16 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color VideoIconColor = new Color(0.78f, 0.32f, 0.42f);
         static readonly Color BlankIconColor = new Color(0.42f, 0.44f, 0.52f);
         static readonly Color LaptopIconColor = new Color(0.30f, 0.42f, 0.70f);
+        static readonly Color VoidIconColor = new Color(0.10f, 0.12f, 0.22f);
+        static readonly Color CinemaIconColor = new Color(0.45f, 0.10f, 0.14f);
+        static readonly Color SkyIconColor = new Color(0.35f, 0.58f, 0.85f);
 
         [SerializeField] WindowManager manager;
+        [Tooltip("Keyboard input for laptop windows. Added to this GameObject at start if not set.")]
+        [SerializeField] RemoteKeyboard keyboard;
+        [Tooltip("Immersion level and environments. Added to this GameObject at start if not set.")]
+        [SerializeField] ImmersionController immersion;
+        [SerializeField] Vector2 dialSize = new Vector2(0.5f, 0.22f);
 
         [Header("Sample content")]
         [SerializeField] Texture2D sampleImage;
@@ -50,10 +61,18 @@ namespace SpatialLauncher.SpatialWindows
 
         public SpatialWindow Launcher { get; private set; }
         public LauncherContent LauncherContent { get; private set; }
+        public RemoteKeyboard KeyboardInput => keyboard;
+        public ImmersionController Immersion => immersion;
+        /// <summary>The immersion dial window, while open.</summary>
+        public SpatialWindow Dial { get; private set; }
 
         void Awake()
         {
             if (manager == null) manager = GetComponent<WindowManager>();
+            if (keyboard == null && !TryGetComponent(out keyboard)) keyboard = gameObject.AddComponent<RemoteKeyboard>();
+            keyboard.Manager = manager;
+            if (immersion == null && !TryGetComponent(out immersion)) immersion = gameObject.AddComponent<ImmersionController>();
+            if (immersion.Manager == null) immersion.Manager = manager;
         }
 
         void Start()
@@ -64,7 +83,7 @@ namespace SpatialLauncher.SpatialWindows
         void Update()
         {
             var keyboard = Keyboard.current;
-            if (keyboard != null && !WindowTextField.IsTyping && keyboard[openKey].wasPressedThisFrame)
+            if (keyboard != null && !KeyboardShortcuts.Blocked && keyboard[openKey].wasPressedThisFrame)
                 OpenLauncher();
         }
 
@@ -87,6 +106,9 @@ namespace SpatialLauncher.SpatialWindows
                 new LauncherContent.Entry { Label = "Video", Glyph = "VID", Color = VideoIconColor, Open = () => OpenVideoWindow() },
                 new LauncherContent.Entry { Label = "Blank", Glyph = "+", Color = BlankIconColor, Open = () => OpenBlankWindow() },
                 new LauncherContent.Entry { Label = "Laptop", Glyph = "PC", Color = LaptopIconColor, Open = () => OpenLaptopWindow() },
+                new LauncherContent.Entry { Label = "Void", Glyph = "VOID", Color = VoidIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Void) },
+                new LauncherContent.Entry { Label = "Cinema", Glyph = "CIN", Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
+                new LauncherContent.Entry { Label = "Sky", Glyph = "SKY", Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
             });
             return Launcher;
         }
@@ -170,9 +192,38 @@ namespace SpatialLauncher.SpatialWindows
 
             var content = new GameObject().AddComponent<RemoteStreamContent>();
             content.InitConnected(window, manager.WindowMaterial, connectionSettings, InputOverride(), target);
+            content.KeyboardRequested += () => OpenKeyboard();
             if (connection != null) content.ConnectWith(connection);
             return window;
         }
+
+        /// <summary>
+        /// Switches to an environment and opens the dial. From full passthrough it goes fully immersive, so the pick shows;
+        /// otherwise the level stays where the dial has it.
+        /// </summary>
+        public SpatialWindow SelectEnvironment(ImmersiveEnvironment environment)
+        {
+            immersion.SetEnvironment(environment);
+            if (immersion.Level <= 0f) immersion.SetLevel(1f);
+            return OpenImmersionDial();
+        }
+
+        /// <summary>Opens the immersion dial (slider and environment choice), or brings it to the front.</summary>
+        public SpatialWindow OpenImmersionDial()
+        {
+            if (Dial != null)
+            {
+                manager.Focus(Dial);
+                return Dial;
+            }
+            Dial = manager.Spawn("Immersion", dialSize);
+            if (Dial == null) return null;
+            new GameObject().AddComponent<ImmersionDialContent>().Init(Dial, manager.WindowMaterial, immersion);
+            return Dial;
+        }
+
+        /// <summary>Opens the virtual keyboard, which types into the front-most laptop window.</summary>
+        public SpatialWindow OpenKeyboard() => keyboard.Open();
 
         IRemoteInputSink InputOverride()
         {

@@ -12,13 +12,14 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     ///
     ///   cd Tools/LaptopAgent
     ///   python clock.py                                   (and open Notepad)
-    ///   python agent.py --input --dry-run-input
+    ///   python agent.py --input --keyboard --dry-run-input
     ///
     /// then, in Play mode, Tools > Spatial Windows > Test Laptop Stream. It reads the current pairing token from the
     /// agent's runtime config (Tools/LaptopAgent/.runtime/mediamtx.yml), lists the laptop's windows through the picker,
     /// opens the test clock and Notepad as two stream windows at once and checks for each: video, aspect, its own input
-    /// link and stream path, and that its clicks map to its own window's pixels (dry run: nothing is clicked). Then
-    /// automatic reconnection, wrong-token handling and the "Whole desktop" entry. Results use a [LaptopTest] prefix.
+    /// link and stream path, and that its clicks map to its own window's pixels (dry run: nothing is clicked). Then the
+    /// virtual keyboard's keys reaching the focused window's stream, automatic reconnection, wrong-token handling and the
+    /// "Whole desktop" entry. Results use a [LaptopTest] prefix.
     /// </summary>
     static class LaptopStreamTest
     {
@@ -151,6 +152,8 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 else Check(false, $"{target.title}: the agent acknowledged both clicks");
             }
 
+            yield return KeyboardChecks(launcher, manager, mouse, cam, streams[1], opened);
+
             // Automatic reconnection after a dropped connection, while the other window keeps streaming.
             var other = streams[1];
             int before = first.Video.ConnectCount;
@@ -193,6 +196,43 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 $"\"Whole desktop\" streams the screen on /desktop ({desktop?.Video?.StatusText})");
         }
 
+        // The stream window's Keys button opens the virtual keyboard; its keys reach that window's stream on the agent
+        // (dry run: acknowledged, not typed).
+        static IEnumerator KeyboardChecks(LauncherWindow launcher, WindowManager manager, MouseWindowInput mouse, Camera cam,
+            RemoteStreamContent stream, List<SpatialWindow> opened)
+        {
+            string name = stream.Target.title;
+            manager.Focus(stream.Window);
+            yield return Settle;
+            Click(mouse, cam, stream.KeysButton.transform.position);
+            yield return Settle;
+            var keyboardWindow = launcher.KeyboardInput.KeyboardWindow;
+            if (keyboardWindow != null) opened.Add(keyboardWindow);
+            var keyboard = launcher.KeyboardInput.KeyboardContent;
+            Check(keyboardWindow != null && manager.FocusedWindow == keyboardWindow && launcher.KeyboardInput.Target == stream,
+                $"{name}: the Keys button opens the keyboard, typing into this window");
+            Check(stream.InputLink.KeyboardAllowed, $"{name}: the agent allows keyboard input (start it with --input --keyboard --dry-run-input)");
+            if (keyboard == null || !stream.InputLink.KeyboardAllowed) yield break;
+
+            var link = stream.InputLink;
+            var received = new List<string>();
+            foreach (var id in new[] { "Q", "Shift", "W", "Enter" })
+            {
+                int acks = link.KeyAckCount;
+                int expected = id == "Shift" ? 0 : id == "Enter" ? 2 : 1; // Enter is a press and a release
+                Click(mouse, cam, keyboard.Button(id).transform.position);
+                double deadline = EditorTestRunner.Now + 3.0;
+                while (link.KeyAckCount < acks + expected && EditorTestRunner.Now < deadline) yield return 0.05f;
+                if (expected > 0 && link.LastKeyAck != null)
+                    received.Add(link.LastKeyAck.type == "text" ? link.LastKeyAck.text : $"{link.LastKeyAck.code}{(link.LastKeyAck.down ? "↓" : "↑")}");
+            }
+            Check(string.Join(" ", received) == "q W Enter↑" && link.LastKeyAckPath == stream.Target.path,
+                $"{name}: q, Shift+w and Enter reach /{link.LastKeyAckPath} as typed (\"{string.Join(" ", received)}\")");
+
+            manager.Close(keyboardWindow);
+            yield return Settle;
+        }
+
         static LaptopTarget Find(IReadOnlyList<LaptopTarget> targets, string titlePart)
         {
             foreach (var target in targets)
@@ -214,7 +254,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         }
 
         // Pages to the target in the picker and clicks its entry, like a user would; reports the window it opened.
-        static IEnumerator PickEntry(WindowManager manager, MouseWindowInput mouse, Camera cam, SpatialWindow pickerWindow,
+        internal static IEnumerator PickEntry(WindowManager manager, MouseWindowInput mouse, Camera cam, SpatialWindow pickerWindow,
             LaptopPickerContent picker, LaptopTarget target, System.Action<SpatialWindow> result)
         {
             manager.Focus(pickerWindow);
@@ -250,7 +290,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 result(laptop.InputLink.LastAck.Value, laptop.InputLink.LastAckPath);
         }
 
-        static void Click(MouseWindowInput mouse, Camera cam, Vector3 worldPoint)
+        internal static void Click(MouseWindowInput mouse, Camera cam, Vector3 worldPoint)
         {
             Vector3 screen = cam.WorldToScreenPoint(worldPoint);
             mouse.PressAt(screen);
@@ -258,7 +298,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         }
 
         // The agent writes this run's token into its MediaMTX config (git-ignored, deleted with .runtime).
-        static string ReadAgentToken()
+        internal static string ReadAgentToken()
         {
             string path = Path.Combine(Directory.GetCurrentDirectory(), AgentConfig);
             if (!File.Exists(path)) return null;

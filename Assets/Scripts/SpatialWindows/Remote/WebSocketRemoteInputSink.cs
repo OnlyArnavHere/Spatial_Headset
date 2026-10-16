@@ -14,19 +14,20 @@ namespace SpatialLauncher.SpatialWindows
     /// The connection to the laptop agent's control server (Tools/LaptopAgent) over a WebSocket, authenticated with
     /// the pairing token. It can ask for the list of windows the laptop can stream (<see cref="RequestTargets"/>);
     /// connected with a target id, it opens that stream (<see cref="StreamPath"/> says where to watch it) and sends the
-    /// window's pointer input to it, so each streamed window has its own link. It measures the round-trip time with a
+    /// window's pointer and keyboard input to it, so each streamed window has its own link. It measures the round-trip time with a
     /// ping every second and from the same pings estimates the laptop's clock (<see cref="LaptopNow"/>), so the window
     /// can show it next to the streamed test clock.
     ///
-    /// Moves are coalesced to at most one per <see cref="MoveInterval"/>; presses, releases and scrolls are sent at once
-    /// (after any pending move, so the order is kept). Socket work runs on background tasks; state, events and sending
+    /// Moves are coalesced to at most one per <see cref="MoveInterval"/>; presses, releases, scrolls, keys and text are
+    /// sent at once (after any pending move, so the order is kept). Keys and text are sent only when the agent allows
+    /// keyboard input (<see cref="KeyboardAllowed"/>); the agent rate-limits them and says so (<see cref="ThrottledCount"/>). Socket work runs on background tasks; state, events and sending
     /// happen on the main thread in <see cref="Tick"/>, which the owner must call every frame.
     /// </summary>
-    public class WebSocketRemoteInputSink : IRemoteInputSink, IConnectionStatus, IDisposable
+    public class WebSocketRemoteInputSink : IRemoteInputSink, IRemoteKeyboardSink, IConnectionStatus, IDisposable
     {
         public enum State { Disconnected, Connecting, Connected, Rejected, Retrying }
 
-        const int ProtocolVersion = 2;
+        const int ProtocolVersion = 3;
         const float MoveInterval = 1f / 60f;
         const float PingInterval = 1f;
         const int ConnectTimeoutMs = 5000;
@@ -51,6 +52,10 @@ namespace SpatialLauncher.SpatialWindows
         public string TargetDescription { get; private set; } = "";
         /// <summary>False when the agent runs without --input: the stream can be watched but not clicked.</summary>
         public bool InputAllowed { get; private set; }
+        /// <summary>False when the agent runs without --keyboard (or its kill switch was pressed): keys are not sent.</summary>
+        public bool KeyboardAllowed { get; private set; }
+        /// <summary>True after the laptop's kill switch (Ctrl+Alt+Shift+Q) stopped all input for the agent's run.</summary>
+        public bool InputStopped { get; private set; }
         public bool AgentDryRun { get; private set; }
         /// <summary>The last window list from <see cref="RequestTargets"/>: the whole desktop first, then the windows.</summary>
         public IReadOnlyList<LaptopTarget> Targets { get; private set; } = Array.Empty<LaptopTarget>();
@@ -59,6 +64,12 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>The stream path of the last acknowledged event: the window the agent routed it to.</summary>
         public string LastAckPath { get; private set; }
         public int AckCount { get; private set; }
+        /// <summary>The last dry-run acknowledgement of a key or text: what the agent would have typed, and where.</summary>
+        public RemoteKeyProtocol.Message LastKeyAck { get; private set; }
+        public string LastKeyAckPath { get; private set; }
+        public int KeyAckCount { get; private set; }
+        /// <summary>How many times the agent said it dropped keys for coming too fast.</summary>
+        public int ThrottledCount { get; private set; }
 
         public event Action StatusChanged;
         /// <summary>A new window list arrived (<see cref="Targets"/>).</summary>
@@ -127,6 +138,23 @@ namespace SpatialLauncher.SpatialWindows
             Send($"{{\"type\":\"scroll\",{Position(position)},\"delta\":{F(delta)}}}");
         }
 
+        // --- IRemoteKeyboardSink -------------------------------------------------------------------------------------
+
+        public void Key(string code, bool down)
+        {
+            if (!IsConnected || !KeyboardAllowed || !RemoteKeyProtocol.IsKnown(code)) return;
+            FlushMove();
+            Send(RemoteKeyProtocol.EncodeKey(code, down));
+        }
+
+        public void Text(string text)
+        {
+            if (!IsConnected || !KeyboardAllowed) return;
+            FlushMove();
+            foreach (var piece in RemoteKeyProtocol.SplitText(text))
+                Send(RemoteKeyProtocol.EncodeText(piece));
+        }
+
         void SendButton(string kind, Vector2 position)
         {
             if (!IsConnected) return;
@@ -184,10 +212,13 @@ namespace SpatialLauncher.SpatialWindows
                     retryDelay = 1f;
                     AgentDryRun = message.dry_run;
                     InputAllowed = message.input;
+                    KeyboardAllowed = message.input && message.keyboard;
+                    InputStopped = false;
                     nextPing = 0f;
-                    if (TargetId != null) Send($"{{\"type\":\"open\",\"target\":\"{Escape(TargetId)}\"}}");
+                    if (TargetId != null) Send($"{{\"type\":\"open\",\"target\":{RemoteKeyProtocol.Quote(TargetId)}}}");
                     SetState(State.Connected, !InputAllowed ? "Connected (view only: agent started without --input)"
-                        : AgentDryRun ? "Connected (agent in dry-run mode)" : "Connected");
+                        : AgentDryRun ? "Connected (agent in dry-run mode)"
+                        : !KeyboardAllowed ? "Connected (no keyboard: agent started without --keyboard)" : "Connected");
                     break;
                 case "opened":
                     StreamPath = message.path;
@@ -209,10 +240,25 @@ namespace SpatialLauncher.SpatialWindows
                 case "pong":
                     OnPong(message.t, message.agent_ms);
                     break;
+                case "ack" when message.@event == "key" || message.@event == "text":
+                    LastKeyAck = new RemoteKeyProtocol.Message { type = message.@event, code = message.code, down = message.down, text = message.text };
+                    LastKeyAckPath = message.path;
+                    KeyAckCount++;
+                    break;
                 case "ack":
                     LastAck = new Vector2Int(Mathf.RoundToInt(message.x), Mathf.RoundToInt(message.y));
                     LastAckPath = message.path;
                     AckCount++;
+                    break;
+                case "throttled":
+                    ThrottledCount++;
+                    StatusChanged?.Invoke();
+                    break;
+                case "input_stopped":
+                    // The video keeps streaming; only input is off, until the agent restarts.
+                    InputAllowed = KeyboardAllowed = false;
+                    InputStopped = true;
+                    SetState(State.Connected, "Input stopped on the laptop (kill switch): view only");
                     break;
             }
         }
@@ -251,7 +297,7 @@ namespace SpatialLauncher.SpatialWindows
             cancel = new CancellationTokenSource();
             socket = new ClientWebSocket();
             socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(2);
-            var hello = $"{{\"type\":\"hello\",\"token\":\"{Escape(token)}\",\"client\":\"SpatialLauncher\"}}";
+            var hello = $"{{\"type\":\"hello\",\"token\":{RemoteKeyProtocol.Quote(token)},\"client\":\"SpatialLauncher\"}}";
             _ = RunAsync(socket, new Uri($"ws://{host}:{port}"), hello, cancel.Token);
         }
 
@@ -383,7 +429,6 @@ namespace SpatialLauncher.SpatialWindows
         static double UnixMs() => (DateTime.UtcNow - DateTime.UnixEpoch).TotalMilliseconds;
         static string F(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
         static string Position(Vector2 p) => $"\"x\":{F(Mathf.Clamp01(p.x))},\"y\":{F(Mathf.Clamp01(p.y))}";
-        static string Escape(string text) => (text ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
 
         [Serializable]
         sealed class AgentMessage
@@ -396,6 +441,11 @@ namespace SpatialLauncher.SpatialWindows
             public float x, y;
             public bool dry_run;
             public bool input;
+            public bool keyboard;
+            public string @event;
+            public string code;
+            public bool down;
+            public string text;
             public string path;
             public AgentTarget target;
             public LaptopTarget[] targets;
