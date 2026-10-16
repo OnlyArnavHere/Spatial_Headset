@@ -28,6 +28,16 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>The icon buttons, in entry order.</summary>
         public IReadOnlyList<WindowButton> Buttons => buttons;
 
+        /// <summary>Changes an icon's label and glyph (for example Hide / Show).</summary>
+        public void SetEntryText(int index, string label, string glyph)
+        {
+            if (index < 0 || index >= buttons.Count) return;
+            labels[index].text = label;
+            glyphs[index].text = glyph;
+        }
+
+        public string EntryLabel(int index) => index >= 0 && index < labels.Count ? labels[index].text : null;
+
         public void Init(SpatialWindow window, Material baseMaterial, IReadOnlyList<Entry> entries)
         {
             Attach(window, baseMaterial);

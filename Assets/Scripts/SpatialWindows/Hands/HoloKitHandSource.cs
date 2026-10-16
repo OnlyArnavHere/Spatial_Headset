@@ -23,6 +23,11 @@ namespace SpatialLauncher.SpatialWindows
     /// Reading HoloKit needs its iOS API (UNITY_IOS). Without it, and in the editor, both hands are untracked, so
     /// editor scenes keep using <see cref="SimulatedHandSource"/>. HoloKit tracks one hand unless its Max Hand Count
     /// says two, at about 20 Hz. Untested on a device so far: thresholds may need tuning.
+    ///
+    /// Phones without LiDAR (iPhone 16): with Depth Source on Auto (the default) a hand without LiDAR joints is built
+    /// from Apple Vision's 2D pose instead: each joint is placed on its viewing ray at a depth estimated from the hand's
+    /// apparent size (<see cref="HandDepthEstimator"/>; thresholds in <see cref="GestureConfig"/>, which also says how
+    /// Vision's image coordinates map to the camera's viewport, to be checked on the device).
     /// </summary>
     public class HoloKitHandSource : MonoBehaviour, IHandSource
     {
@@ -30,6 +35,11 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] MonoBehaviour handTracking;
         [Tooltip("The user's head: the tracked AR camera. The pointing ray starts from a shoulder estimated from it.")]
         [SerializeField] Transform head;
+        [Tooltip("Auto: LiDAR joints when HoloKit has them, else 2D joints at a depth estimated from the hand's size " +
+                 "(phones without LiDAR). LiDAR or Hand Scale forces one.")]
+        [SerializeField] DepthSource depthSource = DepthSource.Auto;
+        [Tooltip("Hand-scale depth thresholds and Vision's image-to-viewport mapping. Defaults if empty.")]
+        [SerializeField] GestureConfig gestureConfig;
 
         /// <summary>Pinch starts below this thumb-to-index distance, as a fraction of the hand's size (wrist to middle knuckle, about 9 cm).</summary>
         public const float PinchOn = 0.25f;
@@ -38,12 +48,41 @@ namespace SpatialLauncher.SpatialWindows
         const float StrengthZeroAt = 0.6f, StrengthOneAt = 0.2f;
         /// <summary>A finger is curled when its tip is no further from the wrist than this times its knuckle.</summary>
         const float CurledRatio = 1.15f;
+        /// <summary>A finger is fully extended at this ratio (for <see cref="HandState.Openness"/>).</summary>
+        const float ExtendedRatio = 1.7f;
         /// <summary>The right shoulder relative to the head, in the head's axes (x mirrored for the left hand).</summary>
         static readonly Vector3 ShoulderOffset = new Vector3(0.15f, -0.18f, 0f);
 
         HandState left, right;
+        readonly HandDepthEstimator leftDepth = new HandDepthEstimator(), rightDepth = new HandDepthEstimator();
 
         public HandState GetHand(Handedness hand) => hand == Handedness.Left ? left : right;
+
+        public enum DepthSource { Auto, LiDAR, HandScale }
+
+        public DepthSource Depth
+        {
+            get => depthSource;
+            set => depthSource = value;
+        }
+
+        GestureConfig Config
+        {
+            get
+            {
+                if (gestureConfig == null) gestureConfig = ScriptableObject.CreateInstance<GestureConfig>();
+                return gestureConfig;
+            }
+        }
+
+        /// <summary>A Vision image point (0..1) as a camera viewport point, per the config's flips and swap.</summary>
+        public static Vector2 ImageToViewport(Vector2 image, GestureConfig config)
+        {
+            if (config.imageSwapXY) image = new Vector2(image.y, image.x);
+            if (config.imageFlipX) image.x = 1f - image.x;
+            if (config.imageFlipY) image.y = 1f - image.y;
+            return image;
+        }
 
         void Update()
         {
@@ -52,23 +91,67 @@ namespace SpatialLauncher.SpatialWindows
 #if UNITY_IOS
             if (!Application.isEditor && handTracking is HandTrackingManager tracking && tracking.HandPoseDetector != null && head != null)
             {
-                var poses = tracking.HandPoses3D;
                 var chiralities = tracking.HandPoseDetector.HandChiralities;
                 var headPose = new Pose(head.position, head.rotation);
-                for (int i = 0; i < Mathf.Min(tracking.HandCount, poses.Count); i++)
+                var camera = head.GetComponent<Camera>();
+                var poses3D = tracking.HandPoses3D;
+                var poses2D = tracking.HandPoseDetector.HandPoses2D;
+                for (int i = 0; i < tracking.HandCount; i++)
                 {
-                    if (!TryGetJoints(poses[i], out var joints)) continue;
                     bool isLeft = i < chiralities.Count && chiralities[i] == HandChirality.Left;
+                    HandJoints joints;
+                    if (depthSource != DepthSource.HandScale && poses3D != null && i < poses3D.Count && TryGetJoints(poses3D[i], out joints))
+                    {
+                        // LiDAR depth.
+                    }
+                    else if (depthSource != DepthSource.LiDAR && camera != null && poses2D != null && i < poses2D.Count
+                             && TryGetDirections(poses2D[i], camera, out var directions))
+                    {
+                        var estimator = isLeft ? leftDepth : rightDepth;
+                        float depth = estimator.Update(ApparentSizeOf(directions), Time.deltaTime, Config);
+                        joints = JointsAtDepth(directions, head.position, depth);
+                    }
+                    else continue;
                     if (isLeft && !nextLeft.IsTracked) nextLeft = FromJoints(joints, Handedness.Left, headPose, left.IsPinched);
                     else if (!isLeft && !nextRight.IsTracked) nextRight = FromJoints(joints, Handedness.Right, headPose, right.IsPinched);
                 }
             }
 #endif
+            if (!nextLeft.IsTracked) leftDepth.Reset();
+            if (!nextRight.IsTracked) rightDepth.Reset();
             left = nextLeft;
             right = nextRight;
         }
 
 #if UNITY_IOS
+        // Viewing directions (from the camera) of the 2D joints; the struct's positions hold directions here.
+        bool TryGetDirections(Dictionary<JointName, Vector2> pose, Camera camera, out HandJoints directions)
+        {
+            directions = default;
+            if (pose == null) return false;
+            bool ok = true;
+            Vector3 Direction(JointName joint)
+            {
+                if (!pose.TryGetValue(joint, out var image))
+                {
+                    ok = false;
+                    return Vector3.forward;
+                }
+                return camera.ViewportPointToRay(ImageToViewport(image, Config)).direction;
+            }
+            directions.Wrist = Direction(JointName.Wrist);
+            directions.ThumbTip = Direction(JointName.ThumbTip);
+            directions.IndexMCP = Direction(JointName.IndexMCP);
+            directions.IndexTip = Direction(JointName.IndexTip);
+            directions.MiddleMCP = Direction(JointName.MiddleMCP);
+            directions.MiddleTip = Direction(JointName.MiddleTip);
+            directions.RingMCP = Direction(JointName.RingMCP);
+            directions.RingTip = Direction(JointName.RingTip);
+            directions.LittleMCP = Direction(JointName.LittleMCP);
+            directions.LittleTip = Direction(JointName.LittleTip);
+            return ok;
+        }
+
         static bool TryGetJoints(Dictionary<JointName, Vector3> pose, out HandJoints joints)
         {
             joints = default;
@@ -105,6 +188,11 @@ namespace SpatialLauncher.SpatialWindows
             var direction = j.IndexMCP - shoulder;
             if (direction.sqrMagnitude < 1e-6f) direction = head.forward;
 
+            float Extension(Vector3 tip, Vector3 knuckle) =>
+                Mathf.InverseLerp(CurledRatio, ExtendedRatio, Vector3.Distance(wrist, tip) / Mathf.Max(1e-4f, Vector3.Distance(wrist, knuckle)));
+            float openness = (Extension(j.IndexTip, j.IndexMCP) + Extension(j.MiddleTip, j.MiddleMCP) +
+                              Extension(j.RingTip, j.RingMCP) + Extension(j.LittleTip, j.LittleMCP)) * 0.25f;
+
             return new HandState
             {
                 IsTracked = true,
@@ -114,7 +202,47 @@ namespace SpatialLauncher.SpatialWindows
                 PinchStrength = Mathf.InverseLerp(StrengthZeroAt, StrengthOneAt, pinchDistance),
                 PointingRay = new Ray(j.IndexMCP, direction.normalized),
                 Grab = grab,
+                PalmCenter = (wrist + j.IndexMCP + j.MiddleMCP + j.RingMCP + j.LittleMCP) / 5f,
+                Openness = openness,
+                ApparentSize = ApparentSize(wrist - head.position, j.IndexMCP - head.position, j.MiddleMCP - head.position,
+                    j.RingMCP - head.position, j.LittleMCP - head.position),
             };
+        }
+
+        /// <summary>
+        /// A hand's joints from 2D tracking (no LiDAR): each joint lies on its viewing ray from the head, and the depth is
+        /// estimated from the hand's apparent size (<see cref="HandDepthEstimator"/>). The hand is taken as flat at that
+        /// depth, which keeps what <see cref="FromJoints"/> measures as ratios (pinch, curl, openness) close to right.
+        /// </summary>
+        public static HandJoints JointsAtDepth(in HandJoints directions, Vector3 head, float depth)
+        {
+            Vector3 At(Vector3 direction) => head + direction.normalized * depth;
+            return new HandJoints
+            {
+                Wrist = At(directions.Wrist), ThumbTip = At(directions.ThumbTip),
+                IndexMCP = At(directions.IndexMCP), IndexTip = At(directions.IndexTip),
+                MiddleMCP = At(directions.MiddleMCP), MiddleTip = At(directions.MiddleTip),
+                RingMCP = At(directions.RingMCP), RingTip = At(directions.RingTip),
+                LittleMCP = At(directions.LittleMCP), LittleTip = At(directions.LittleTip),
+            };
+        }
+
+        /// <summary>The hand's apparent size from the joints' viewing directions (see <see cref="HandState.ApparentSize"/>).</summary>
+        public static float ApparentSizeOf(in HandJoints directions) =>
+            ApparentSize(directions.Wrist, directions.IndexMCP, directions.MiddleMCP, directions.RingMCP, directions.LittleMCP);
+
+        /// <summary>An adult hand's wrist-to-knuckles length is about this many times its knuckle span (index to little).</summary>
+        public const float LengthToSpan = 1.4f;
+
+        // The hand's length as seen from the head (radians). A hand seen at an angle looks shorter along the axis it is
+        // tilted about, so this takes the larger of two perpendicular measures: the mean angle from the wrist to the four
+        // knuckles (four measurements average out joint noise), and the knuckle span scaled to a length.
+        static float ApparentSize(Vector3 wrist, Vector3 index, Vector3 middle, Vector3 ring, Vector3 little)
+        {
+            float length = (Vector3.Angle(wrist, index) + Vector3.Angle(wrist, middle) + Vector3.Angle(wrist, ring)
+                            + Vector3.Angle(wrist, little)) * 0.25f;
+            float span = Vector3.Angle(index, little) * LengthToSpan;
+            return Mathf.Max(length, span) * Mathf.Deg2Rad;
         }
     }
 }

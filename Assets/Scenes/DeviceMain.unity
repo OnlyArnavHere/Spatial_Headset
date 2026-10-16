@@ -816,6 +816,8 @@ GameObject:
   - component: {fileID: 1133192945}
   - component: {fileID: 1133192949}
   - component: {fileID: 1133192950}
+  - component: {fileID: 1133192952}
+  - component: {fileID: 1133192951}
   m_Layer: 0
   m_Name: Spatial Windows
   m_TagString: Untagged
@@ -839,6 +841,7 @@ MonoBehaviour:
   keyboard: {fileID: 0}
   immersion: {fileID: 0}
   dialSize: {x: 0.5, y: 0.22}
+  settings: {fileID: 0}
   sampleImage: {fileID: 2800000, guid: aca6a1b85d6dc1549b0cd00b3c700df7, type: 3}
   sampleSprite: {fileID: 0}
   sampleVideo: {fileID: 32900000, guid: 14f4ca50e57cb3c4583eb7494c64cbc0, type: 3}
@@ -903,6 +906,8 @@ MonoBehaviour:
   defaultSize: {x: 0.6, y: 0.4}
   billboardByDefault: 1
   worldLockedByDefault: 1
+  defaultCurve: 0
+  defaultAspect: 0
   minSize: {x: 0.2, y: 0.12}
   maxSize: {x: 2, y: 1.5}
   depthStep: 0.01
@@ -938,6 +943,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SpatialLauncher.SpatialWindows.HoloKitHandSource
   handTracking: {fileID: 1430564197}
   head: {fileID: 1086100946}
+  depthSource: 0
+  gestureConfig: {fileID: 11400000, guid: 1e65471d981543d4f8189707bad6d241, type: 2}
 --- !u!114 &1133192950
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -959,6 +966,38 @@ MonoBehaviour:
   moreKey: 12
   eyeHeight: 1.5
   skyRadius: 18
+--- !u!114 &1133192951
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1133192944}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ee3bb880f6b628f4285d06a9400b4f9e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpatialLauncher.SpatialWindows.GestureDebugOverlay
+  recognizers: {fileID: 0}
+  visible: 0
+  toggleKey: 95
+  fontSize: 15
+--- !u!114 &1133192952
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1133192944}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3f43c1953764066499cd352d603631af, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SpatialLauncher.SpatialWindows.GestureRecognizers
+  config: {fileID: 11400000, guid: 1e65471d981543d4f8189707bad6d241, type: 2}
+  handSource: {fileID: 0}
+  head: {fileID: 0}
+  onlyWithHandInput: 1
 --- !u!1 &1418692277
 GameObject:
   m_ObjectHideFlags: 0

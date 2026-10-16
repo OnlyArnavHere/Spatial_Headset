@@ -105,6 +105,11 @@ Settings > Control Center if missing).
 If time is left: input with `--input` (without dry run) on a harmless window such as Notepad; two laptop windows at
 once; battery drain over the 10 minutes.
 
+Voice typing (untested on a device): with the agent on `--input --keyboard` and Notepad streamed, open the keyboard (Keys),
+hold **Talk**, allow Speech Recognition and Microphone the first time, then hold Talk again and say a sentence; it should
+appear in Notepad. Note how long the text takes after letting go, whether the status line says "on this phone" (Settings >
+Voice > On-device only), and any error the keyboard's status line shows.
+
 ## Likely failures and fixes
 
 | What you see | Likely cause | Fix |

@@ -102,8 +102,9 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 $"layout: 5 rows, each {VirtualKeyboardLayout.RowUnits} units wide ({string.Join(", ", rows.Select(r => r.Sum(k => k.Width)))})");
             var keys = VirtualKeyboardLayout.Keys.ToList();
             Check(keys.Select(k => k.Id).Distinct().Count() == keys.Count, $"layout: {keys.Count} keys with unique ids");
-            var unknown = keys.Where(k => !RemoteKeyProtocol.IsKnown(k.Code)).Select(k => k.Id).ToList();
-            Check(unknown.Count == 0, $"layout: every key is one the agent accepts ({(unknown.Count == 0 ? "all" : string.Join(", ", unknown))})");
+            var unknown = keys.Where(k => k.Kind != VirtualKeyKind.Voice && !RemoteKeyProtocol.IsKnown(k.Code)).Select(k => k.Id).ToList();
+            Check(unknown.Count == 0, $"layout: every key is one the agent accepts ({(unknown.Count == 0 ? "all" : string.Join(", ", unknown))}), " +
+                                      $"plus the Talk key ({keys.Count(k => k.Kind == VirtualKeyKind.Voice)})");
             string letters = string.Concat(keys.Where(k => k.Kind == VirtualKeyKind.Character && k.Id.Length == 1 && char.IsLetter(k.Id[0])).Select(k => k.Label));
             Check(letters == "qwertyuiopasdfghjklzxcvbnm", $"layout: QWERTY letter order ({letters})");
 

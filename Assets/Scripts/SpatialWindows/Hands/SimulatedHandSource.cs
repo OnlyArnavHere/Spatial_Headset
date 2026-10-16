@@ -9,6 +9,8 @@ namespace SpatialLauncher.SpatialWindows
     /// towards or away from you, which pushes a pinched window in or out.
     /// Two-hand mode (T): a mirrored left hand is added; hold Shift to aim it with the mouse and use the
     /// right mouse button to pinch with it. Each hand keeps its last aim while the mouse aims the other.
+    /// Hold G for a fist (for the gesture recognizers): the fist sits on the mouse ray at reach distance, so
+    /// it moves with the mouse, and scrolling moves it in and out. The hand's apparent size follows its distance.
     /// </summary>
     public class SimulatedHandSource : MonoBehaviour, IHandSource
     {
@@ -22,6 +24,9 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] float scrollStep = 0.02f;
         [SerializeField] bool twoHanded;
         [SerializeField] Key twoHandKey = Key.T;
+        [SerializeField] Key fistKey = Key.G;
+        [Tooltip("Wrist to middle knuckle, for the apparent size gesture depth is estimated from.")]
+        [SerializeField] float handLength = 0.09f;
         [Tooltip("Aim depth when nothing is under the mouse.")]
         [SerializeField] float defaultAimDistance = 2f;
         [SerializeField] LayerMask raycastMask = ~0;
@@ -33,6 +38,9 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         public float Reach => reach;
+
+        /// <summary>The hand simulated in one-hand mode (Settings > Hands); the other joins in two-hand mode.</summary>
+        public Handedness DominantHand { get; set; } = Handedness.Right;
 
         HandState left, right;
         Aim leftAim, rightAim;
@@ -64,7 +72,8 @@ namespace SpatialLauncher.SpatialWindows
             if (Mathf.Abs(scroll) > 0.01f)
                 reach = Mathf.Clamp(reach + Mathf.Sign(scroll) * scrollStep, reachRange.x, reachRange.y);
 
-            bool rightPinch = mouse.leftButton.isPressed;
+            bool fist = keyboard != null && !KeyboardShortcuts.Blocked && keyboard[fistKey].isPressed;
+            bool rightPinch = mouse.leftButton.isPressed && !fist;
             bool leftPinch = twoHanded && mouse.rightButton.isPressed;
             bool aimLeft = twoHanded && keyboard != null && keyboard.shiftKey.isPressed;
 
@@ -76,8 +85,15 @@ namespace SpatialLauncher.SpatialWindows
                 else UpdateAim(ref rightAim, mouseRay, rightPinch);
             }
 
-            right = rightAim.IsSet ? BuildHand(Handedness.Right, rightAim.Point, rightPinch) : HandState.Untracked;
-            left = twoHanded && leftAim.IsSet ? BuildHand(Handedness.Left, leftAim.Point, leftPinch) : HandState.Untracked;
+            bool aimsRight = !aimLeft;
+            right = rightAim.IsSet ? BuildHand(Handedness.Right, rightAim.Point, rightPinch, fist && aimsRight) : HandState.Untracked;
+            left = twoHanded && leftAim.IsSet ? BuildHand(Handedness.Left, leftAim.Point, leftPinch, fist && aimLeft) : HandState.Untracked;
+            // One-handed and left-handed: the mouse drives the left hand instead.
+            if (!twoHanded && DominantHand == Handedness.Left)
+            {
+                left = rightAim.IsSet ? BuildHand(Handedness.Left, rightAim.Point, rightPinch, fist) : HandState.Untracked;
+                right = HandState.Untracked;
+            }
         }
 
         void UpdateAim(ref Aim aim, Ray mouseRay, bool pinched)
@@ -94,13 +110,17 @@ namespace SpatialLauncher.SpatialWindows
             aim.IsSet = true;
         }
 
-        HandState BuildHand(Handedness hand, Vector3 aimPoint, bool pinched)
+        HandState BuildHand(Handedness hand, Vector3 aimPoint, bool pinched, bool fist)
         {
             var cam = rayCamera.transform;
             float side = hand == Handedness.Right ? 1f : -1f;
-            var tip = cam.position + cam.right * (handOffset.x * side) + cam.up * handOffset.y + cam.forward * reach;
+            // A fist sits on the mouse ray, so it moves with the mouse; an open hand floats at its usual place.
+            var tip = fist
+                ? cam.position + (aimPoint - cam.position).normalized * reach
+                : cam.position + cam.right * (handOffset.x * side) + cam.up * handOffset.y + cam.forward * reach;
             var direction = aimPoint - tip;
             if (direction.sqrMagnitude < 1e-6f) direction = cam.forward;
+            var palm = tip - cam.forward * 0.05f;
 
             return new HandState
             {
@@ -110,6 +130,10 @@ namespace SpatialLauncher.SpatialWindows
                 Pinch = pinched ? PinchState.Pinched : PinchState.Open,
                 PinchStrength = pinched ? 1f : 0f,
                 PointingRay = new Ray(tip, direction.normalized),
+                Grab = fist,
+                Openness = fist ? 0f : 1f,
+                PalmCenter = palm,
+                ApparentSize = handLength / Mathf.Max(0.05f, Vector3.Distance(palm, cam.position)),
             };
         }
 

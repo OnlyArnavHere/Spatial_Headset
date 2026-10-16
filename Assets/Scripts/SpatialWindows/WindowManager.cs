@@ -7,7 +7,9 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// Spawns, tracks, focuses and closes <see cref="SpatialWindow"/>s.
     /// Windows are kept in focus order (last = front); the focused window is drawn in front
-    /// of the others by pushing its visuals slightly towards the viewer.
+    /// of the others by pushing its visuals slightly towards the viewer. New windows get
+    /// <see cref="DefaultCurve"/>, and windows spawned without a size get <see cref="DefaultAspect"/>;
+    /// a window with an aspect preset keeps it while resized (<see cref="SetAspect"/>).
     /// </summary>
     public class WindowManager : MonoBehaviour
     {
@@ -32,6 +34,11 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] Vector2 defaultSize = new Vector2(0.6f, 0.4f);
         [SerializeField] bool billboardByDefault = true;
         [SerializeField] bool worldLockedByDefault = true;
+        [Tooltip("Curve of new windows: 0 = flat, 1 = the gentlest cylinder (SpatialWindow.Curve).")]
+        [Range(0f, 1f)]
+        [SerializeField] float defaultCurve;
+        [Tooltip("Aspect of new windows opened without a size of their own (blank windows).")]
+        [SerializeField] AspectPreset defaultAspect = AspectPreset.Free;
 
         [Header("Limits and ordering")]
         [SerializeField] Vector2 minSize = new Vector2(0.2f, 0.12f);
@@ -48,6 +55,8 @@ namespace SpatialLauncher.SpatialWindows
         [Range(0.5f, 1f)]
         [SerializeField] float unfocusedScale = 0.85f;
 
+        /// <summary>Raised with true when <see cref="HideAll"/> hides the windows and false when they come back.</summary>
+        public event Action<bool> HiddenChanged;
         public event Action<SpatialWindow> WindowOpened;
         public event Action<SpatialWindow> WindowClosed;
         public event Action<SpatialWindow> FocusChanged;
@@ -57,8 +66,26 @@ namespace SpatialLauncher.SpatialWindows
         public SpatialWindow FocusedWindow => windows.Count > 0 ? windows[windows.Count - 1] : null;
         /// <summary>Base material for window quads; content can reuse it for its own quads.</summary>
         public Material WindowMaterial => windowMaterial;
+        public Vector2 MinSize => minSize;
+        public Vector2 MaxSize => maxSize;
+
+        public float DefaultCurve
+        {
+            get => defaultCurve;
+            set => defaultCurve = Mathf.Clamp01(value);
+        }
+
+        public AspectPreset DefaultAspect
+        {
+            get => defaultAspect;
+            set => defaultAspect = value;
+        }
 
         readonly List<SpatialWindow> windows = new List<SpatialWindow>();
+        readonly List<SpatialWindow> hidden = new List<SpatialWindow>();
+
+        /// <summary>True between <see cref="HideAll"/> and <see cref="ShowAll"/>.</summary>
+        public bool WindowsHidden { get; private set; }
         IWindowInput input;
         int spawnCount;
 
@@ -168,6 +195,8 @@ namespace SpatialLauncher.SpatialWindows
             {
                 if (windows.Contains(window)) continue;
                 windows.Add(window);
+                window.AspectRequested -= SetAspect;
+                window.AspectRequested += SetAspect;
                 adopted = true;
             }
             if (adopted) ApplyOrder();
@@ -200,8 +229,12 @@ namespace SpatialLauncher.SpatialWindows
             go.transform.position = position;
 
             var window = go.AddComponent<SpatialWindow>();
-            window.Initialize(title, ClampSize(size ?? defaultSize), windowMaterial, h,
+            var aspect = size.HasValue ? AspectPreset.Free : defaultAspect;
+            window.Initialize(title, AspectPresets.Fit(size ?? defaultSize, aspect, minSize, maxSize), windowMaterial, h,
                 billboardByDefault, worldLockedByDefault);
+            window.SetAspectPreset(aspect);
+            window.SetCurve(defaultCurve);
+            window.AspectRequested += SetAspect;
 
             // Start in the receded state so the new window grows forward into focus.
             window.SetPresentation(0f, unfocusedScale, instant: true);
@@ -257,6 +290,50 @@ namespace SpatialLauncher.SpatialWindows
             }
         }
 
+        /// <summary>
+        /// Gives the window an aspect preset: its content area takes that aspect (keeping the width where the size limits
+        /// allow) and keeps it while resized. Free only lifts the constraint.
+        /// </summary>
+        public void SetAspect(SpatialWindow window, AspectPreset preset)
+        {
+            if (window == null) return;
+            window.SetAspectPreset(preset);
+            if (preset != AspectPreset.Free) window.SetSize(AspectPresets.Fit(window.Size, preset, minSize, maxSize));
+        }
+
+        /// <summary>Hides every window except <paramref name="keep"/> (for example the launcher) until <see cref="ShowAll"/>.</summary>
+        public void HideAll(SpatialWindow keep = null)
+        {
+            if (WindowsHidden) return;
+            foreach (var window in windows)
+            {
+                if (window == null || window == keep || !window.gameObject.activeSelf) continue;
+                window.gameObject.SetActive(false);
+                hidden.Add(window);
+            }
+            WindowsHidden = true;
+            HiddenChanged?.Invoke(true);
+        }
+
+        /// <summary>Brings back the windows <see cref="HideAll"/> hid.</summary>
+        public void ShowAll()
+        {
+            if (!WindowsHidden) return;
+            foreach (var window in hidden)
+                if (window != null) window.gameObject.SetActive(true);
+            hidden.Clear();
+            WindowsHidden = false;
+            ApplyOrder();
+            HiddenChanged?.Invoke(false);
+        }
+
+        /// <summary>Resizes a window about its centre, within the size limits and its aspect preset.</summary>
+        public void Resize(SpatialWindow window, Vector2 size)
+        {
+            if (window != null && windows.Contains(window))
+                window.SetSize(AspectPresets.Constrain(size, window.Aspect, minSize, maxSize), keepTopLeft: false);
+        }
+
         void OnDragRequested(SpatialWindow window, Vector3 position)
         {
             if (windows.Contains(window)) window.MoveTo(position);
@@ -264,11 +341,7 @@ namespace SpatialLauncher.SpatialWindows
 
         void OnResizeRequested(SpatialWindow window, Vector2 size)
         {
-            if (windows.Contains(window)) window.SetSize(ClampSize(size));
+            if (windows.Contains(window)) window.SetSize(AspectPresets.Constrain(size, window.Aspect, minSize, maxSize));
         }
-
-        Vector2 ClampSize(Vector2 size) => new Vector2(
-            Mathf.Clamp(size.x, minSize.x, maxSize.x),
-            Mathf.Clamp(size.y, minSize.y, maxSize.y));
     }
 }

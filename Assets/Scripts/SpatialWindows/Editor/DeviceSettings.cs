@@ -16,7 +16,8 @@ namespace SpatialLauncher.SpatialWindows.Editor
     /// Applies what the iOS device build needs (Tools > Spatial Windows > Apply iOS Device Settings): player settings
     /// for a headset app that streams from the laptop, HoloKit's required fixes, DeviceMain as the only build scene,
     /// DeviceMain's launcher in WebRTC mode, HoloKit hand tracking as DeviceMain's window input (HandTrackingManager,
-    /// LiDAR depth, <see cref="HoloKitHandSource"/>) and HoloKit's Mono/Stereo button. Safe to run again: it logs each change with a [DeviceSettings] prefix
+    /// LiDAR depth, <see cref="HoloKitHandSource"/>), HoloKit's Mono/Stereo button, and the microphone and speech-recognition usage
+    /// descriptions voice typing needs (<see cref="VoiceTyping"/>). Safe to run again: it logs each change with a [DeviceSettings] prefix
     /// and leaves settings that are already right alone. Info.plist keys Unity has no setting for are added at build
     /// time by <see cref="IosInfoPlist"/>; <see cref="DeviceBuildCheck"/> checks the result.
     /// </summary>
@@ -28,6 +29,12 @@ namespace SpatialLauncher.SpatialWindows.Editor
         public static readonly Version MinimumIos = new Version(18, 0);
         public const string CameraUsage =
             "Spatial Launcher shows the room around you through the camera and follows your hands to control its windows.";
+        /// <summary>Why voice typing listens (iOS asks before the first Talk).</summary>
+        public const string MicrophoneUsage =
+            "Spatial Launcher listens while you hold Talk on its keyboard, to type what you say.";
+        /// <summary>Info.plist's NSSpeechRecognitionUsageDescription; Unity has no Player Setting for it, so IosInfoPlist adds it.</summary>
+        public const string SpeechRecognitionUsage =
+            "Spatial Launcher turns what you say into text while you hold Talk. It recognises speech on the phone when your language allows.";
         const string ConnectionSettingsPath = "Assets/Settings/RemoteConnectionSettings.asset";
         const string WebRtcDefine = "SPATIAL_LAUNCHER_WEBRTC";
 
@@ -64,6 +71,9 @@ namespace SpatialLauncher.SpatialWindows.Editor
 
             Change("Camera Usage Description", PlayerSettings.iOS.cameraUsageDescription, CameraUsage,
                 () => PlayerSettings.iOS.cameraUsageDescription = CameraUsage);
+            Change("Microphone Usage Description (voice typing)", PlayerSettings.iOS.microphoneUsageDescription, MicrophoneUsage,
+                () => PlayerSettings.iOS.microphoneUsageDescription = MicrophoneUsage);
+            Debug.Log($"[DeviceSettings] Speech Recognition Usage Description is added to Info.plist at build time: \"{SpeechRecognitionUsage}\"");
 
             if (!Version.TryParse(PlayerSettings.iOS.targetOSVersionString, out var minimum) || minimum < MinimumIos)
                 Change("Target minimum iOS version (HoloKit hand tracking needs iOS 18)", PlayerSettings.iOS.targetOSVersionString,

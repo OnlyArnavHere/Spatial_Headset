@@ -172,9 +172,9 @@ namespace SpatialLauncher.SpatialWindows
                     break;
 
                 case Mode.Control:
-                    var t = activeControl.transform;
-                    if (new Plane(t.forward, t.position).Raycast(ray, out float distance))
-                        activeControl.Drag(ray.GetPoint(distance));
+                    // Through the window's surface, so a drag follows a curved window too.
+                    if (WindowRaycast.TryProjectToLayout(activeControl.Window, ray, activeControl.transform, out var point))
+                        activeControl.Drag(point);
                     break;
             }
         }
