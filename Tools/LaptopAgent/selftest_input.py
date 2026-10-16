@@ -136,7 +136,7 @@ async def main() -> None:
 
     async with connect(url) as ws:
         welcome = await request(ws, {"type": "hello", "token": args.token})
-        check(welcome.get("type") == "welcome" and welcome.get("version") == 3, f"the pairing token is accepted ({welcome})")
+        check(welcome.get("type") == "welcome" and welcome.get("version") == 4, f"the pairing token is accepted ({welcome})")
         dry_run = welcome.get("dry_run", False)
         keyboard = welcome.get("keyboard", False)
 

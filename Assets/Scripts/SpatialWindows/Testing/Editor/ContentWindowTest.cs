@@ -56,8 +56,8 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             yield return Settle;
             var launcherContent = launcherWindow.LauncherContent;
             // Image, Video, Blank, Laptop, the Void, Cinema and Sky environments (ImmersionTest), Settings (SettingsTest),
-            // Hide all (GestureTest).
-            Check(launcherContent != null && launcherContent.Buttons.Count == 9, "launcher shows 9 icons (4 apps, 3 environments, Settings, Hide all)");
+            // Hide all (GestureTest), Cast (CastTest).
+            Check(launcherContent != null && launcherContent.Buttons.Count == 10, "launcher shows 10 icons (4 apps, 3 environments, Settings, Hide all, Cast)");
             if (launcherContent == null) yield break;
 
             // Each icon opens its window type.
