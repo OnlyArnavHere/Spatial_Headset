@@ -204,6 +204,7 @@ namespace SpatialLauncher.SpatialWindows
             Toggle("Palm push/pull", () => S.hands.palmPush, v => SettingsStore.Update(x => x.hands.palmPush = v));
             Toggle("Two-hand stretch", () => S.hands.twoHandStretch, v => SettingsStore.Update(x => x.hands.twoHandStretch = v));
             Toggle("Cross to hide all", () => S.hands.crossSweepHide, v => SettingsStore.Update(x => x.hands.crossSweepHide = v));
+            Toggle("Debug overlay", () => S.hands.debugOverlay, v => SettingsStore.Update(x => x.hands.debugOverlay = v));
         }
 
         void BuildWindows(Section s)

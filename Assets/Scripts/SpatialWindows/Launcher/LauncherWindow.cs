@@ -11,7 +11,8 @@ namespace SpatialLauncher.SpatialWindows
     /// A stream window's Keys button opens the virtual keyboard (<see cref="OpenKeyboard"/>, <see cref="RemoteKeyboard"/>).
     /// The Void, Cinema and Sky icons select an immersive environment and open the immersion dial
     /// (<see cref="SelectEnvironment"/>, <see cref="ImmersionController"/>). The Settings icon opens the Settings window
-    /// (<see cref="OpenSettings"/>, <see cref="SettingsService"/>).
+    /// (<see cref="OpenSettings"/>, <see cref="SettingsService"/>). The Hide icon hides every other window and becomes Show
+    /// (as does the cross-and-sweep gesture, <see cref="CrossSweepRecognizer"/>).
     /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
@@ -24,6 +25,8 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color CinemaIconColor = new Color(0.45f, 0.10f, 0.14f);
         static readonly Color SkyIconColor = new Color(0.35f, 0.58f, 0.85f);
         static readonly Color SettingsIconColor = new Color(0.45f, 0.47f, 0.52f);
+        static readonly Color HideIconColor = new Color(0.35f, 0.30f, 0.45f);
+        const int HideEntry = 8;
 
         [SerializeField] WindowManager manager;
         [Tooltip("Keyboard input for laptop windows. Added to this GameObject at start if not set.")]
@@ -84,6 +87,30 @@ namespace SpatialLauncher.SpatialWindows
             if (settings.Manager == null) settings.Manager = manager;
             if (settings.Immersion == null) settings.Immersion = immersion;
             if (settings.ConnectionSettings == null) settings.ConnectionSettings = connectionSettings;
+            if (!TryGetComponent<GestureRecognizers>(out _)) gameObject.AddComponent<GestureRecognizers>();
+            if (!TryGetComponent<GestureDebugOverlay>(out _)) gameObject.AddComponent<GestureDebugOverlay>();
+        }
+
+        void OnEnable()
+        {
+            if (manager != null) manager.HiddenChanged += OnHiddenChanged;
+        }
+
+        void OnDisable()
+        {
+            if (manager != null) manager.HiddenChanged -= OnHiddenChanged;
+        }
+
+        void OnHiddenChanged(bool isHidden)
+        {
+            if (LauncherContent != null) LauncherContent.SetEntryText(HideEntry, isHidden ? "Show all" : "Hide all", isHidden ? "SHOW" : "HIDE");
+        }
+
+        /// <summary>Hides every window but the launcher, or brings them back.</summary>
+        public void ToggleHideAll()
+        {
+            if (manager.WindowsHidden) manager.ShowAll();
+            else manager.HideAll(Launcher);
         }
 
         void Start()
@@ -121,7 +148,9 @@ namespace SpatialLauncher.SpatialWindows
                 new LauncherContent.Entry { Label = "Cinema", Glyph = "CIN", Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
                 new LauncherContent.Entry { Label = "Sky", Glyph = "SKY", Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
                 new LauncherContent.Entry { Label = "Settings", Glyph = "SET", Color = SettingsIconColor, Open = () => OpenSettings() },
+                new LauncherContent.Entry { Label = "Hide all", Glyph = "HIDE", Color = HideIconColor, Open = ToggleHideAll },
             });
+            OnHiddenChanged(manager.WindowsHidden);
             return Launcher;
         }
 

@@ -62,6 +62,19 @@ namespace SpatialLauncher.SpatialWindows
 
         IHandSource source;
         HandPointer left, right;
+        readonly bool[] suppressed = new bool[2];
+
+        /// <summary>
+        /// Pauses one hand's pointer (no cursor, no pinches) while a gesture recognizer uses that hand
+        /// (<see cref="GestureRecognizers"/>), so the two never act on a window at once. Ends any gesture it had.
+        /// </summary>
+        public void SetSuppressed(Handedness hand, bool value)
+        {
+            suppressed[(int)hand] = value;
+            if (value) Pointer(hand).Cancel();
+        }
+
+        public bool IsSuppressed(Handedness hand) => suppressed[(int)hand];
 
         /// <summary>Replaces the hand source (for example with a test or device source). Ends any gesture in progress.</summary>
         public void SetHandSource(IHandSource newSource)
@@ -107,8 +120,10 @@ namespace SpatialLauncher.SpatialWindows
             if (head == null && Camera.main != null) head = Camera.main.transform;
 
             float deltaTime = Time.deltaTime;
-            left.Tick(source.GetHand(Handedness.Left), deltaTime);
-            right.Tick(source.GetHand(Handedness.Right), deltaTime);
+            if (suppressed[0]) left.Cancel();
+            else left.Tick(source.GetHand(Handedness.Left), deltaTime);
+            if (suppressed[1]) right.Cancel();
+            else right.Tick(source.GetHand(Handedness.Right), deltaTime);
         }
 
         void OnDisable() => CancelAll();

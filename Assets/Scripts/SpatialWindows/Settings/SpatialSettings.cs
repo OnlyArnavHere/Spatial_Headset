@@ -55,6 +55,8 @@ namespace SpatialLauncher.SpatialWindows
         public bool palmPush = true;
         public bool twoHandStretch = true;
         public bool crossSweepHide = true;
+        /// <summary>Shows hand state and gesture recognizer outputs on screen, for tuning thresholds.</summary>
+        public bool debugOverlay;
     }
 
     [Serializable]

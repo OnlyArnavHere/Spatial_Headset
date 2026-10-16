@@ -25,8 +25,18 @@ namespace SpatialLauncher.SpatialWindows
         public float PinchStrength;
         /// <summary>Where the hand is pointing. The origin is usually near the index fingertip or knuckle.</summary>
         public Ray PointingRay;
-        /// <summary>A fist (all fingers curled). Reported by device sources; <see cref="HandWindowInput"/> doesn't use it yet.</summary>
+        /// <summary>A fist (all fingers curled). Used by the gesture recognizers (<see cref="GestureRecognizers"/>).</summary>
         public bool Grab;
+        /// <summary>The middle of the palm (wrist and the four knuckles).</summary>
+        public Vector3 PalmCenter;
+        /// <summary>0 = fist, 1 = open palm: how far the four fingers are extended, on average.</summary>
+        public float Openness;
+        /// <summary>
+        /// The hand's size as seen from the head, as an angle (radians) across its length (wrist to knuckles, about 9 cm on
+        /// an adult hand), corrected for a hand seen at an angle. Depth can be estimated from it on phones without LiDAR
+        /// (<see cref="HandDepthEstimator"/>).
+        /// </summary>
+        public float ApparentSize;
 
         public bool IsPinched => IsTracked && Pinch == PinchState.Pinched;
         public bool IsGrabbing => IsTracked && Grab;

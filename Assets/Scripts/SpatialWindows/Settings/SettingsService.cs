@@ -112,6 +112,14 @@ namespace SpatialLauncher.SpatialWindows
             }
             foreach (var simulated in GetComponentsInChildren<SimulatedHandSource>(true))
                 simulated.DominantHand = s.hands.dominantHand;
+            if (TryGetComponent<GestureRecognizers>(out var gestures))
+            {
+                gestures.FistGrab.Enabled = s.hands.fistGrab;
+                gestures.PalmPush.Enabled = s.hands.palmPush;
+                gestures.Stretch.Enabled = s.hands.twoHandStretch;
+                gestures.CrossSweep.Enabled = s.hands.crossSweepHide;
+            }
+            if (TryGetComponent<GestureDebugOverlay>(out var overlay)) overlay.Visible = s.hands.debugOverlay;
 
             if (immersion != null && !applying && immersion.Environment != s.immersion.environment)
             {

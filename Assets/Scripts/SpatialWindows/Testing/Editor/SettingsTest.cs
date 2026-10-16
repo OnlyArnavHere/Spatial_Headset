@@ -187,7 +187,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             launcher.OpenLauncher();
             yield return Settle;
             var icons = launcher.LauncherContent.Buttons;
-            Check(icons.Count == 8, $"the launcher has a Settings icon ({icons.Count} icons)");
+            Check(icons.Count >= 8, $"the launcher has a Settings icon ({icons.Count} icons)");
             if (icons.Count < 8) yield break;
             Click(mouse, cam, icons[7].transform.position);
             yield return Settle;

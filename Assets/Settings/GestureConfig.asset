@@ -1,0 +1,47 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a4061031713a4ef449b68cc619595db6, type: 3}
+  m_Name: GestureConfig
+  m_EditorClassIdentifier:
+  fistOpenness: 0.25
+  openPalmOpenness: 0.65
+  fistHoldTime: 0.15
+  openHoldTime: 0.1
+  trackingGrace: 0.25
+  handLength: 0.09
+  depthSmoothing: 10
+  maxDepthSpeed: 2.5
+  minHandDepth: 0.15
+  maxHandDepth: 1
+  velocitySmoothing: 8
+  imageFlipX: 0
+  imageFlipY: 0
+  imageSwapXY: 0
+  grabDepthGain: 3
+  minWindowDistance: 0.4
+  maxWindowDistance: 5
+  pushStartSpeed: 0.35
+  pushTransitionTime: 0.4
+  pushGain: 4
+  pushStopSpeed: 0.08
+  pushStopTime: 0.4
+  pushMaxTime: 4
+  stretchStartWindow: 0.6
+  pinchReleaseGrace: 0.15
+  stretchMinComponent: 0.05
+  maxAspectChange: 3
+  crossMargin: 0.03
+  crossMaxHeightGap: 0.15
+  crossHoldTime: 0.3
+  sweepDistance: 0.35
+  sweepTime: 0.8
+  crossCooldown: 1

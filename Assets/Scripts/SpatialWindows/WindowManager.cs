@@ -55,6 +55,8 @@ namespace SpatialLauncher.SpatialWindows
         [Range(0.5f, 1f)]
         [SerializeField] float unfocusedScale = 0.85f;
 
+        /// <summary>Raised with true when <see cref="HideAll"/> hides the windows and false when they come back.</summary>
+        public event Action<bool> HiddenChanged;
         public event Action<SpatialWindow> WindowOpened;
         public event Action<SpatialWindow> WindowClosed;
         public event Action<SpatialWindow> FocusChanged;
@@ -80,6 +82,10 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         readonly List<SpatialWindow> windows = new List<SpatialWindow>();
+        readonly List<SpatialWindow> hidden = new List<SpatialWindow>();
+
+        /// <summary>True between <see cref="HideAll"/> and <see cref="ShowAll"/>.</summary>
+        public bool WindowsHidden { get; private set; }
         IWindowInput input;
         int spawnCount;
 
@@ -293,6 +299,39 @@ namespace SpatialLauncher.SpatialWindows
             if (window == null) return;
             window.SetAspectPreset(preset);
             if (preset != AspectPreset.Free) window.SetSize(AspectPresets.Fit(window.Size, preset, minSize, maxSize));
+        }
+
+        /// <summary>Hides every window except <paramref name="keep"/> (for example the launcher) until <see cref="ShowAll"/>.</summary>
+        public void HideAll(SpatialWindow keep = null)
+        {
+            if (WindowsHidden) return;
+            foreach (var window in windows)
+            {
+                if (window == null || window == keep || !window.gameObject.activeSelf) continue;
+                window.gameObject.SetActive(false);
+                hidden.Add(window);
+            }
+            WindowsHidden = true;
+            HiddenChanged?.Invoke(true);
+        }
+
+        /// <summary>Brings back the windows <see cref="HideAll"/> hid.</summary>
+        public void ShowAll()
+        {
+            if (!WindowsHidden) return;
+            foreach (var window in hidden)
+                if (window != null) window.gameObject.SetActive(true);
+            hidden.Clear();
+            WindowsHidden = false;
+            ApplyOrder();
+            HiddenChanged?.Invoke(false);
+        }
+
+        /// <summary>Resizes a window about its centre, within the size limits and its aspect preset.</summary>
+        public void Resize(SpatialWindow window, Vector2 size)
+        {
+            if (window != null && windows.Contains(window))
+                window.SetSize(AspectPresets.Constrain(size, window.Aspect, minSize, maxSize), keepTopLeft: false);
         }
 
         void OnDragRequested(SpatialWindow window, Vector3 position)
