@@ -190,6 +190,19 @@ namespace SpatialLauncher.SpatialWindows
             Slider("Viewport offset Y", -10f, 10f, () => S.display.viewportOffsetMm.y,
                 v => SettingsStore.Update(x => x.display.viewportOffsetMm.y = Mathf.Round(v * 2f) / 2f), v => $"{v:+0.0;-0.0;0} mm");
             Value("Note", () => "IPD and offsets tune HoloKit's stereo view for your eyes and the printed helmet.");
+            Slider("Passthrough zoom", StereoPassthrough.MinZoom, StereoPassthrough.MaxZoom, () => S.display.passthroughZoom,
+                v => SettingsStore.Update(x => x.display.passthroughZoom = Mathf.Round(v * 20f) / 20f), v => $"{v:0.00}x");
+            Choice("Zoom preset", DisplaySettings.ZoomPresetNames, () => DisplaySettings.ZoomPresetIndex(S.display.passthroughZoom),
+                i => SettingsStore.Update(x => x.display.passthroughZoom = DisplaySettings.ZoomPresets[i]));
+            Value("Field of view", PassthroughView);
+        }
+
+        string PassthroughView()
+        {
+            var passthrough = Service != null ? Service.GetComponent<StereoPassthrough>() : null;
+            if (passthrough != null && passthrough.ImageFov is Vector2 image && passthrough.CameraFov is Vector2 camera)
+                return $"Image {image.x:0}° x {image.y:0}° (camera {camera.x:0}° x {camera.y:0}°). 1.00x is real size.";
+            return "1.00x is real size; Wide fits more of the room. F5, or ZOOM in Stereo, steps the presets.";
         }
 
         void BuildHands(Section s)

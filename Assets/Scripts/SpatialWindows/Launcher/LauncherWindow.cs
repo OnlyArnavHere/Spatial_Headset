@@ -92,6 +92,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<VoiceTyping>(out _)) gameObject.AddComponent<VoiceTyping>();
             if (!TryGetComponent<StereoPassthrough>(out _)) gameObject.AddComponent<StereoPassthrough>();
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
+            if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
         }
 
         void OnEnable()
