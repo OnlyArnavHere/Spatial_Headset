@@ -76,6 +76,8 @@ namespace SpatialLauncher.SpatialWindows
         ConsentGate panicGate;
         volatile bool pairsDirty;
         PairStore pairStore;
+        /// <summary>Test seam: lists this store instead of the link service's real one.</summary>
+        public static PairStore PairStoreOverride;
         TextMeshPro messageLabel;
 
         Transform panel;
@@ -124,7 +126,7 @@ namespace SpatialLauncher.SpatialWindows
             var linkHost = LinkService.Current?.Host;
             if (linkHost != null)
             {
-                pairStore = linkHost.Pairs;
+                pairStore = PairStoreOverride ?? linkHost.Pairs;
                 pairStore.Changed += OnPairsChanged;
             }
 #if SPATIAL_LAUNCHER_WEBRTC

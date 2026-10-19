@@ -11,7 +11,7 @@
   python agent.py --revoke NAME                   forget a paired headset, then exit
   python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
   python agent.py --cast-only                     view only, plus play/pause, seek, next/previous and volume (Cast)
-  python agent.py --wired                         print the USB Personal Hotspot address and check the firewall for it
+  python agent.py --wired                         print the USB Personal Hotspot address and dial the headset over it
 
 Run `python agent.py --help` for every option. See README.md, especially the risks section, before using --input.
 """
@@ -97,8 +97,8 @@ def parse_args() -> argparse.Namespace:
                    help="Cast mode: the headset may only play/pause, seek, skip and change volume; every other key, "
                         "mouse, typing and scroll event is dropped here (can't be combined with --input)")
     p.add_argument("--wired", action="store_true",
-                   help="also look for the headset iPhone's USB Personal Hotspot (172.20.10.x) and check that the "
-                        "firewall lets the headset in on it (see Doc/wired.md)")
+                   help="also look for the headset iPhone's USB Personal Hotspot (172.20.10.x) and also "
+                        "dial the headset iPhone over it (172.20.10.1; see Doc/wired.md)")
     p.add_argument("--verbose", action="store_true", help="show ffmpeg and MediaMTX logs")
     return p.parse_args()
 

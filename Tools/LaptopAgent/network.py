@@ -2,12 +2,10 @@
 
 With Personal Hotspot on and the phone plugged into this laptop by USB, Windows gets an "Apple Mobile Device Ethernet"
 adapter on the phone's hotspot subnet, 172.20.10.0/28: the phone is the gateway (172.20.10.1) and this laptop gets one
-of 172.20.10.2 to .14. The headset then reaches the agent at that address over the cable, without Wi-Fi.
+of 172.20.10.2 to .14. The agent then dials the headset (172.20.10.1) over the cable, without Wi-Fi.
 
-Windows usually files that network under the Public firewall profile, where inbound connections are blocked unless a
-rule allows them. This module finds the hotspot adapter and its address, reads the firewall profile and rules for it
-(read-only, no admin rights needed) and says which of the agent's ports would be blocked, with the exact command that
-allows them on that adapter only. The pure functions (pick_hotspot, blocked, fix_commands) take plain data, so
+The agent only dials out, so no inbound firewall rule is needed. This module finds the hotspot adapter and its address,
+and still reads the firewall profile and rules for it (read-only, no admin rights needed) in case a port is ever needed. The pure functions (pick_hotspot, blocked, fix_commands) take plain data, so
 selftest_wired.py checks them without a phone.
 """
 import ipaddress

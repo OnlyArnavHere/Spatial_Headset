@@ -252,8 +252,9 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         // Tapping a paired laptop makes the picker wait for it; a panic stop (which raises Panicked) puts it back to the list.
         static IEnumerator CheckPickerPanic(ConsentGate gate, LauncherWindow launcher)
         {
-            var store = LinkService.Current?.Host?.Pairs;
-            if (store == null || LinkService.Current.Answerer == null)
+            string storeDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "consent-pairs-" + System.Guid.NewGuid().ToString("N"));
+            var store = new PairStore(storeDir);
+            if (LinkService.Current?.Host == null || LinkService.Current.Answerer == null)
             {
                 Check(false, "the link service runs, so the picker can be driven");
                 yield break;
@@ -266,11 +267,12 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             gate.Panicked += onPanic;
             try
             {
+                LaptopPickerContent.PairStoreOverride = store;
                 added = store.Add(name, LaptopLinkCoreTest.SpkiA, out _) == PairAddResult.Added;
                 window = launcher.OpenLaptopPicker();
                 yield return 0.4f;
                 var picker = window.GetComponentInChildren<LaptopPickerContent>();
-                if (picker == null || !added || picker.EntryButtons.Count == 0 || picker.EntryButtons.Count > LaptopPickerContent.RowsPerPage || store.List().Count > LaptopPickerContent.RowsPerPage)
+                if (picker == null || !added || picker.EntryButtons.Count == 0 || picker.EntryButtons.Count > LaptopPickerContent.RowsPerPage)
                 {
                     Check(false, "the picker lists the temporary paired laptop on its first page");
                     yield break;
@@ -286,7 +288,8 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             {
                 gate.Panicked -= onPanic;
                 if (window != null) launcher.Settings.Manager.Close(window);
-                if (added) store.Remove(name);
+                LaptopPickerContent.PairStoreOverride = null;
+                try { System.IO.Directory.Delete(storeDir, true); } catch { }
             }
         }
 #endif

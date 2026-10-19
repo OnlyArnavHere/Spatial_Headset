@@ -73,7 +73,7 @@ Measured on Windows 11 on this project's laptop:
 
 - **Encryption:** DTLS-SRTP for video and DTLS for the data channels.
 - **Mutual pinning:** each side has an RSA-2048 identity key. The laptop's is kept in DPAPI, the headset's in the iOS Keychain. Signatures are RSASSA-PKCS1-v1_5 with SHA-256 over a transcript that binds both keys, both nonces and the DTLS fingerprints. A man in the middle can't swap certificates.
-- **Pairing code:** it is bound with PBKDF2-HMAC-SHA256 (100,000 iterations) and HMAC. The headset proves nothing derived from the code to an unverified laptop.
+- **Pairing code:** it is bound with PBKDF2-HMAC-SHA256 (100,000 iterations) and HMAC. The headset proves nothing derived from the code to an unverified laptop. The laptop sends its code proof first.
 - **Two approvals for control**, and the kill hotkey.
 - **Limits before authentication** on the headset listener: 64 KiB frames, 5 s until the laptop is verified, 5 attempts per minute per IP, one at a time.
 
@@ -83,6 +83,7 @@ Measured on Windows 11 on this project's laptop:
 - The headset's listener is reachable on the LAN while the picker or pairing screen is open, before authentication.
 - mDNS shows that a Spatial Launcher headset is present. The name is random, but the service type is visible.
 - Someone who sees the code while you pair and types it first could pair. That is why the code expires after 2 minutes, works once, and needs your confirmation on the headset. Check the laptop name in the prompt.
+- A fake headset on the same network that the laptop dials while pairing receives the laptop's code proof and could try to guess the code offline. PBKDF2 with 100,000 iterations, the 60-bit code and the 2-minute life make that impractical, and the code is useless once it expires.
 - A malicious app already running on the laptop.
 
 ## Limits
