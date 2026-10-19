@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.LaptopLink;
 using TMPro;
 using UnityEngine;
 
@@ -27,11 +28,14 @@ namespace SpatialLauncher.SpatialWindows
         const float Gap = 0.008f;
         const float LabelWidth = 0.17f;
         const float HeaderHeight = 0.045f;
+        /// <summary>Paired laptops listed in Settings > Laptop (each with a Remove button); more show as "+N more".</summary>
+        public const int PairedSlots = 3;
+        static readonly Color RemoveColor = new Color(0.60f, 0.25f, 0.25f);
 
         public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "About" };
 
         /// <summary>Content size the window needs.</summary>
-        public static readonly Vector2 PreferredSize = new Vector2(0.86f, 0.52f);
+        public static readonly Vector2 PreferredSize = new Vector2(0.86f, 0.66f);
 
         sealed class Row
         {
@@ -96,7 +100,82 @@ namespace SpatialLauncher.SpatialWindows
             BuildVoice(sections[6]);
             BuildAbout(sections[7]);
 
+            var pairs = LinkService.Current != null && LinkService.Current.Host != null ? LinkService.Current.Host : null;
+            if (pairs != null)
+            {
+                linkHost = pairs;
+                pairs.Pairs.Changed += OnPairsChanged;
+                pairList = pairs.Pairs.List();
+            }
+
             Select(0);
+        }
+
+        LinkHost linkHost;
+        System.Collections.Generic.IReadOnlyList<PairedLaptop> pairList; // cached: refreshed on Init and on Changed
+
+        // PairStore.Changed can come from a worker (a pairing in progress): refresh on the main thread.
+        void OnPairsChanged()
+        {
+            if (linkHost == null || linkHost.Queue == null) return;
+            linkHost.Queue.Enqueue(() =>
+            {
+                if (this == null) return;
+                pairList = linkHost.Pairs.List();
+                RefreshRows();
+            });
+        }
+
+        void PairedRow(int slot)
+        {
+            const float buttonWidth = 0.1f;
+            var row = NewRow(slot == 0 ? "Paired laptops" : "Paired #" + (slot + 1));
+            var text = CreateLabel("Value", row.Root.transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
+            text.richText = false; // laptop names are shown as typed, never as markup
+            var button = CreateControl<WindowButton>("Remove", row.Root.transform, CreateMaterial(RemoveColor));
+            var buttonText = CreateLabel("RemoveLabel", row.Root.transform, "Remove", 0.17f, TextAlignmentOptions.Center);
+            row.Controls["Remove"] = button;
+            string current = null;
+            button.Clicked += () =>
+            {
+                if (current != null && linkHost != null) linkHost.Pairs.Remove(current);
+                row.Refresh();
+            };
+            var layoutLabel = row.Layout;
+            row.Layout = (y, left, width) =>
+            {
+                layoutLabel(y, left, width);
+                float textWidth = width - LabelWidth - Gap * 2f - buttonWidth;
+                Place(text.transform, text, left + LabelWidth + Gap + textWidth * 0.5f, y, textWidth, RowHeight);
+                float x = left + width - buttonWidth * 0.5f;
+                button.transform.localPosition = new Vector3(x, y, -0.001f);
+                button.transform.localScale = new Vector3(buttonWidth, RowHeight, 1f);
+                Place(buttonText.transform, buttonText, x, y, buttonWidth, RowHeight);
+            };
+            row.Refresh = () =>
+            {
+                var list = pairList;
+                var item = list != null && slot < list.Count ? list[slot] : null;
+                current = item?.Name;
+                button.gameObject.SetActive(item != null);
+                buttonText.gameObject.SetActive(item != null);
+                if (item == null)
+                {
+                    SetText(text, slot == 0 ? (linkHost == null ? "Pairing unavailable" : "None. Open Laptop > Pair new laptop.") : "");
+                    return;
+                }
+                string more = slot == PairedSlots - 1 && list.Count > PairedSlots ? $"  (+{list.Count - PairedSlots} more)" : "";
+                SetText(text, $"{ConsentPairConfirmer.DisplayName(item.Name)}   {PairedLine(item)}{more}");
+            };
+        }
+
+        /// <summary>"AAAA-BBBB  2026-10-19": the first half of the key fingerprint and the day it was paired.</summary>
+        public static string PairedLine(PairedLaptop pair)
+        {
+            string fp = pair.Fingerprint ?? "";
+            if (fp.Length >= 8) fp = fp.Substring(0, 4) + "-" + fp.Substring(4, 4);
+            string day = pair.Added != null && pair.Added.Length >= 10 ? pair.Added.Substring(0, 10) : pair.Added ?? "";
+            return fp + "  " + day;
         }
 
         /// <summary>Shows a section by index (as its tab does).</summary>
@@ -182,6 +261,7 @@ namespace SpatialLauncher.SpatialWindows
             Buttons("Wired (USB)", ("Find laptop", () => FindWiredLaptop(), () => findingLaptop ? "Searching..." : "Find laptop"));
             Value("Wired help", () => wiredStatus ?? (S.laptop.wired ? UsbHotspot.Help(UsbHotspot.PhoneHotspotAddress())
                 : "Wi-Fi: phone and laptop on the same network. Wired (USB): Personal Hotspot over the cable."));
+            for (int i = 0; i < PairedSlots; i++) PairedRow(i);
         }
 
         bool findingLaptop;
@@ -515,6 +595,13 @@ namespace SpatialLauncher.SpatialWindows
         static void SetText(TextMeshPro text, string value)
         {
             if (text.text != value) text.text = value;
+        }
+
+        protected override void OnDestroy()
+        {
+            if (linkHost != null) linkHost.Pairs.Changed -= OnPairsChanged;
+            linkHost = null;
+            base.OnDestroy();
         }
 
         protected override void Layout(Vector2 size)

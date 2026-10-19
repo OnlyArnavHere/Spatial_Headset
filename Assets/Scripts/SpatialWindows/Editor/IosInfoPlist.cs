@@ -15,7 +15,9 @@ namespace SpatialLauncher.SpatialWindows.Editor
     static class IosInfoPlist
     {
         public const string LocalNetworkUsage =
-            "Spatial Launcher connects to the laptop agent on your Wi-Fi to show your laptop's windows.";
+            "Spatial Launcher connects to the laptop agent on your Wi-Fi to show your laptop's windows, and listens for your paired laptop and shows a pairing code.";
+
+        public const string BonjourService = "_spatiallauncher._tcp";
 
         [PostProcessBuild(100)]
         static void AddKeys(BuildTarget target, string buildPath)
@@ -27,11 +29,23 @@ namespace SpatialLauncher.SpatialWindows.Editor
             var root = plist.root;
             root.SetString("NSLocalNetworkUsageDescription", LocalNetworkUsage);
             root.SetString("NSSpeechRecognitionUsageDescription", DeviceSettings.SpeechRecognitionUsage);
+            AddBonjourService(root);
             var ats = root.values.TryGetValue("NSAppTransportSecurity", out var existing) && existing is PlistElementDict dict
                 ? dict
                 : root.CreateDict("NSAppTransportSecurity");
             ats.SetBoolean("NSAllowsLocalNetworking", true);
             plist.WriteToFile(plistPath);
+        }
+
+        /// <summary>Adds the link service to NSBonjourServices once, keeping what is already listed.</summary>
+        internal static void AddBonjourService(PlistElementDict root)
+        {
+            var services = root.values.TryGetValue("NSBonjourServices", out var existing) && existing is PlistElementArray array
+                ? array
+                : root.CreateArray("NSBonjourServices");
+            foreach (var element in services.values)
+                if (element is PlistElementString text && text.value == BonjourService) return;
+            services.AddString(BonjourService);
         }
     }
 }

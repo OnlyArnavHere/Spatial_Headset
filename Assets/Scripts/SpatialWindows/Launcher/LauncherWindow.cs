@@ -78,6 +78,9 @@ namespace SpatialLauncher.SpatialWindows
         public SettingsService Settings => settings;
         /// <summary>The Settings window, while open.</summary>
         public SpatialWindow SettingsWindow { get; private set; }
+
+        /// <summary>The open pairing screen, if any (a destroyed window reads as null).</summary>
+        public SpatialWindow PairingWindow { get; private set; }
         /// <summary>The Hand Setup window, while open.</summary>
         public SpatialWindow HandSetupWindow { get; private set; }
 
@@ -99,6 +102,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
             if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
+            if (!TryGetComponent<LaptopLink.LinkService>(out _)) gameObject.AddComponent<LaptopLink.LinkService>();
         }
 
         void OnEnable()
@@ -230,8 +234,24 @@ namespace SpatialLauncher.SpatialWindows
             var window = manager.Spawn(title, size);
             if (window == null) return null;
             var content = new GameObject().AddComponent<LaptopPickerContent>();
-            content.Init(window, manager.WindowMaterial, connectionSettings, open);
+            content.Init(window, manager.WindowMaterial, connectionSettings, open, () => OpenPairing());
             return window;
+        }
+
+        /// <summary>The pairing screen: a code to type into <c>agent.py --pair</c>. Closing it ends pairing mode.</summary>
+        public SpatialWindow OpenPairing()
+        {
+            if (PairingWindow != null)
+            {
+                manager.Focus(PairingWindow);
+                return PairingWindow;
+            }
+            var link = LaptopLink.LinkService.Current;
+            var size = PairingCodeContent.PreferredSize + Vector2.one * (WindowContent.Padding * 2f);
+            PairingWindow = manager.Spawn("Pair laptop", size);
+            if (PairingWindow == null) return null;
+            new GameObject().AddComponent<PairingCodeContent>().Init(PairingWindow, manager.WindowMaterial, link != null ? link.Host : null);
+            return PairingWindow;
         }
 
         /// <summary>

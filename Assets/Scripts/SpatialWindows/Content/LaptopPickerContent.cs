@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.LaptopLink;
 using TMPro;
 using UnityEngine;
 
@@ -37,6 +38,8 @@ namespace SpatialLauncher.SpatialWindows
         public WindowTextField TokenField { get; private set; }
         public WindowButton ListButton { get; private set; }
         public WindowButton MoreButton { get; private set; }
+        /// <summary>Opens the pairing screen (the code a laptop's agent.py --pair asks for).</summary>
+        public WindowButton PairButton { get; private set; }
         /// <summary>The entry buttons on the current page, in list order.</summary>
         public IReadOnlyList<WindowButton> EntryButtons => pageButtons;
         /// <summary>The targets on the current page, matching <see cref="EntryButtons"/>.</summary>
@@ -53,7 +56,9 @@ namespace SpatialLauncher.SpatialWindows
         LaptopConnection connection;
         bool listWanted;
         Transform panel;
-        TextMeshPro statusLine, listLabel, moreLabel;
+        TextMeshPro statusLine, listLabel, moreLabel, pairLabel;
+        Action pairRequested;
+        IDisposable discovery;
         readonly List<(WindowTextField field, TextMeshPro label)> fields = new List<(WindowTextField, TextMeshPro)>();
         readonly List<(WindowButton button, TextMeshPro label, Material material)> rows = new List<(WindowButton, TextMeshPro, Material)>();
         readonly List<WindowButton> pageButtons = new List<WindowButton>();
@@ -61,11 +66,12 @@ namespace SpatialLauncher.SpatialWindows
 
         /// <param name="openStream">Opens a stream window for a picked target over the given connection.</param>
         public void Init(SpatialWindow window, Material baseMaterial, RemoteConnectionSettings connectionSettings,
-            Action<LaptopTarget, LaptopConnection> openStream)
+            Action<LaptopTarget, LaptopConnection> openStream, Action openPairing = null)
         {
             Attach(window, baseMaterial);
             settings = connectionSettings;
             open = openStream;
+            pairRequested = openPairing;
             link = new WebSocketRemoteInputSink();
             link.StatusChanged += OnLinkChanged;
             link.TargetsReceived += OnTargets;
@@ -108,6 +114,13 @@ namespace SpatialLauncher.SpatialWindows
             MoreButton = CreateControl<WindowButton>("MoreButton", transform, CreateMaterial(MoreColor));
             moreLabel = CreateLabel("MoreLabel", transform, "More", 0.2f, TextAlignmentOptions.Center);
             MoreButton.Clicked += () => ShowPage(Page + 1);
+            PairButton = CreateControl<WindowButton>("PairButton", transform, CreateMaterial(ListColor));
+            pairLabel = CreateLabel("PairLabel", transform, "Pair new laptop", 0.2f, TextAlignmentOptions.Center);
+            PairButton.Clicked += () => pairRequested?.Invoke();
+            PairButton.gameObject.SetActive(pairRequested != null);
+            pairLabel.gameObject.SetActive(pairRequested != null);
+            // While the picker is open the headset listens and advertises, so a paired laptop can find it.
+            discovery = LinkService.Current?.Host?.AcquireDiscovery();
 
             ShowPage(0);
             Relayout();
@@ -245,10 +258,17 @@ namespace SpatialLauncher.SpatialWindows
             MoreButton.transform.localScale = new Vector3(moreWidth, RowHeight, 1f);
             moreLabel.transform.localPosition = new Vector3(size.x * 0.5f - moreWidth * 0.5f, y, -0.003f);
             moreLabel.rectTransform.sizeDelta = new Vector2(moreWidth, RowHeight);
+            float pairWidth = ButtonWidth * 1.8f;
+            PairButton.transform.localPosition = new Vector3(left + pairWidth * 0.5f, y, -0.002f);
+            PairButton.transform.localScale = new Vector3(pairWidth, RowHeight, 1f);
+            pairLabel.transform.localPosition = new Vector3(left + pairWidth * 0.5f, y, -0.003f);
+            pairLabel.rectTransform.sizeDelta = new Vector2(pairWidth, RowHeight);
         }
 
         protected override void OnDestroy()
         {
+            discovery?.Dispose();
+            discovery = null;
             if (link != null)
             {
                 link.StatusChanged -= OnLinkChanged;

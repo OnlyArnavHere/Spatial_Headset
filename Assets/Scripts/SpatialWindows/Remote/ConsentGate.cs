@@ -61,9 +61,9 @@ namespace SpatialLauncher.SpatialWindows
         public bool IsActive => HasPending || live.Count > 0;
         public IReadOnlyList<IRemoteSession> Live => live;
         /// <summary>The question being asked, or "".</summary>
-        public string Question => HasPending ? QuestionFor(pending[0].Session) : "";
+        public string Question => HasPending ? pending[0].Text ?? QuestionFor(pending[0].Session) : "";
         /// <summary>Seconds left to answer the current question.</summary>
-        public float SecondsLeft => HasPending ? Mathf.Max(0f, timeoutSeconds - pending[0].Age) : 0f;
+        public float SecondsLeft => HasPending ? Mathf.Max(0f, LimitOf(pending[0]) - pending[0].Age) : 0f;
         /// <summary>The modal window, while asking.</summary>
         public SpatialWindow Modal => modal;
         /// <summary>The indicator line, or "" while nothing is live.</summary>
@@ -81,7 +81,21 @@ namespace SpatialLauncher.SpatialWindows
             public Action Approved;
             public Action<string> Denied;
             public float Age;
+            /// <summary>Replaces the standard question / title / time limit (<see cref="Ask"/>).</summary>
+            public string Text, Title;
+            public float Limit;
         }
+
+        sealed class AskSession : IRemoteSession
+        {
+            public string SourceName => "question";
+            public string Address => "";
+            public string ModeLabel => "";
+            public SpatialWindow Window => null;
+            public void StopForPanic() { }
+        }
+
+        float LimitOf(Pending p) => p.Limit > 0f ? p.Limit : timeoutSeconds;
 
         readonly List<Pending> pending = new List<Pending>();
         readonly List<IRemoteSession> live = new List<IRemoteSession>();
@@ -144,6 +158,23 @@ namespace SpatialLauncher.SpatialWindows
                 }
             pending.Add(new Pending { Session = session, Approved = approved, Denied = denied });
             if (pending.Count == 1) ShowModal();
+        }
+
+        /// <summary>
+        /// Asks a plain yes/no question in the same modal (pinch, mouse, TRIGGER, touch). <paramref name="answer"/> gets
+        /// true on Approve, false on Deny, timeout, panic stop or a closed modal. Returns a token for <see cref="Withdraw"/>
+        /// (which drops the question without calling <paramref name="answer"/>).
+        /// </summary>
+        public IRemoteSession Ask(string question, float timeoutSeconds, Action<bool> answer, string title)
+        {
+            var token = new AskSession();
+            pending.Add(new Pending
+            {
+                Session = token, Text = question, Title = title, Limit = Mathf.Max(0.1f, timeoutSeconds),
+                Approved = () => answer?.Invoke(true), Denied = _ => answer?.Invoke(false),
+            });
+            if (pending.Count == 1) ShowModal();
+            return token;
         }
 
         /// <summary>The session no longer wants an answer (its window closed or it disconnected first).</summary>
@@ -215,7 +246,7 @@ namespace SpatialLauncher.SpatialWindows
         void ShowModal()
         {
             if (manager == null || !HasPending || modal != null) return;
-            modal = manager.Spawn("Allow screen?", modalSize);
+            modal = manager.Spawn(pending[0].Title ?? "Allow screen?", modalSize);
             if (modal == null) return;
             modalContent = new GameObject().AddComponent<ConsentContent>();
             modalContent.Init(modal, manager.WindowMaterial, this);
@@ -250,7 +281,7 @@ namespace SpatialLauncher.SpatialWindows
             if (HasPending)
             {
                 pending[0].Age += Time.unscaledDeltaTime;
-                if (pending[0].Age >= timeoutSeconds)
+                if (pending[0].Age >= LimitOf(pending[0]))
                 {
                     Refuse("timed out");
                     return;
