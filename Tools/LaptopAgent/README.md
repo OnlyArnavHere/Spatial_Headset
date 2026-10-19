@@ -17,7 +17,8 @@ headset, and several can be open at once, each with its own video stream and its
 | Piece | Role | Listens on |
 |---|---|---|
 | `ffmpeg` (one per streamed window) | Captures a window or the screen (Windows Graphics Capture) and encodes H.264: NVENC, QuickSync or AMF if one works, else x264 with zero-latency settings. Started when the headset opens that window, stopped 15 s after the last headset window showing it closes | nothing (publishes to MediaMTX on 127.0.0.1) |
-| `MediaMTX` | Serves each stream over WebRTC on its own path, named after the window title (e.g. `/untitled-notepad`, `/desktop`); the headset connects with WHEP | TCP 8889 (WHEP/HTTP), UDP 8189 (media); RTSP 8554 on 127.0.0.1 only |
+| `MediaMTX` | A local relay between ffmpeg and the agent: ffmpeg publishes each stream to it over RTSP and the agent reads the H.264 packets back out and forwards them to the headset over WebRTC. WebRTC, HLS, RTMP, SRT, the API, metrics, pprof and playback are all switched off in its config | TCP 8554 on 127.0.0.1 only |
+| `session.py` | Dials the headset (found over Bonjour, or `--headset`), runs the signed handshake, and then one WebRTC session: a control data channel, one input channel and one video track per window slot. The headset opens its own listening socket; the laptop dials out | outbound TCP to the headset (port 47810 unless given); media goes over WebRTC (UDP) between the two |
 | `input_server.py` | The control server: lists windows, starts streams, and (only with `--input`) injects mouse input, and with `--keyboard` also keyboard input, into the window each headset connection opened | TCP 8765 (WebSocket) |
 
 `agent.py` starts and stops all of them. They run only while `agent.py` runs: nothing is installed as a service or
@@ -47,14 +48,29 @@ python agent.py --window "Notepad" --no-picker           # offer only that windo
 python agent.py --max-width 1280 --max-height 720 --fps 60 --bitrate 8M --encoder nvenc
 ```
 
-The console prints a **pairing token** (new every run) and the address to use. In the headset, tap the **Laptop** icon,
-enter the laptop's address, port `8889` and the token, then **List**, and pick a window or **Whole desktop**. Each pick
-opens its own window. While a stream runs you can also watch it in a browser at `http://<laptop>:8889/<path>/` (user
-`viewer`, password the token); the path is the title in lowercase with dashes, e.g. `/untitled-notepad`.
+### Run modes
+
+```
+python agent.py --pair                          # pair a new headset: type the code it shows, confirm there, exit
+python agent.py --pair --headset 192.168.1.5    # ...at this address instead of finding it over Bonjour
+python agent.py                                 # normal run: finds a paired headset over Bonjour and dials it
+python agent.py --headset 192.168.1.5[:PORT]    # dial this paired headset directly (repeatable; first to answer wins)
+python agent.py --pairs                         # list paired headsets, then exit
+python agent.py --revoke NAME                   # forget one, then exit
+```
+
+**Pairing (once per headset):** on the headset open Laptop > Pair new laptop; it shows a code. Run
+`python agent.py --pair`: it lists headsets that announce they are showing a code (if exactly one, it is used; with
+several you pick one; with none it waits and says what to do), asks for the code, and after you confirm on the headset
+both sides pin each other's key. `--headset` skips discovery and then needs exactly one address.
+
+**Normal run:** the agent dials only headsets it has paired, over the signed handshake, then streams. If the headset is
+not there it keeps retrying. In the headset, tap **Laptop** and pick a window or **Whole desktop**; each pick opens
+its own window, up to `--max-windows`. With USB Personal Hotspot use `--wired` (see Doc/wired.md).
 
 Options: `--monitor N`, `--max-width`, `--max-height` (each picture is scaled down to fit, never padded, so pointer
-positions map 1:1), `--fps`, `--bitrate` (per stream), `--encoder auto|nvenc|qsv|amf|x264`, `--webrtc-port`,
-`--ice-udp-port`, `--input`, `--keyboard` (with `--input`), `--input-port` (the control server), `--dry-run-input` (log
+positions map 1:1), `--fps`, `--bitrate` (per stream), `--encoder auto|nvenc|qsv|amf|x264`, `--max-windows`, `--headset`, `--pair`,
+`--wired`, `--input`, `--keyboard` (with `--input`), `--input-port` (the control server), `--dry-run-input` (log
 mapped mouse and key events instead of injecting them), `--no-picker`, `--verbose`.
 
 Windows Graphics Capture only delivers a frame when a window changes, so a window nobody is typing in (or one behind
@@ -93,16 +109,17 @@ headset pointed.
 
 ### Firewall
 
-On the same machine nothing needs opening. For an iPhone on the same Wi-Fi, Windows Firewall must allow inbound
-TCP 8889 and UDP 8189 (video) and TCP 8765 (control and input) for `mediamtx.exe` and `python.exe`. Windows asks the
-first time.
-**Allow them on Private networks only**, and set your home Wi-Fi to Private (Settings > Network > Wi-Fi > your
-network). On a Public network profile Windows blocks them, which is the safe default for cafés and hotels.
+The laptop dials the headset, so video and the link need no inbound port. The only port other machines can reach is
+TCP 8765 (the control server, `--input-port`). MediaMTX listens on 127.0.0.1:8554 only. The WebRTC media uses
+ephemeral UDP ports chosen by the connection, with replies allowed by the firewall's normal stateful handling.
+Allow 8765 for `python.exe` on **Private networks only**, and set your home Wi-Fi to Private. On a Public profile
+Windows blocks it, which is the safe default for cafés and hotels. There is no `--webrtc-port` or `--ice-udp-port` any
+more.
 
 ## Security model
 
 - **Pairing token:** `agent.py` generates a random token (18 random bytes, URL-safe) every run and prints it. Every
-  video (WHEP) request needs it as the password, and every control connection must send it as its first message
+  control connection must send it as its first message
   within 5 seconds. It's compared in constant time. After 5 wrong tokens from one address, that address is locked out
   until the agent restarts; each wrong attempt also waits 2 seconds.
 - **Local network only:** the control server accepts only loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7)
@@ -145,7 +162,7 @@ If it is damaged or belongs to another user the agent says so and does not repla
 
 A new headset is paired with a one-time code. The **headset** shows a 12-character code (`XXXX-XXXX-XXXX`, letters and
 digits without U; `I` and `L` are read as `1`, `O` as `0`) and advertises itself as ready to pair; you type it on the
-laptop with `python agent.py --pair` (coming; the exchange itself is in `pair_protocol.py`). The code never crosses the
+laptop with `python agent.py --pair` (the exchange itself is in `pair_protocol.py`). The code never crosses the
 network: both sides prove they know it with HMACs under a PBKDF2-stretched key that is bound to both public keys, then
 you confirm on the headset, and then laptop and headset each pin the other's key. A code works once, lasts 120 seconds and
 is dead after 3 wrong tries. There is no QR code.
@@ -154,16 +171,13 @@ is dead after 3 wrong tries. There is no QR code.
 
 Read these before using `--input` or `--keyboard`.
 
-- **Anyone with the token on your network can see any window and the whole desktop.** The picker lists every open
-  window's title, and any of them can be streamed. Use `--window ... --no-picker` to offer only one window.
-- **With `--input`, anyone with the token controls your mouse** in the windows they stream. They can click anything
-  in them: buttons, links, dialogs. Treat the token like a password; it's shown in the console and stored in
-  `.runtime/mediamtx.yml` while the agent runs.
-- **The token and the input aren't encrypted.** The video itself is (WebRTC always uses DTLS-SRTP), but the token
-  travels in plain HTTP (the WHEP request) and plain WebSocket (`ws://`), and so do all pointer events and **every key
-  typed**. Anyone who can watch your Wi-Fi traffic can read what you type, read the token, then watch your screen or
-  take over the mouse and keyboard. **Don't type passwords until TLS is added.** Use only on networks you trust; never
-  on public Wi-Fi, and never forward these ports from a router.
+- **Video and the headset link are protected.** They use the signed v1 handshake with pinned keys (a headset must be
+  paired first, with a code shown on the headset) and DTLS-SRTP. MediaMTX listens only on 127.0.0.1.
+- **The 8765 control/input server is still plain `ws://` with a token**, until the next commit removes it. Anyone on
+  your network who has the token can list your windows, stream any of them, and with `--input` move and click your
+  mouse; pointer events and **every key typed** travel unencrypted. **Don't type passwords until it is gone.** Use only
+  on networks you trust; never on public Wi-Fi, and never forward these ports from a router. Use
+  `--window ... --no-picker` to offer only one window.
 - **With `--keyboard`, anyone with the token can type into the windows they stream:** in a terminal or a Run box that
   means running commands as you. Stream only the windows you mean to type into (`--window ... --no-picker`), and keep
   the kill switch (Ctrl+Alt+Shift+Q) in mind.
@@ -192,6 +206,10 @@ Read these before using `--input` or `--keyboard`.
 | `handshake.py` | The signed link handshake for already-paired headsets (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
 | `pair_protocol.py` | First-time pairing with the code the headset shows (wire protocol v2, documented at the top of the file; the spec for the C# side) |
 | `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`; `m=pair` marks a headset showing a code), `ip[:port]` parsing, the USB-hotspot address |
+| `session.py` | The link to the headset: dialling, the WebRTC session, window slots, the control channel |
+| `fake_headset.py` | A Python stand-in for the headset (pairing or paired mode) for testing the agent without a phone |
+| `network.py` | The USB-hotspot address and the firewall check for `--wired` |
+| `test_session_e2e.py` | End-to-end tests: real MediaMTX and ffmpeg against the fake headset (x264 and, if present, NVENC), pairing and discovery: `python -m unittest test_session_e2e` |
 | `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs `websockets` |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
 | `selftest_input.py` | Checks a running agent's control server: token, ping, window list, streams per window, one headset, per-window input routing, keys, text and the rate limit (dry run), and with `--kill-switch` the kill switch |

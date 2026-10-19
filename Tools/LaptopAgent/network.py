@@ -50,7 +50,7 @@ class Rule:
     """An enabled inbound Allow rule, as far as it matters here."""
     profile: str    # "Any" or a list like "Domain, Private, Public"
     protocol: str   # "TCP", "UDP" or "Any"
-    ports: str      # "Any" or "8889,8765" or "8000-9000"
+    ports: str      # "Any" or "8765,8766" or "8000-9000"
     program: str    # "Any" or a full path
     scope: str = ""  # "service" or "package" when the rule only covers a Windows service or a store app
 
@@ -106,10 +106,8 @@ def blocked(profile: str, firewall_on: bool, rules: list[Rule], needs: list[Need
     return [n for n in needs if not any(allows(r, profile, n) for r in rules)]
 
 
-def needs(webrtc_port: int, ice_udp_port: int, input_port: int) -> list[Need]:
-    return [Need("TCP", webrtc_port, "mediamtx.exe", "video signalling (WHEP)"),
-            Need("UDP", ice_udp_port, "mediamtx.exe", "video (WebRTC media)"),
-            Need("TCP", input_port, "python.exe", "control and input")]
+def needs(input_port: int) -> list[Need]:
+    return [Need("TCP", input_port, "python.exe", "control and input")]
 
 
 def fix_commands(alias: str, profile: str, needed: list[Need]) -> list[str]:
@@ -224,14 +222,14 @@ class WiredReport:
         return out
 
 
-def wired_report(webrtc_port: int, ice_udp_port: int, input_port: int) -> WiredReport:
+def wired_report(input_port: int) -> WiredReport:
     try:
         interface = pick_hotspot(list_interfaces())
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return WiredReport(None, error=str(error))
     if interface is None:
         return WiredReport(None)
-    wanted = needs(webrtc_port, ice_udp_port, input_port)
+    wanted = needs(input_port)
     try:
         firewall_on, rules, complete = read_firewall(interface.profile)
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
