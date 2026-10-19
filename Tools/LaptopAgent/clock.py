@@ -24,6 +24,9 @@ def main() -> None:
 
     try:  # sharp text and true pixel positions on scaled displays
         import ctypes
+        import sys
+        if sys.platform != "win32":
+            raise OSError("per-monitor DPI awareness is a Windows call")
         ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
     except (AttributeError, OSError):
         pass

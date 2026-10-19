@@ -1,4 +1,4 @@
-"""Tests for the laptop approval prompt and the kill hotkey. winapi is mocked: no message box is ever shown, except
+"""Tests for the laptop approval prompt and the kill hotkey. hostos is mocked: no message box is ever shown, except
 the smoke test, which only runs with SL_UI_TESTS=1 and dismisses itself after one second.
 
   python -m unittest test_approval -v        (from Tools/LaptopAgent)
@@ -13,7 +13,7 @@ from unittest import mock
 import approval
 import dispatch
 import session
-import winapi
+import hostos
 from approval import LaptopApprover, sanitize_name
 
 INFO = {"name": "Phone", "fingerprint": "AB:CD"}
@@ -21,7 +21,7 @@ CONSENT = {"consent": dispatch.CONSENT}
 
 
 class FakeBox:
-    """Replaces winapi.ask_yes_no / dismiss_prompt: a box that blocks its thread until answered or dismissed."""
+    """Replaces hostos.ask_yes_no / dismiss_prompt: a box that blocks its thread until answered or dismissed."""
 
     def __init__(self, answer=None, block=0.0):
         self.answer, self.block = answer, block
@@ -44,8 +44,8 @@ class FakeBox:
         return True
 
     def install(self, case):
-        case.enterContext(mock.patch.object(winapi, "ask_yes_no", self.ask))
-        case.enterContext(mock.patch.object(winapi, "dismiss_prompt", self.dismiss))
+        case.enterContext(mock.patch.object(hostos, "ask_yes_no", self.ask))
+        case.enterContext(mock.patch.object(hostos, "dismiss_prompt", self.dismiss))
 
 
 async def box_opened(box):
@@ -56,7 +56,7 @@ class ApproverTests(unittest.IsolatedAsyncioTestCase):
     async def test_yes_no_and_timeout(self):
         for answer in ("yes", "no", "timeout"):
             box = FakeBox(answer)
-            with mock.patch.object(winapi, "ask_yes_no", box.ask):
+            with mock.patch.object(hostos, "ask_yes_no", box.ask):
                 call = LaptopApprover(keyboard=True)(INFO)
                 if answer == "timeout":
                     with self.assertRaises(asyncio.TimeoutError):
@@ -72,7 +72,7 @@ class ApproverTests(unittest.IsolatedAsyncioTestCase):
             sent = []
             d = dispatch.InputDispatcher(1, sent.append, lambda k, m: None, input_enabled=True,
                                          approver=LaptopApprover(), headset=INFO)
-            with mock.patch.object(winapi, "ask_yes_no", FakeBox(answer).ask):
+            with mock.patch.object(hostos, "ask_yes_no", FakeBox(answer).ask):
                 await d.request_control(CONSENT)
             self.assertEqual(sent[0].get("reason", sent[0]["type"]), expected)
 
@@ -111,7 +111,7 @@ class ApproverTests(unittest.IsolatedAsyncioTestCase):
                 ticks += 1
 
         beat = asyncio.ensure_future(heartbeat())
-        with mock.patch.object(winapi, "ask_yes_no", box.ask):
+        with mock.patch.object(hostos, "ask_yes_no", box.ask):
             first = asyncio.ensure_future(LaptopApprover()(INFO))
             await box_opened(box)
             self.assertFalse(await LaptopApprover()(INFO))  # denied at once, no second box
@@ -144,19 +144,19 @@ class ProtocolFlowTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.calls = []
         for name in ("key", "mouse_move", "mouse_button", "mouse_wheel", "type_text", "raise_window"):
-            self.enterContext(mock.patch.object(winapi, name, lambda *a, _n=name, **k: self.calls.append((_n,) + a)))
-        self.enterContext(mock.patch.object(winapi, "window_at", lambda x, y: 42))
-        self.enterContext(mock.patch.object(winapi, "focus_window", lambda h: True))
+            self.enterContext(mock.patch.object(hostos, name, lambda *a, _n=name, **k: self.calls.append((_n,) + a)))
+        self.enterContext(mock.patch.object(hostos, "window_at", lambda x, y: 42))
+        self.enterContext(mock.patch.object(hostos, "focus_window", lambda h: True))
 
     def make(self, answer, **kw):
         from test_dispatch import window_stream
         self.control, self.now = [], [0.0]
         self.box = FakeBox(answer)
-        self.enterContext(mock.patch.object(winapi, "ask_yes_no", self.box.ask))
+        self.enterContext(mock.patch.object(hostos, "ask_yes_no", self.box.ask))
         kw.setdefault("input_enabled", True)
         d = dispatch.InputDispatcher(1, self.control.append, lambda k, m: None, approver=LaptopApprover(),
                                      headset=INFO, clock=lambda: self.now[0], **kw)
-        d.attach(0, window_stream(42, winapi.Rect(0, 0, 100, 100)))
+        d.attach(0, window_stream(42, hostos.Rect(0, 0, 100, 100)))
         return d
 
     def buttons(self):
@@ -245,7 +245,7 @@ class KillSwitchTests(unittest.IsolatedAsyncioTestCase):
 class RealBoxTests(unittest.TestCase):
     def test_box_times_out_on_its_own(self):
         start = time.monotonic()
-        self.assertEqual(winapi.ask_yes_no("Spatial Launcher test prompt (closes itself)", "Spatial Launcher", 1000),
+        self.assertEqual(hostos.ask_yes_no("Spatial Launcher test prompt (closes itself)", "Spatial Launcher", 1000),
                          "timeout")
         self.assertLess(time.monotonic() - start, 3)
 

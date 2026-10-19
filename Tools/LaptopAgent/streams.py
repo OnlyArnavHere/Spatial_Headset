@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-import winapi
+import hostos
 
 log = logging.getLogger("streams")
 
@@ -32,7 +32,7 @@ class Target:
     title: str
     description: str
     selector: str                  # ffmpeg gfxcapture selector: an exact HWND/HMONITOR, so input maps to the same thing
-    rect: Callable[[], "winapi.Rect | None"]
+    rect: Callable[[], "hostos.Rect | None"]
     usable: Callable[[], bool]
 
     def describe(self) -> dict:
@@ -41,18 +41,18 @@ class Target:
                 "width": r.width if r else 0, "height": r.height if r else 0}
 
 
-def window_target(window: winapi.Window) -> Target:
+def window_target(window: hostos.Window) -> Target:
     handle = window.handle
     return Target(f"window:{handle}", "window", handle, window.title, f"window {window.title!r}", f"hwnd={handle}",
-                  rect=lambda: winapi.window_rect(handle),
-                  usable=lambda: winapi.window_exists(handle) and not winapi.window_is_minimized(handle))
+                  rect=lambda: hostos.window_rect(handle),
+                  usable=lambda: hostos.window_exists(handle) and not hostos.window_is_minimized(handle))
 
 
-def monitor_target(monitor: winapi.Monitor) -> Target:
+def monitor_target(monitor: hostos.Monitor) -> Target:
     handle = monitor.handle
     target_id, title = (DESKTOP_ID, "Whole desktop") if monitor.primary else (f"monitor:{monitor.index}", f"Screen {monitor.index + 1}")
     return Target(target_id, "monitor", handle, title, f"monitor {monitor.index} ({monitor.rect})", f"hmonitor={handle}",
-                  rect=lambda: winapi.monitor_rect(handle), usable=lambda: True)
+                  rect=lambda: hostos.monitor_rect(handle), usable=lambda: True)
 
 
 def slug(title: str) -> str:
@@ -104,18 +104,18 @@ class StreamManager:
         """The whole desktop and other screens first, then the windows a user would recognise (minimized ones can't
         be captured and tiny popups aren't worth it, so they're left out). With only_pinned, just the targets given
         on the command line."""
-        monitors = sorted(winapi.list_monitors(), key=lambda m: (not m.primary, m.index))
+        monitors = sorted(hostos.list_monitors(), key=lambda m: (not m.primary, m.index))
         targets = [monitor_target(m) for m in monitors]
-        targets += [window_target(w) for w in winapi.list_windows() if self._listable(w.handle)]
+        targets += [window_target(w) for w in hostos.list_windows() if self._listable(w.handle)]
         if self._only_pinned:
             targets = [t for t in targets if t.id in self._pinned]
         return targets
 
     @staticmethod
     def _listable(handle: int) -> bool:
-        if winapi.window_is_minimized(handle):
+        if hostos.window_is_minimized(handle):
             return False
-        rect = winapi.window_rect(handle)
+        rect = hostos.window_rect(handle)
         return rect is not None and rect.width >= MIN_WINDOW_SIZE[0] and rect.height >= MIN_WINDOW_SIZE[1]
 
     def listing(self) -> list[dict]:
@@ -140,8 +140,8 @@ class StreamManager:
         if stream is None or not stream.running:
             target = next((t for t in self.available() if t.id == target_id), None)
             if target is None:
-                minimized = target_id.startswith("window:") and winapi.window_exists(int(target_id[7:])) \
-                    and winapi.window_is_minimized(int(target_id[7:]))
+                minimized = target_id.startswith("window:") and hostos.window_exists(int(target_id[7:])) \
+                    and hostos.window_is_minimized(int(target_id[7:]))
                 raise LookupError("minimized" if minimized else "gone")
             path = self.path_for(target)
             process, size = self._launch(target, path)
@@ -170,7 +170,7 @@ class StreamManager:
         now = time.monotonic()
         for target_id, stream in list(self._streams.items()):
             if stream.running and stream.target.kind == "window":
-                winapi.request_repaint(stream.target.handle)
+                hostos.request_repaint(stream.target.handle)
             if not stream.running:
                 log.warning("Stream /%s stopped (exit code %s): %s closed or no longer capturable?",
                             stream.path, stream.process.returncode, stream.target.description)

@@ -6,7 +6,7 @@ import logging
 import threading
 import unicodedata
 
-import winapi
+import hostos
 
 log = logging.getLogger("approval")
 
@@ -54,7 +54,7 @@ class LaptopApprover:
         def ask() -> None:
             ident.append(threading.get_native_id())
             try:
-                answer = ("ok", winapi.ask_yes_no(text, CAPTION, self.timeout_ms))
+                answer = ("ok", hostos.ask_yes_no(text, CAPTION, self.timeout_ms))
             except BaseException as e:
                 answer = ("error", e)
             finally:
@@ -89,5 +89,5 @@ class LaptopApprover:
         end = loop.time() + DISMISS_WAIT_S
         while thread.is_alive() and loop.time() < end:
             if ident:
-                winapi.dismiss_prompt(ident[0])
+                hostos.dismiss_prompt(ident[0])
             await asyncio.sleep(0.05)

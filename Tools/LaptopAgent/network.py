@@ -11,6 +11,7 @@ selftest_wired.py checks them without a phone.
 import ipaddress
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 
 HOTSPOT_NETWORK = ipaddress.ip_network("172.20.10.0/28")
@@ -169,7 +170,16 @@ def _powershell(script: str, timeout: float = 60.0) -> object:
     return json.loads(result.stdout)
 
 
+def _list_interfaces_ifaddr() -> list[Interface]:
+    """Non-Windows: every IPv4 address with its adapter's name (there is no firewall profile to report)."""
+    import ifaddr
+    return [Interface(adapter.nice_name or adapter.name, ip.ip, adapter.name, "")
+            for adapter in ifaddr.get_adapters() for ip in adapter.ips if ip.is_IPv4]
+
+
 def list_interfaces() -> list[Interface]:
+    if sys.platform != "win32":
+        return _list_interfaces_ifaddr()
     data = _powershell(_INTERFACES)
     if isinstance(data, dict):
         data = [data]
@@ -228,6 +238,8 @@ def wired_report() -> WiredReport:
         return WiredReport(None, error=str(error))
     if interface is None:
         return WiredReport(None)
+    if sys.platform != "win32":  # the agent dials out, so there is no inbound rule to check
+        return WiredReport(interface, False, [], [])
     wanted = needs()
     try:
         firewall_on, rules, complete = read_firewall(interface.profile)

@@ -11,21 +11,21 @@ from unittest import mock
 import dispatch
 import keys
 import session
-import winapi
+import hostos
 from dispatch import ControlState, InputDispatcher
 from streams import Stream, Target
 
-WINDOWS = {0: (42, winapi.Rect(100, 100, 900, 600)), 1: (43, winapi.Rect(1000, 200, 1400, 500))}
+WINDOWS = {0: (42, hostos.Rect(100, 100, 900, 600)), 1: (43, hostos.Rect(1000, 200, 1400, 500))}
 
 
-def window_stream(handle: int, rect: winapi.Rect, usable: bool = True) -> Stream:
+def window_stream(handle: int, rect: hostos.Rect, usable: bool = True) -> Stream:
     target = Target(f"window:{handle}", "window", handle, f"Window {handle}", f"window {handle}", f"hwnd={handle}",
                     rect=lambda: rect, usable=lambda: usable)
     return Stream(f"window-{handle}", target, (rect.width, rect.height), process=None)
 
 
 class Recorder:
-    """Stands in for every winapi call that could change anything on this machine."""
+    """Stands in for every hostos call that could change anything on this machine."""
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
@@ -39,9 +39,9 @@ class Recorder:
             return call
 
         for name in ("key", "mouse_move", "mouse_button", "mouse_wheel", "type_text", "raise_window"):
-            case.enterContext(mock.patch.object(winapi, name, record(name)))
-        case.enterContext(mock.patch.object(winapi, "focus_window", record("focus_window", lambda: self.focus_ok)))
-        case.enterContext(mock.patch.object(winapi, "window_at", lambda x, y: 42 if x < 1000 else 43))
+            case.enterContext(mock.patch.object(hostos, name, record(name)))
+        case.enterContext(mock.patch.object(hostos, "focus_window", record("focus_window", lambda: self.focus_ok)))
+        case.enterContext(mock.patch.object(hostos, "window_at", lambda x, y: 42 if x < 1000 else 43))
 
     def of(self, name: str) -> list[tuple]:
         return [c for c in self.calls if c[0] == name]
@@ -108,7 +108,7 @@ class RoutingTests(Base):
         d = self.make()
         self.send(d, 0, {"type": "scroll", "x": 0.5, "y": 0.5, "delta": 99})
         self.assertEqual(self.rec.of("mouse_wheel"), [("mouse_wheel", 500, 350, 10.0)])
-        with mock.patch.object(winapi, "window_at", lambda x, y: 999), self.assertLogs("input", "WARNING"):
+        with mock.patch.object(hostos, "window_at", lambda x, y: 999), self.assertLogs("input", "WARNING"):
             self.send(d, 0, down())
         self.assertEqual(len(self.rec.of("mouse_button")), 0)
 
