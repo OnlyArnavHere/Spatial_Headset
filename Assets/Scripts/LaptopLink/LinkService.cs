@@ -30,7 +30,7 @@ namespace SpatialLauncher.LaptopLink
                 var queue = GetComponent<MainThreadQueue>();
                 if (queue == null) queue = gameObject.AddComponent<MainThreadQueue>();
                 string name = DeviceNames.Safe(SystemInfo.deviceName, fingerprint);
-                Host = new LinkHost(StoreDirectory, identity, queue, CreateBonjour(), new ConsentPairConfirmer(queue), name);
+                Host = new LinkHost(StoreDirectory, identity, queue, CreateBonjour(), new ConsentPairConfirmer(queue), name, pbkdf2: CreatePbkdf2());
             }
             catch (Exception e)
             {
@@ -51,30 +51,35 @@ namespace SpatialLauncher.LaptopLink
             if (Current == this) Current = null;
         }
 
-        /// <summary>The editor's file identity; on iOS the Keychain one comes with 5b-2 (this placeholder refuses).</summary>
+        /// <summary>The Keychain identity on iOS, the file identity in the editor.</summary>
         public static ILinkIdentity CreateIdentity()
         {
 #if UNITY_IOS && !UNITY_EDITOR
-            return new UnsupportedIdentity();
+            return new IosKeychainIdentity();
 #else
             return new EditorFileIdentity();
 #endif
         }
 
-        /// <summary>The Bonjour advertiser; the native iOS one comes with 5b-2.</summary>
+        /// <summary>The native Bonjour advertiser on iOS; the editor advertises nothing.</summary>
         public static IBonjourAdvertiser CreateBonjour()
         {
+#if UNITY_IOS && !UNITY_EDITOR
+            return new IosBonjour();
+#else
             return new NullBonjour();
+#endif
         }
 
-#if UNITY_IOS && !UNITY_EDITOR
-        sealed class UnsupportedIdentity : ILinkIdentity
+        /// <summary>CommonCrypto PBKDF2 on iOS, the managed one elsewhere.</summary>
+        public static IPbkdf2 CreatePbkdf2()
         {
-            public byte[] Spki { get { throw new NotSupportedException("The iOS identity is not implemented yet."); } }
-            public string Fingerprint { get { throw new NotSupportedException("The iOS identity is not implemented yet."); } }
-            public byte[] Sign(byte[] message) { throw new NotSupportedException("The iOS identity is not implemented yet."); }
-        }
+#if UNITY_IOS && !UNITY_EDITOR
+            return new IosPbkdf2();
+#else
+            return new Pbkdf2Sha256();
 #endif
+        }
     }
 
     /// <summary>The headset's name on the wire: ASCII letters, digits and a few separators, valid under <see cref="NameRules"/>.</summary>
