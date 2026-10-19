@@ -210,9 +210,8 @@ def wait_for_port(port: int, process: subprocess.Popen, timeout: float) -> None:
 
 def start_mediamtx(args, job: hostos.ChildReaper) -> subprocess.Popen:
     config = write_mediamtx_config()
-    mediamtx = subprocess.Popen([tool("mediamtx"), str(config)], cwd=RUNTIME,
-                                stdout=None if args.verbose else subprocess.DEVNULL, stderr=subprocess.STDOUT)
-    job.add(mediamtx.pid)
+    mediamtx = job.spawn([tool("mediamtx"), str(config)], cwd=RUNTIME,
+                         stdout=None if args.verbose else subprocess.DEVNULL, stderr=subprocess.STDOUT)
     wait_for_port(RTSP_PORT, mediamtx, 10)
     return mediamtx
 
@@ -232,8 +231,7 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReape
         command += hostos.encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
         command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{rtsp_port}/{path}"]
         log.debug("ffmpeg: %s", subprocess.list2cmdline(command))
-        process = subprocess.Popen(command, stdin=subprocess.DEVNULL)
-        job.add(process.pid)
+        process = job.spawn(command, stdin=subprocess.DEVNULL)
         return process, (width, height)
 
     return launch

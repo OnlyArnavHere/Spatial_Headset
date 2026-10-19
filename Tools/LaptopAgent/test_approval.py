@@ -6,6 +6,7 @@ the smoke test, which only runs with SL_UI_TESTS=1 and dismisses itself after on
 import asyncio
 import os
 import threading
+import types
 import time
 import unittest
 from unittest import mock
@@ -21,7 +22,7 @@ CONSENT = {"consent": dispatch.CONSENT}
 
 
 class FakeBox:
-    """Replaces hostos.ask_yes_no / dismiss_prompt: a box that blocks its thread until answered or dismissed."""
+    """Replaces hostos.open_prompt: a box that blocks its thread until answered or dismissed."""
 
     def __init__(self, answer=None, block=0.0):
         self.answer, self.block = answer, block
@@ -38,14 +39,16 @@ class FakeBox:
         time.sleep(self.block)
         return self.answer
 
-    def dismiss(self, thread_id):
-        self.dismissed.append(thread_id)
+    def dismiss(self):
+        self.dismissed.append(True)
         self.release.set()
         return True
 
+    def open_prompt(self, text, caption, timeout_ms):
+        return types.SimpleNamespace(wait=lambda: self.ask(text, caption, timeout_ms), dismiss=self.dismiss)
+
     def install(self, case):
-        case.enterContext(mock.patch.object(hostos, "ask_yes_no", self.ask))
-        case.enterContext(mock.patch.object(hostos, "dismiss_prompt", self.dismiss))
+        case.enterContext(mock.patch.object(hostos, "open_prompt", self.open_prompt))
 
 
 async def box_opened(box):
@@ -56,7 +59,7 @@ class ApproverTests(unittest.IsolatedAsyncioTestCase):
     async def test_yes_no_and_timeout(self):
         for answer in ("yes", "no", "timeout"):
             box = FakeBox(answer)
-            with mock.patch.object(hostos, "ask_yes_no", box.ask):
+            with mock.patch.object(hostos, "open_prompt", box.open_prompt):
                 call = LaptopApprover(keyboard=True)(INFO)
                 if answer == "timeout":
                     with self.assertRaises(asyncio.TimeoutError):
@@ -72,7 +75,7 @@ class ApproverTests(unittest.IsolatedAsyncioTestCase):
             sent = []
             d = dispatch.InputDispatcher(1, sent.append, lambda k, m: None, input_enabled=True,
                                          approver=LaptopApprover(), headset=INFO)
-            with mock.patch.object(hostos, "ask_yes_no", FakeBox(answer).ask):
+            with mock.patch.object(hostos, "open_prompt", FakeBox(answer).open_prompt):
                 await d.request_control(CONSENT)
             self.assertEqual(sent[0].get("reason", sent[0]["type"]), expected)
 
@@ -111,7 +114,7 @@ class ApproverTests(unittest.IsolatedAsyncioTestCase):
                 ticks += 1
 
         beat = asyncio.ensure_future(heartbeat())
-        with mock.patch.object(hostos, "ask_yes_no", box.ask):
+        with mock.patch.object(hostos, "open_prompt", box.open_prompt):
             first = asyncio.ensure_future(LaptopApprover()(INFO))
             await box_opened(box)
             self.assertFalse(await LaptopApprover()(INFO))  # denied at once, no second box
@@ -152,7 +155,7 @@ class ProtocolFlowTests(unittest.IsolatedAsyncioTestCase):
         from test_dispatch import window_stream
         self.control, self.now = [], [0.0]
         self.box = FakeBox(answer)
-        self.enterContext(mock.patch.object(hostos, "ask_yes_no", self.box.ask))
+        self.enterContext(mock.patch.object(hostos, "open_prompt", self.box.open_prompt))
         kw.setdefault("input_enabled", True)
         d = dispatch.InputDispatcher(1, self.control.append, lambda k, m: None, approver=LaptopApprover(),
                                      headset=INFO, clock=lambda: self.now[0], **kw)
@@ -245,7 +248,7 @@ class KillSwitchTests(unittest.IsolatedAsyncioTestCase):
 class RealBoxTests(unittest.TestCase):
     def test_box_times_out_on_its_own(self):
         start = time.monotonic()
-        self.assertEqual(hostos.ask_yes_no("Spatial Launcher test prompt (closes itself)", "Spatial Launcher", 1000),
+        self.assertEqual(hostos.open_prompt("Spatial Launcher test prompt (closes itself)", "Spatial Launcher", 1000).wait(),
                          "timeout")
         self.assertLess(time.monotonic() - start, 3)
 

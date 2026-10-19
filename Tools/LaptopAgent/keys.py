@@ -1,7 +1,7 @@
 """Keyboard events from the headset: the key names the protocol accepts, validation, and the rate limit.
 
 Plain Python with no Windows calls, so it can be tested anywhere. dispatch.py turns accepted events into SendInput
-calls through winapi.py.
+calls through hostos (its Windows backend is winapi.py).
 
 Keys are named, not sent as Windows virtual-key codes, so the headset doesn't depend on Windows. Only the keys below
 exist: there is no Windows key, no Apps/menu key, no Print Screen and no media or power keys, so a headset can't open

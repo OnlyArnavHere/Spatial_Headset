@@ -4,6 +4,8 @@ winapi is only imported as a module here and looked up at call time, so importin
 hostos.types) can't trip over a half-initialised package.
 """
 import os
+import subprocess
+import threading
 from pathlib import Path
 
 import winapi as _w
@@ -96,12 +98,32 @@ def watch_kill_switch(on_pressed) -> bool:
     return _w.watch_kill_switch(on_pressed)
 
 
-def ask_yes_no(text, caption, timeout_ms):
-    return _w.ask_yes_no(text, caption, timeout_ms)
+class _Prompt:
+    """A Yes/No box. wait() shows it and blocks the calling thread until it is answered, dismissed or times out;
+    dismiss() may be called from any other thread (False until wait() has started on its thread)."""
+
+    def __init__(self, text: str, caption: str, timeout_ms: int) -> None:
+        self._args = (text, caption, timeout_ms)
+        self._thread_id = None
+
+    def wait(self) -> str:
+        self._thread_id = threading.get_native_id()
+        return _w.ask_yes_no(*self._args)
+
+    def dismiss(self) -> bool:
+        return self._thread_id is not None and _w.dismiss_prompt(self._thread_id)
 
 
-def dismiss_prompt(thread_id) -> bool:
-    return _w.dismiss_prompt(thread_id)
+def open_prompt(text: str, caption: str, timeout_ms: int) -> _Prompt:
+    return _Prompt(text, caption, timeout_ms)
+
+
+def window_selector(handle: int) -> str:
+    return f"hwnd={handle}"
+
+
+def monitor_selector(handle: int) -> str:
+    return f"hmonitor={handle}"
 
 
 def protect(data: bytes) -> bytes:
@@ -127,8 +149,11 @@ class ChildReaper:
     def __init__(self) -> None:
         self._job = _w.KillOnExitJob()
 
-    def add(self, pid: int) -> None:
-        self._job.add(pid)
+    def spawn(self, command, **kwargs) -> subprocess.Popen:
+        """Starts the child and puts it in the job right after (same timing as before)."""
+        process = subprocess.Popen(command, **kwargs)
+        self._job.add(process.pid)
+        return process
 
 
 def capture_input_args(selector: str, fps: int, width: int, height: int, pix_fmt: str) -> list[str]:

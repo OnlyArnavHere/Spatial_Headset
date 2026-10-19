@@ -177,8 +177,8 @@ def _list_interfaces_ifaddr() -> list[Interface]:
             for adapter in ifaddr.get_adapters() for ip in adapter.ips if ip.is_IPv4]
 
 
-def list_interfaces() -> list[Interface]:
-    if sys.platform != "win32":
+def list_interfaces(platform: str | None = None) -> list[Interface]:
+    if (platform or sys.platform) != "win32":
         return _list_interfaces_ifaddr()
     data = _powershell(_INTERFACES)
     if isinstance(data, dict):
@@ -205,6 +205,7 @@ class WiredReport:
     commands: list = None
     error: str = ""
     complete: bool = True
+    firewall_checked: bool = True  # False on OSes where the agent doesn't look at a firewall
 
     def lines(self) -> list[str]:
         if self.interface is None:
@@ -212,6 +213,9 @@ class WiredReport:
                     "                   headset iPhone, plug it into this laptop by USB and trust the computer. See Doc/wired.md."]
         i = self.interface
         kind = "USB" if i.usb else "hotspot (not USB: Wi-Fi?)"
+        if not self.firewall_checked:
+            return [f"Wired (USB):       host {i.address}   on {i.alias!r} ({kind})",
+                    "                   No inbound firewall check on this OS (the agent dials out)."]
         out = [f"Wired (USB):       host {i.address}   on {i.alias!r} ({kind}), firewall profile {i.profile}"]
         if self.error:
             out.append(f"                   couldn't read the firewall ({self.error}); if the headset can't connect, run:")
@@ -231,15 +235,16 @@ class WiredReport:
         return out
 
 
-def wired_report() -> WiredReport:
+def wired_report(platform: str | None = None) -> WiredReport:
+    platform = platform or sys.platform  # resolved per call, not frozen at import
     try:
-        interface = pick_hotspot(list_interfaces())
+        interface = pick_hotspot(list_interfaces(platform))
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return WiredReport(None, error=str(error))
     if interface is None:
         return WiredReport(None)
-    if sys.platform != "win32":  # the agent dials out, so there is no inbound rule to check
-        return WiredReport(interface, False, [], [])
+    if platform != "win32":  # the agent dials out, so there is no inbound rule to check
+        return WiredReport(interface, None, [], [], firewall_checked=False)
     wanted = needs()
     try:
         firewall_on, rules, complete = read_firewall(interface.profile)

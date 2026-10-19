@@ -39,7 +39,7 @@ FUNCTIONS = (
     "make_dpi_aware", "list_monitors", "monitor_rect", "list_windows", "find_window", "window_exists",
     "window_is_minimized", "window_rect", "raise_window", "window_at", "focus_window", "foreground_window",
     "request_repaint", "mouse_move", "mouse_button", "mouse_wheel", "key", "type_text", "watch_kill_switch",
-    "ask_yes_no", "dismiss_prompt", "protect", "unprotect", "default_home", "capture_input_args", "encoder_args",
-    "preflight",
+    "open_prompt", "protect", "unprotect", "default_home", "capture_input_args", "encoder_args",
+    "preflight", "window_selector", "monitor_selector",
 )
 CONSTANTS = ("KILL_SWITCH", "ENCODERS", "exe_suffix", "ChildReaper")

@@ -43,7 +43,7 @@ class Target:
 
 def window_target(window: hostos.Window) -> Target:
     handle = window.handle
-    return Target(f"window:{handle}", "window", handle, window.title, f"window {window.title!r}", f"hwnd={handle}",
+    return Target(f"window:{handle}", "window", handle, window.title, f"window {window.title!r}", hostos.window_selector(handle),
                   rect=lambda: hostos.window_rect(handle),
                   usable=lambda: hostos.window_exists(handle) and not hostos.window_is_minimized(handle))
 
@@ -51,7 +51,7 @@ def window_target(window: hostos.Window) -> Target:
 def monitor_target(monitor: hostos.Monitor) -> Target:
     handle = monitor.handle
     target_id, title = (DESKTOP_ID, "Whole desktop") if monitor.primary else (f"monitor:{monitor.index}", f"Screen {monitor.index + 1}")
-    return Target(target_id, "monitor", handle, title, f"monitor {monitor.index} ({monitor.rect})", f"hmonitor={handle}",
+    return Target(target_id, "monitor", handle, title, f"monitor {monitor.index} ({monitor.rect})", hostos.monitor_selector(handle),
                   rect=lambda: hostos.monitor_rect(handle), usable=lambda: True)
 
 

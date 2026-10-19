@@ -1,4 +1,4 @@
-"""The agent's long-term identity: an RSA-2048 key pair kept encrypted for this Windows user (DPAPI).
+"""The agent's long-term identity: an RSA-2048 key pair kept encrypted for this OS user (DPAPI on Windows).
 
 The private key never leaves identity.key in the agent's home folder. The public key is shared as DER
 SubjectPublicKeyInfo (what .NET's ExportSubjectPublicKeyInfo returns) and summarised as a 16-character fingerprint.
@@ -72,7 +72,7 @@ def load_or_create(home: Path) -> Identity:
             pkcs8 = hostos.unprotect(path.read_bytes())
             key = serialization.load_der_private_key(pkcs8, password=None)
         except (OSError, ValueError) as e:
-            raise IdentityError(f"{path} can't be read ({e}). It is corrupt or belongs to another Windows user. "
+            raise IdentityError(f"{path} can't be read ({e}). It is corrupt or belongs to another user or machine. "
                                 "Delete it only if you accept re-pairing every headset.") from e
         if not isinstance(key, rsa.RSAPrivateKey):
             raise IdentityError(f"{path} doesn't hold an RSA key.")

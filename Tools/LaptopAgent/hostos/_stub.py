@@ -13,6 +13,9 @@ def fill(namespace: dict, message: str) -> None:
         def __init__(self) -> None:
             raise NotImplementedError(message)
 
+        def spawn(self, command, **kwargs):
+            raise NotImplementedError(message)
+
     for name in FUNCTIONS:
         namespace[name] = make(name)
     namespace["preflight"] = lambda: []

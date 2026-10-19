@@ -3,6 +3,7 @@ expose the same names (the macOS and Linux backends are stubs for now but must i
 import importlib
 import subprocess
 import sys
+import threading
 import types
 import unittest
 from unittest import mock
@@ -33,10 +34,11 @@ def build_command(encoder) -> str:
         def __init__(self, command, **kwargs):
             built.append(command)
 
-    job = types.SimpleNamespace(add=lambda pid: None)
+    job = types.SimpleNamespace(spawn=lambda command, **kwargs: FakePopen(command, **kwargs))
     args = types.SimpleNamespace(fps=30, max_width=1920, max_height=1080, bitrate="6M", verbose=False)
     target = types.SimpleNamespace(selector="hwnd=1234", rect=lambda: types.SimpleNamespace(width=2560, height=1440))
-    with mock.patch.object(agent, "tool", lambda name: "C:/x/ffmpeg.exe"),             mock.patch.object(agent.subprocess, "Popen", FakePopen):
+    with mock.patch.object(agent, "tool", lambda name: "C:/x/ffmpeg.exe"), \
+            mock.patch.object(agent.subprocess, "Popen", FakePopen):
         agent.capture_launcher(args, encoder, job)(target, "w1")
     return subprocess.list2cmdline(built[0])
 
@@ -52,6 +54,53 @@ class WindowsGoldenTests(unittest.TestCase):
         self.assertEqual(hostos.ENCODERS, [("nvenc", "h264_nvenc", "yuv420p"), ("qsv", "h264_qsv", "nv12"),
                                            ("amf", "h264_amf", "nv12"), ("x264", "libx264", "yuv420p")])
 
+    def test_selectors_and_prompt_handle(self):
+        self.assertEqual(hostos.window_selector(1234), "hwnd=1234")
+        self.assertEqual(hostos.monitor_selector(99), "hmonitor=99")
+        prompt = hostos.open_prompt("text", "caption", 1000)
+        self.assertFalse(prompt.dismiss())  # nothing is showing yet
+
+    def test_wired_report_text_per_os(self):
+        import network
+        iface = network.Interface("Apple Mobile Device Ethernet", "172.20.10.4", "", "Public")
+        head = "Wired (USB):       host 172.20.10.4   on 'Apple Mobile Device Ethernet' (USB)"
+        windows = network.WiredReport(iface, False, [], []).lines()
+        self.assertEqual(windows, [head + ", firewall profile Public",
+                                   "                   Public firewall is off: nothing to allow"])
+        other = network.WiredReport(iface, None, [], [], firewall_checked=False).lines()
+        self.assertEqual(other, [head, "                   No inbound firewall check on this OS (the agent dials out)."])
+        with mock.patch.object(network, "list_interfaces", lambda platform=None: [iface]):
+            with mock.patch.object(network, "read_firewall", lambda profile: (False, [], True)):
+                report = network.wired_report("darwin")
+                self.assertFalse(report.firewall_checked)
+                self.assertEqual(report.lines(), other)
+                report = network.wired_report("win32")
+                self.assertTrue(report.firewall_checked)
+                self.assertEqual(report.lines(), windows)
+
+    def test_dismiss_during_wait_ends_the_prompt(self):
+        import hostos.windows as backend
+        opened, closed = threading.Event(), threading.Event()
+
+        def ask(text, caption, timeout_ms):
+            opened.set()
+            closed.wait(5)
+            return "no"
+
+        def dismiss(thread_id):
+            closed.set()
+            return True
+
+        with mock.patch.object(backend._w, "ask_yes_no", ask), mock.patch.object(backend._w, "dismiss_prompt", dismiss):
+            prompt = hostos.open_prompt("text", "caption", 1000)
+            result = []
+            thread = threading.Thread(target=lambda: result.append(prompt.wait()))
+            thread.start()
+            self.assertTrue(opened.wait(5))
+            self.assertTrue(prompt.dismiss())
+            thread.join(5)
+        self.assertEqual(result, ["no"])
+
     def test_windows_constants(self):
         import winapi
         import identity
@@ -63,6 +112,14 @@ class WindowsGoldenTests(unittest.TestCase):
 
 
 class InterfaceTests(unittest.TestCase):
+    def test_new_names_are_part_of_the_interface(self):
+        for name in ("open_prompt", "window_selector", "monitor_selector", "ChildReaper"):
+            self.assertIn(name, FUNCTIONS + CONSTANTS)
+            self.assertTrue(hasattr(hostos, name))
+        self.assertTrue(hasattr(hostos.ChildReaper, "spawn"))
+        for module in ("macos", "linux_x11"):
+            self.assertTrue(hasattr(importlib.import_module(f"hostos.{module}").ChildReaper, "spawn"))
+
     def test_hostos_exposes_every_name(self):
         for name in FUNCTIONS + CONSTANTS:
             self.assertTrue(hasattr(hostos, name), name)
@@ -76,7 +133,8 @@ class InterfaceTests(unittest.TestCase):
     def test_stub_backends_say_what_is_missing(self):
         for module in ("macos", "linux_x11"):
             backend = importlib.import_module(f"hostos.{module}")
-            with self.assertRaisesRegex(NotImplementedError, "later commit"):
+            os_name = "macOS" if module == "macos" else "Linux"
+            with self.assertRaisesRegex(NotImplementedError, f"{os_name} support lands in a later commit"):
                 backend.list_monitors()
             with self.assertRaises(NotImplementedError):
                 backend.ChildReaper()
