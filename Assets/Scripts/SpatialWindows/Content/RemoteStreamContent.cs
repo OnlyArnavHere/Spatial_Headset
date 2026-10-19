@@ -21,6 +21,11 @@ namespace SpatialLauncher.SpatialWindows
     ///
     /// Connect asks <see cref="ConsentGate"/> first: video and input connect only after the user approves, every
     /// session. Deny or a timeout leaves both disconnected; without a gate in the scene nothing connects.
+    ///
+    /// Cast mode (<see cref="IsCast"/>, the launcher's Cast icon): view-only. The screen takes no pointer input, no
+    /// keyboard reaches it and there is no Keys button; a bar of media controls (previous, seek back, play/pause, seek
+    /// forward, next, volume down/up, mute) sends only media actions, which an agent started with --cast-only accepts
+    /// while dropping everything else. The consent question says "view-only".
     /// </summary>
     public class RemoteStreamContent : WindowContent, IRemoteSession
     {
@@ -39,6 +44,12 @@ namespace SpatialLauncher.SpatialWindows
         const float KeysButtonWidth = 0.07f;
         const float PortWidth = 0.08f;
         const float TextInset = 0.008f;
+        const float CastBarRow = 0.04f;
+        static readonly Color MediaColor = new Color(0.24f, 0.26f, 0.32f);
+        static readonly string[] MediaLabels = { "Prev", "Back", "Play/Pause", "Fwd", "Next", "Vol -", "Vol +", "Mute" };
+
+        /// <summary>Extra window height a Cast window's media bar needs, on top of <see cref="ConnectPanelHeight"/>.</summary>
+        public const float CastBarHeight = CastBarRow + Gap;
 
         /// <summary>Extra window height the connect panel needs below the screen, in metres.</summary>
         public const float ConnectPanelHeight = PanelHeight + Gap;
@@ -62,7 +73,14 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>The Keys button was clicked.</summary>
         public event Action KeyboardRequested;
         /// <summary>Where keyboard input for this screen goes: the input sink, if it takes keys (null otherwise).</summary>
-        public IRemoteKeyboardSink KeyboardSink => Source?.Sink as IRemoteKeyboardSink;
+        public IRemoteKeyboardSink KeyboardSink => IsCast ? null : Source?.Sink as IRemoteKeyboardSink;
+        /// <summary>A view-only Cast window with media controls instead of pointer and keyboard input.</summary>
+        public bool IsCast { get; private set; }
+        /// <summary>Cast mode: the media buttons by action name (WebSocketRemoteInputSink.MediaActions).</summary>
+        public IReadOnlyDictionary<string, WindowButton> MediaButtons => mediaButtons;
+        /// <summary>Cast mode: the last media button pressed, and whether it was sent.</summary>
+        public string LastMediaAction { get; private set; }
+        public bool LastMediaSent { get; private set; }
         public string StatusLine => statusLine != null ? statusLine.text : "";
         /// <summary>True between Connect and Disconnect (whether or not the connection has succeeded yet).</summary>
         public bool IsActive { get; private set; }
@@ -76,8 +94,8 @@ namespace SpatialLauncher.SpatialWindows
         // IRemoteSession: what the consent question and the live indicator name.
         public string SourceName => Target != null && !string.IsNullOrEmpty(Target.title) ? Target.title : "Laptop";
         public string Address => connectedHost ?? (HostField != null ? HostField.Text.Trim() : "");
-        /// <summary>"full control": the laptop window takes pointer and keyboard input.</summary>
-        public virtual string ModeLabel => "full control";
+        /// <summary>"full control" (pointer and keyboard reach the laptop window) or "view-only" (Cast).</summary>
+        public string ModeLabel => IsCast ? "view-only" : "full control";
 
         RemoteConnectionSettings settings;
         string connectedHost;
@@ -85,6 +103,8 @@ namespace SpatialLauncher.SpatialWindows
         TextMeshPro statusLabel, statusLine, connectLabel, keysLabel;
         Transform panel;
         readonly List<(WindowTextField field, TextMeshPro label)> fields = new List<(WindowTextField, TextMeshPro)>();
+        readonly Dictionary<string, WindowButton> mediaButtons = new Dictionary<string, WindowButton>();
+        readonly List<TextMeshPro> mediaLabels = new List<TextMeshPro>();
 
         /// <summary>A screen with no connection: input goes to <paramref name="sink"/> (may be null).</summary>
         /// <param name="expectedSize">The remote screen's resolution (aspect until a stream reports its own).</param>
@@ -100,11 +120,12 @@ namespace SpatialLauncher.SpatialWindows
         /// debugging); usually null.
         /// </summary>
         public void InitConnected(SpatialWindow window, Material baseMaterial, RemoteConnectionSettings connectionSettings,
-            IRemoteInputSink inputOverride = null, LaptopTarget target = null)
+            IRemoteInputSink inputOverride = null, LaptopTarget target = null, bool cast = false)
         {
             Attach(window, baseMaterial);
             settings = connectionSettings;
             Target = target;
+            IsCast = cast;
             var expected = target != null && target.width > 0 && target.height > 0
                 ? new Vector2Int(target.width, target.height)
                 : settings != null ? settings.expectedResolution : new Vector2Int(1920, 1080);
@@ -112,7 +133,8 @@ namespace SpatialLauncher.SpatialWindows
             InputLink = new WebSocketRemoteInputSink();
             InputLink.StatusChanged += RefreshStatus;
             InputLink.StatusChanged += FollowStreamPath;
-            Build(new RemoteStreamSource(Video, inputOverride ?? InputLink, expected));
+            // A cast sends no pointer input: no sink, and a screen without a collider.
+            Build(new RemoteStreamSource(Video, cast ? null : inputOverride ?? InputLink, expected) { ViewOnly = cast });
             BuildPanel();
             RefreshStatus();
             Relayout();
@@ -176,6 +198,21 @@ namespace SpatialLauncher.SpatialWindows
             KeysButton = CreateControl<WindowButton>("KeysButton", transform, CreateMaterial(KeysColor));
             keysLabel = CreateLabel("KeysLabel", transform, "Keys", 0.22f, TextAlignmentOptions.Center);
             KeysButton.Clicked += () => KeyboardRequested?.Invoke();
+            if (IsCast)
+            {
+                // No keyboard for a cast; media controls instead.
+                KeysButton.gameObject.SetActive(false);
+                keysLabel.gameObject.SetActive(false);
+                for (int i = 0; i < WebSocketRemoteInputSink.MediaActions.Length; i++)
+                {
+                    string action = WebSocketRemoteInputSink.MediaActions[i];
+                    var button = CreateControl<WindowButton>($"Media {action}", transform, CreateMaterial(MediaColor));
+                    var label = CreateLabel($"MediaLabel {action}", transform, MediaLabels[i], 0.18f, TextAlignmentOptions.Center);
+                    button.Clicked += () => SendMedia(action);
+                    mediaButtons[action] = button;
+                    mediaLabels.Add(label);
+                }
+            }
 
             statusLine = CreateLabel("StatusLine", transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
             statusLine.color = new Color(0.75f, 0.77f, 0.82f);
@@ -250,6 +287,18 @@ namespace SpatialLauncher.SpatialWindows
                 statusLine.text = $"Not allowed ({reason}). Nothing was connected.";
                 RefreshStatus();
             });
+        }
+
+        /// <summary>Cast mode: sends a media control (a media button does this). False if it couldn't be sent.</summary>
+        public bool SendMedia(string action)
+        {
+            if (!IsCast || InputLink == null) return false;
+            LastMediaAction = action;
+            LastMediaSent = IsActive && InputLink.SendMedia(action);
+            if (!LastMediaSent && statusLine != null)
+                statusLine.text = !IsActive ? "Not connected" : !InputLink.IsConnected ? "Not sent: the laptop isn't connected yet"
+                    : "Not sent: start the agent with --cast-only (or --input --keyboard) for media controls";
+            return LastMediaSent;
         }
 
         /// <summary>Panic stop: disconnects video and input at once (the gate closes the window).</summary>
@@ -329,7 +378,8 @@ namespace SpatialLauncher.SpatialWindows
             string rtt = InputLink.BestRoundTripMs is double best ? $" ({best:0} ms)" : "";
             string video = Video != null ? Video.StatusText : "needs WebRTC (SPATIAL_LAUNCHER_WEBRTC)";
             string throttled = InputLink.ThrottledCount > 0 ? " (keys throttled)" : "";
-            statusLine.text = $"Video: {video}   Input: {InputLink.StatusText}{throttled}{rtt}{clock}";
+            string mode = IsCast ? "Cast (view-only)   " : "";
+            statusLine.text = $"{mode}Video: {video}   Input: {InputLink.StatusText}{throttled}{rtt}{clock}";
         }
 
         protected override void Layout(Vector2 size)
@@ -343,8 +393,9 @@ namespace SpatialLauncher.SpatialWindows
                 return;
             }
 
-            // Screen above, connect panel below.
-            float screenHeight = Mathf.Max(0.01f, size.y - ConnectPanelHeight);
+            // Screen above, (cast: media bar,) connect panel below.
+            float barHeight = IsCast ? CastBarHeight : 0f;
+            float screenHeight = Mathf.Max(0.01f, size.y - ConnectPanelHeight - barHeight);
             float screenY = size.y * 0.5f - screenHeight * 0.5f;
             Surface.Fit(new Vector2(size.x, screenHeight));
             Surface.transform.localPosition = new Vector3(0f, screenY, 0f);
@@ -378,6 +429,22 @@ namespace SpatialLauncher.SpatialWindows
             KeysButton.transform.localScale = new Vector3(KeysButtonWidth, RowHeight, 1f);
             keysLabel.transform.localPosition = new Vector3(left + KeysButtonWidth * 0.5f, rowY, -0.003f);
             keysLabel.rectTransform.sizeDelta = new Vector2(KeysButtonWidth, RowHeight);
+
+            if (IsCast)
+            {
+                float barY = panelTop + Gap * 0.5f + CastBarRow * 0.5f;
+                int count = WebSocketRemoteInputSink.MediaActions.Length;
+                float cell = (size.x - Gap * (count + 1)) / count;
+                for (int i = 0; i < count; i++)
+                {
+                    float x = -size.x * 0.5f + Gap + cell * (i + 0.5f) + Gap * i;
+                    var button = mediaButtons[WebSocketRemoteInputSink.MediaActions[i]].transform;
+                    button.localPosition = new Vector3(x, barY, -0.002f);
+                    button.localScale = new Vector3(cell, CastBarRow, 1f);
+                    mediaLabels[i].transform.localPosition = new Vector3(x, barY, -0.003f);
+                    mediaLabels[i].rectTransform.sizeDelta = new Vector2(cell, CastBarRow);
+                }
+            }
 
             float statusY = -size.y * 0.5f + Gap * 0.5f + StatusHeight * 0.5f;
             statusLine.transform.localPosition = new Vector3(0f, statusY, -0.003f);

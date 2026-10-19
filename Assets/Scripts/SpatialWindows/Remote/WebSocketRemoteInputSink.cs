@@ -70,6 +70,19 @@ namespace SpatialLauncher.SpatialWindows
         public int KeyAckCount { get; private set; }
         /// <summary>How many times the agent said it dropped keys for coming too fast.</summary>
         public int ThrottledCount { get; private set; }
+        /// <summary>The agent runs with --cast-only: it accepts media controls and drops everything else.</summary>
+        public bool CastOnly { get; private set; }
+        /// <summary>The agent accepts media controls (cast-only, or full control with --keyboard), protocol 4 and later.</summary>
+        public bool MediaAllowed { get; private set; }
+        /// <summary>The last media action sent, and the last one the agent acknowledged in dry-run mode.</summary>
+        public string LastMediaSent { get; private set; }
+        public string LastMediaAck { get; private set; }
+        public int MediaSentCount { get; private set; }
+        public int MediaAckCount { get; private set; }
+
+        /// <summary>The media controls a Cast window has, in order, as the agent names them (keys.MEDIA_ACTIONS).</summary>
+        public static readonly string[] MediaActions =
+            { "previous", "seek_back", "play_pause", "seek_forward", "next", "volume_down", "volume_up", "mute" };
 
         public event Action StatusChanged;
         /// <summary>A new window list arrived (<see cref="Targets"/>).</summary>
@@ -155,6 +168,24 @@ namespace SpatialLauncher.SpatialWindows
                 Send(RemoteKeyProtocol.EncodeText(piece));
         }
 
+        /// <summary>{"type":"media","action":...} for one of <see cref="MediaActions"/>, or null for anything else.</summary>
+        public static string EncodeMedia(string action) =>
+            Array.IndexOf(MediaActions, action) >= 0 ? $"{{\"type\":\"media\",\"action\":\"{action}\"}}" : null;
+
+        /// <summary>
+        /// Sends a media control (Cast windows): play/pause, seek, next/previous, volume. False, and nothing sent, when
+        /// not connected, the agent doesn't take media controls, or the action isn't one of <see cref="MediaActions"/>.
+        /// </summary>
+        public bool SendMedia(string action)
+        {
+            string json = EncodeMedia(action);
+            if (!IsConnected || !MediaAllowed || json == null) return false;
+            Send(json);
+            LastMediaSent = action;
+            MediaSentCount++;
+            return true;
+        }
+
         void SendButton(string kind, Vector2 position)
         {
             if (!IsConnected) return;
@@ -213,10 +244,13 @@ namespace SpatialLauncher.SpatialWindows
                     AgentDryRun = message.dry_run;
                     InputAllowed = message.input;
                     KeyboardAllowed = message.input && message.keyboard;
+                    CastOnly = message.cast_only;
+                    MediaAllowed = message.media;
                     InputStopped = false;
                     nextPing = 0f;
                     if (TargetId != null) Send($"{{\"type\":\"open\",\"target\":{RemoteKeyProtocol.Quote(TargetId)}}}");
-                    SetState(State.Connected, !InputAllowed ? "Connected (view only: agent started without --input)"
+                    SetState(State.Connected, CastOnly ? "Connected (cast only: media controls)"
+                        : !InputAllowed ? "Connected (view only: agent started without --input)"
                         : AgentDryRun ? "Connected (agent in dry-run mode)"
                         : !KeyboardAllowed ? "Connected (no keyboard: agent started without --keyboard)" : "Connected");
                     break;
@@ -235,10 +269,15 @@ namespace SpatialLauncher.SpatialWindows
                     else if (message.reason == "gone") Stop("That window is no longer open on the laptop");
                     else if (message.reason == "minimized") Stop("That window is minimized on the laptop: restore it, then connect");
                     else if (message.reason == "busy") socketError = "Another headset is connected to the laptop";
+                    else if (message.reason == "cast locked") StatusChanged?.Invoke(); // a cast can't switch windows
                     else socketError = $"Refused: {message.reason}";
                     break;
                 case "pong":
                     OnPong(message.t, message.agent_ms);
+                    break;
+                case "ack" when message.@event == "media":
+                    LastMediaAck = message.action;
+                    MediaAckCount++;
                     break;
                 case "ack" when message.@event == "key" || message.@event == "text":
                     LastKeyAck = new RemoteKeyProtocol.Message { type = message.@event, code = message.code, down = message.down, text = message.text };
@@ -442,6 +481,9 @@ namespace SpatialLauncher.SpatialWindows
             public bool dry_run;
             public bool input;
             public bool keyboard;
+            public bool cast_only;
+            public bool media;
+            public string action;
             public string @event;
             public string code;
             public bool down;

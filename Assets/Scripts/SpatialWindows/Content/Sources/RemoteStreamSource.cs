@@ -20,7 +20,9 @@ namespace SpatialLauncher.SpatialWindows
         public Rect UVRect => Video?.UVRect ?? new Rect(0f, 0f, 1f, 1f);
         public Vector2Int PixelSize => Video != null && Video.PixelSize != Vector2Int.zero ? Video.PixelSize : expectedSize;
         public float Aspect => Video?.Texture != null ? Video.Aspect : expectedSize.x / (float)expectedSize.y;
-        public IContentInput Input => this;
+        public IContentInput Input => ViewOnly ? null : this;
+        /// <summary>A Cast window: the screen takes no pointer input at all (no collider; clicks only select the window).</summary>
+        public bool ViewOnly { get; set; }
         public bool IsRunning { get; private set; }
 
         public bool IsConnected => Video is IConnectionStatus status ? status.IsConnected : Video?.Texture != null;

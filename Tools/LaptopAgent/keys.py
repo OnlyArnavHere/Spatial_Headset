@@ -51,6 +51,23 @@ KEY_CODES: dict[str, tuple[int, bool]] = {
 }
 
 MODIFIERS = ("Shift", "Ctrl", "Alt")
+
+# Cast mode (agent.py --cast-only): the only input a cast window may send, as {"type": "media", "action": "<name>"}.
+# Media and volume keys go to Windows' media session (whatever is playing); seeking is the Left/Right arrow, which video
+# players and browsers use for a few seconds back/forward, sent to the cast window only. Each is a single press and
+# release with no modifier, so no combination (Win, Alt, Ctrl...) can ever be formed from them.
+MEDIA_ACTIONS: dict[str, tuple[int, bool]] = {
+    "play_pause": (0xB3, True),     # VK_MEDIA_PLAY_PAUSE
+    "next": (0xB0, True),           # VK_MEDIA_NEXT_TRACK
+    "previous": (0xB1, True),       # VK_MEDIA_PREV_TRACK
+    "volume_up": (0xAF, True),      # VK_VOLUME_UP
+    "volume_down": (0xAE, True),    # VK_VOLUME_DOWN
+    "mute": (0xAD, True),           # VK_VOLUME_MUTE
+    "seek_back": (0x25, True),      # Left arrow, to the cast window
+    "seek_forward": (0x27, True),   # Right arrow, to the cast window
+}
+# These go to the cast window (it is brought to the front first); the rest are global media keys.
+WINDOW_MEDIA_ACTIONS = ("seek_back", "seek_forward")
 # Text longer than this per message is refused (the headset splits long text).
 MAX_TEXT = 64
 # At most this many keys held down at once per connection: enough for Ctrl+Shift+arrow, not for mashing.
@@ -73,6 +90,26 @@ def parse_key(message: dict) -> KeyEvent | None:
         return None
     vk, extended = KEY_CODES[code]
     return KeyEvent(code, vk, extended, down)
+
+
+@dataclass(frozen=True)
+class MediaAction:
+    action: str
+    vk: int
+    extended: bool
+
+    @property
+    def to_window(self) -> bool:
+        return self.action in WINDOW_MEDIA_ACTIONS
+
+
+def parse_media(message: dict) -> MediaAction | None:
+    """{"type": "media", "action": "<name from MEDIA_ACTIONS>"} -> MediaAction, or None for anything else."""
+    action = message.get("action")
+    if message.get("type") != "media" or not isinstance(action, str) or action not in MEDIA_ACTIONS:
+        return None
+    vk, extended = MEDIA_ACTIONS[action]
+    return MediaAction(action, vk, extended)
 
 
 def parse_text(message: dict) -> str | None:

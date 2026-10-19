@@ -5,6 +5,8 @@
   python agent.py --input                         ...and let it move and click the mouse in the streamed windows
   python agent.py --input --keyboard              ...and type into them (Ctrl+Alt+Shift+Q stops all input)
   python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
+  python agent.py --cast-only                     view only, plus play/pause, seek, next/previous and volume (Cast)
+  python agent.py --wired                         print the USB Personal Hotspot address and check the firewall for it
 
 Run `python agent.py --help` for every option. See README.md, especially the risks section, before using --input.
 """
@@ -19,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 
+import network
 import winapi
 from input_server import InputServer
 from streams import StreamManager, Target, monitor_target, window_target
@@ -75,7 +78,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--keyboard", action="store_true",
                    help="with --input: also let the headset type into the windows it streams (unencrypted: no passwords)")
     p.add_argument("--dry-run-input", action="store_true",
-                   help="with --input: log the mapped mouse and key events instead of injecting them")
+                   help="with --input or --cast-only: log the mapped events instead of injecting them")
+    p.add_argument("--cast-only", action="store_true",
+                   help="Cast mode: the headset may only play/pause, seek, skip and change volume; every other key, "
+                        "mouse, typing and scroll event is dropped here (can't be combined with --input)")
+    p.add_argument("--wired", action="store_true",
+                   help="also look for the headset iPhone's USB Personal Hotspot (172.20.10.x) and check that the "
+                        "firewall lets the headset in on it (see Doc/wired.md)")
     p.add_argument("--verbose", action="store_true", help="show ffmpeg and MediaMTX logs")
     return p.parse_args()
 
@@ -288,8 +297,10 @@ def main() -> None:
     if args.list:
         list_targets()
         return
-    if args.dry_run_input and not args.input:
-        raise SystemExit("--dry-run-input only makes sense together with --input.")
+    if args.cast_only and (args.input or args.keyboard):
+        raise SystemExit("--cast-only is view-only plus media controls; it can't be combined with --input or --keyboard.")
+    if args.dry_run_input and not (args.input or args.cast_only):
+        raise SystemExit("--dry-run-input only makes sense together with --input or --cast-only.")
     if args.keyboard and not args.input:
         raise SystemExit("--keyboard only makes sense together with --input.")
     pinned = pinned_target(args)
@@ -308,14 +319,23 @@ def main() -> None:
         except LookupError:
             raise SystemExit(f"Can't capture {pinned.description}: it has no usable size (minimized?).")
     server = InputServer(token, streams, port=args.input_port, input_enabled=args.input,
-                         keyboard_enabled=args.keyboard, dry_run=args.dry_run_input)
+                         keyboard_enabled=args.keyboard, dry_run=args.dry_run_input, cast_only=args.cast_only)
 
     keyboard = "off (start with --input --keyboard to allow it)"
     if args.keyboard:
         keyboard = ("ON - " + ("DRY RUN, logging only" if args.dry_run_input else "the paired headset can type into streamed windows")
                     + "\n                    UNENCRYPTED on the network: don't type passwords")
-    kill_switch = f"{winapi.KILL_SWITCH} stops all mouse and keyboard input for the rest of the run" if args.input else "-"
+    kill_switch = f"{winapi.KILL_SWITCH} stops all mouse and keyboard input for the rest of the run" if args.input \
+        else f"{winapi.KILL_SWITCH} stops the media controls for the rest of the run" if args.cast_only else "-"
+    cast = ("ON - view only; the headset may play/pause, seek, skip and change volume. Every other key, mouse,"
+            "\n                    typing and scroll event is dropped" + (" (DRY RUN, logging only)" if args.dry_run_input else "")) \
+        if args.cast_only else "off (start with --cast-only for a view-only Cast window)"
     hosts = lan_addresses()
+    wired = network.wired_report(args.webrtc_port, args.ice_udp_port, args.input_port) if args.wired else None
+    if wired is not None and wired.interface is not None and wired.interface.address in hosts:
+        hosts.remove(wired.interface.address)
+        hosts.insert(0, wired.interface.address)  # over the cable first
+    wired_lines = ("\n " + "\n ".join(wired.lines())) if wired is not None else ""
     offered = f"only {pinned.description}" if args.no_picker else "the headset picks a window or the whole desktop"
     started = (f"\n Streaming now:     {pinned_stream.target.description} on /{pinned_stream.path}"
                f"   ({pinned_stream.size[0]}x{pinned_stream.size[1]})") if pinned_stream else ""
@@ -332,7 +352,8 @@ def main() -> None:
  Browser preview:   http://{hosts[0]}:{args.webrtc_port}/<path>/ while a stream runs (user: viewer, password: the token)
  Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse') if args.input else 'off (start with --input to allow it)'}
  Keyboard input:    {keyboard}
- Kill switch:       {kill_switch}
+ Cast only:         {cast}
+ Kill switch:       {kill_switch}{wired_lines}
 
  Press Ctrl+C to stop.
 ==============================================================================

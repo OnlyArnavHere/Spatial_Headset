@@ -177,7 +177,44 @@ namespace SpatialLauncher.SpatialWindows
             Value("Latency", () => Service != null && Service.LaptopLink.BestRoundTripMs is double best
                 ? $"{Service.LaptopLink.RoundTripMs:0} ms round trip (best {best:0} ms)" : "-");
             Value("Network", () => DeviceStatus.Network);
+            Choice("Link", new[] { "Wi-Fi", "Wired (USB)" }, () => S.laptop.wired ? 1 : 0,
+                i => SettingsStore.Update(x => x.laptop.wired = i == 1));
+            Buttons("Wired (USB)", ("Find laptop", () => FindWiredLaptop(), () => findingLaptop ? "Searching..." : "Find laptop"));
+            Value("Wired help", () => wiredStatus ?? (S.laptop.wired ? UsbHotspot.Help(UsbHotspot.PhoneHotspotAddress())
+                : "Wi-Fi: phone and laptop on the same network. Wired (USB): Personal Hotspot over the cable."));
         }
+
+        bool findingLaptop;
+        string wiredStatus;
+
+        /// <summary>Wired: tries 172.20.10.2..14 on the agent's control port and puts the one that answers in Address.</summary>
+        public async void FindWiredLaptop()
+        {
+            if (findingLaptop) return;
+            findingLaptop = true;
+            wiredStatus = "Looking for the laptop on 172.20.10.2..14...";
+            int port = Service != null && Service.ConnectionSettings != null ? Service.ConnectionSettings.inputPort : 8765;
+            string found = await UsbHotspot.FindAgentAsync(WiredHosts ?? UsbHotspot.CandidateHosts(), port);
+            findingLaptop = false;
+            if (this == null) return;
+            if (found != null)
+            {
+                SettingsStore.Update(x =>
+                {
+                    x.laptop.host = found;
+                    x.laptop.wired = true;
+                });
+                wiredStatus = $"Found the agent at {found}: Address set. Type the pair code it printed.";
+            }
+            else wiredStatus = "No agent answered on 172.20.10.2..14. Is the cable in, Personal Hotspot on and agent.py running? See Doc/wired.md";
+        }
+
+        /// <summary>The addresses Find laptop tries (tests point it at this machine); null means 172.20.10.2..14.</summary>
+        public IEnumerable<string> WiredHosts { get; set; }
+
+        /// <summary>The last Find laptop result, or null before one.</summary>
+        public string WiredStatus => wiredStatus;
+        public bool FindingLaptop => findingLaptop;
 
         void BuildDisplay(Section s)
         {

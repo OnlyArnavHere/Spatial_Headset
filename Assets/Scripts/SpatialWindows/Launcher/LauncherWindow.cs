@@ -13,6 +13,8 @@ namespace SpatialLauncher.SpatialWindows
     /// (<see cref="SelectEnvironment"/>, <see cref="ImmersionController"/>). The Settings icon opens the Settings window
     /// (<see cref="OpenSettings"/>, <see cref="SettingsService"/>). The Hide icon hides every other window and becomes Show
     /// (as does the cross-and-sweep gesture, <see cref="CrossSweepRecognizer"/>).
+    /// The Cast icon opens the same picker for a view-only Cast window (<see cref="OpenCastStream"/>): media controls
+    /// only, for an agent started with --cast-only.
     /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
     public class LauncherWindow : MonoBehaviour
@@ -26,6 +28,7 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color SkyIconColor = new Color(0.35f, 0.58f, 0.85f);
         static readonly Color SettingsIconColor = new Color(0.45f, 0.47f, 0.52f);
         static readonly Color HideIconColor = new Color(0.35f, 0.30f, 0.45f);
+        static readonly Color CastIconColor = new Color(0.62f, 0.38f, 0.16f);
         const int HideEntry = 8;
 
         [SerializeField] WindowManager manager;
@@ -156,6 +159,7 @@ namespace SpatialLauncher.SpatialWindows
                 new LauncherContent.Entry { Label = "Sky", Glyph = "SKY", Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
                 new LauncherContent.Entry { Label = "Settings", Glyph = "SET", Color = SettingsIconColor, Open = () => OpenSettings() },
                 new LauncherContent.Entry { Label = "Hide all", Glyph = "HIDE", Color = HideIconColor, Open = ToggleHideAll },
+                new LauncherContent.Entry { Label = "Cast", Glyph = "CAST", Color = CastIconColor, Open = () => OpenCastPicker() },
             });
             OnHiddenChanged(manager.WindowsHidden);
             return Launcher;
@@ -215,13 +219,18 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         /// <summary>A window that lists the laptop's windows and opens a stream window for each one picked.</summary>
-        public SpatialWindow OpenLaptopPicker()
+        public SpatialWindow OpenLaptopPicker() => OpenPicker("Laptop", (target, connection) => OpenLaptopStream(target, connection));
+
+        /// <summary>The picker for a view-only Cast window: each pick opens <see cref="OpenCastStream"/>.</summary>
+        public SpatialWindow OpenCastPicker() => OpenPicker("Cast", (target, connection) => OpenCastStream(target, connection));
+
+        SpatialWindow OpenPicker(string title, System.Action<LaptopTarget, LaptopConnection> open)
         {
             var size = new Vector2(mediaWidth, LaptopPickerContent.ContentHeight) + Vector2.one * (WindowContent.Padding * 2f);
-            var window = manager.Spawn("Laptop", size);
+            var window = manager.Spawn(title, size);
             if (window == null) return null;
             var content = new GameObject().AddComponent<LaptopPickerContent>();
-            content.Init(window, manager.WindowMaterial, connectionSettings, (target, connection) => OpenLaptopStream(target, connection));
+            content.Init(window, manager.WindowMaterial, connectionSettings, open);
             return window;
         }
 
@@ -229,18 +238,28 @@ namespace SpatialLauncher.SpatialWindows
         /// A window streaming one laptop window (or the whole desktop) with its own video and input connection.
         /// With a connection it connects at once; without, its connect panel waits for Connect.
         /// </summary>
-        public SpatialWindow OpenLaptopStream(LaptopTarget target, LaptopConnection connection = null)
+        public SpatialWindow OpenLaptopStream(LaptopTarget target, LaptopConnection connection = null) => OpenStream(target, connection, false);
+
+        /// <summary>
+        /// A view-only Cast window for one laptop window: no pointer or keyboard input, media controls only (play/pause,
+        /// seek, next/previous, volume), asking "view-only" consent. With a connection it connects (after approval).
+        /// </summary>
+        public SpatialWindow OpenCastStream(LaptopTarget target, LaptopConnection connection = null) => OpenStream(target, connection, true);
+
+        SpatialWindow OpenStream(LaptopTarget target, LaptopConnection connection, bool cast)
         {
             var resolution = target.width > 0 && target.height > 0 ? new Vector2Int(target.width, target.height)
                 : connectionSettings != null ? connectionSettings.expectedResolution : laptopResolution;
             float aspect = resolution.x / (float)Mathf.Max(1, resolution.y);
             string title = string.IsNullOrEmpty(target.title) ? "Laptop" : target.title.Length > 40 ? target.title.Substring(0, 39) + "…" : target.title;
-            var window = manager.Spawn(title, MediaWindowSize(aspect, RemoteStreamContent.ConnectPanelHeight));
+            if (cast) title = "Cast: " + title;
+            float extra = RemoteStreamContent.ConnectPanelHeight + (cast ? RemoteStreamContent.CastBarHeight : 0f);
+            var window = manager.Spawn(title, MediaWindowSize(aspect, extra));
             if (window == null) return null;
 
             var content = new GameObject().AddComponent<RemoteStreamContent>();
-            content.InitConnected(window, manager.WindowMaterial, connectionSettings, InputOverride(), target);
-            content.KeyboardRequested += () => OpenKeyboard();
+            content.InitConnected(window, manager.WindowMaterial, connectionSettings, cast ? null : InputOverride(), target, cast);
+            if (!cast) content.KeyboardRequested += () => OpenKeyboard();
             if (connection != null) content.ConnectWith(connection);
             return window;
         }
