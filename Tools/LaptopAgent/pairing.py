@@ -52,6 +52,28 @@ class CodeIssuer:
         if hmac.compare_digest(guess.encode("utf-8"), self._code.encode("ascii")):
             self._code = None
             return True
+        return self._wrong_guess()
+
+    @property
+    def active(self) -> bool:
+        """True while a code is issued, unexpired and not burned."""
+        return self._code is not None and self._clock() < self._expires
+
+    def redeem_mac(self, msg: bytes, mac: bytes) -> bool:
+        """Checks mac == HMAC-SHA256(key=the code, msg) without the code crossing the wire. Same expiry, single use
+        and 5-wrong-attempts burn as redeem."""
+        if self._code is None:
+            return False
+        if self._clock() >= self._expires:
+            self._code = None
+            return False
+        expected = hmac.new(self._code.encode("ascii"), bytes(msg), "sha256").digest()
+        if hmac.compare_digest(bytes(mac), expected):
+            self._code = None
+            return True
+        return self._wrong_guess()
+
+    def _wrong_guess(self) -> bool:
         self._wrong += 1
         if self._wrong >= MAX_WRONG_ATTEMPTS:
             self._code = None
@@ -91,7 +113,7 @@ class PairStore:
         except (ValueError, KeyError, TypeError) as e:
             raise ValueError(f"{self.path} can't be read ({e}); fix or delete it. It was not changed.") from e
 
-    def _write(self, pairs: list[Pair]) -> None:
+    def _write(self, pairs) -> None:
         doc = {"version": 1, "pairs": [
             {"name": p.name, "fingerprint": p.fingerprint,
              "public_key": base64.b64encode(p.public_key).decode("ascii"), "added": p.added} for p in pairs]}
@@ -100,20 +122,31 @@ class PairStore:
     def list(self) -> list[Pair]:
         return self._read()
 
+    @staticmethod
+    def _check(name: str, spki_der: bytes, pairs) -> None:
+        for existing in pairs:
+            if existing.public_key == bytes(spki_der) and existing.name.casefold() != name.casefold():
+                raise ValueError(f"already paired as {existing.name}")
+            if existing.name.casefold() == name.casefold() and existing.public_key != bytes(spki_der):
+                raise ValueError(f"A headset named {existing.name!r} is already paired with a different key. "
+                                 "Revoke it first.")
+
+    def check_can_add(self, name: str, spki_der: bytes) -> None:
+        """Raises ValueError if add(name, spki_der) would refuse. Writes nothing."""
+        name = name.strip()
+        if not name:
+            raise ValueError("A pair needs a name.")
+        self._check(name, spki_der, self._read())
+
     def add(self, name: str, spki_der: bytes, now: datetime | None = None) -> Pair:
         name = name.strip()
         if not name:
             raise ValueError("A pair needs a name.")
         pairs = self._read()
         pair = Pair(name, identity.fingerprint(spki_der), bytes(spki_der), _utc_iso(now))
-        for existing in pairs:
-            if existing.public_key == pair.public_key and existing.name.casefold() != name.casefold():
-                raise ValueError(f"already paired as {existing.name}")
+        self._check(name, spki_der, pairs)
         for i, existing in enumerate(pairs):
             if existing.name.casefold() == name.casefold():
-                if existing.public_key != pair.public_key:
-                    raise ValueError(f"A headset named {existing.name!r} is already paired with a different key. "
-                                     "Revoke it first.")
                 pairs[i] = Pair(existing.name, pair.fingerprint, pair.public_key, pair.added)
                 self._write(pairs)
                 return pairs[i]

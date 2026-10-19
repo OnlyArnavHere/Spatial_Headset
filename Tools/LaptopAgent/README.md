@@ -182,11 +182,14 @@ Read these before using `--input` or `--keyboard`.
 | `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), PSS signatures and public-key fingerprints |
 | `pairing.py` | One-time pairing codes, the paired-headset store (`pairs.json`), pinning, and the QR / typed pairing offer |
+| `handshake.py` | The signed link handshake (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
+| `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`), `ip[:port]` parsing, the USB-hotspot address |
 | `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs `websockets` |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
 | `selftest_input.py` | Checks a running agent's control server: token, ping, window list, streams per window, one headset, per-window input routing, keys, text and the rate limit (dry run), and with `--kill-switch` the kill switch |
 | `test_keyboard.py` | Unit tests for keyboard input (no agent needed): `python -m unittest test_keyboard` |
 | `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
+| `test_handshake.py`, `test_discovery.py` | Unit tests for the link handshake (both roles over loopback sockets) and discovery (Bonjour on 127.0.0.1; skipped if multicast is unavailable): `python -m unittest test_handshake test_discovery` |
 
 ## Licenses
 
@@ -199,6 +202,12 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | [websockets](https://github.com/python-websockets/websockets) | 16.0 | BSD-3-Clause | Python package, installed by `setup.py` |
 | [cryptography](https://github.com/pyca/cryptography) | 46.0.5 | Apache-2.0 OR BSD-3-Clause | Python package (`requirements.txt`): RSA key and signatures |
 | [segno](https://github.com/heuer/segno) | 1.6.6 | BSD-3-Clause | Python package (`requirements.txt`): pairing QR code |
+| [aiortc](https://github.com/aiortc/aiortc) | 1.15.0 | BSD-3-Clause | Python package (`requirements.txt`): WebRTC link to the headset |
+| [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; its wheels bundle LGPL-licensed FFmpeg libraries |
+| [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | 0.151.5 | LGPL-2.1-or-later | Python package (`requirements.txt`): Bonjour discovery. Used as an unmodified, separately installed library |
+| aioice 0.10.2, pylibsrtp 1.0.0 | | BSD-3-Clause | aiortc dependencies |
+| google-crc32c 1.9.0, pyOpenSSL 26.2.0 | | Apache-2.0 | aiortc dependencies (pyOpenSSL is pinned so `cryptography` stays at 46.0.5) |
+| ifaddr 0.2.0, pyee 15.0.0 | | MIT | aiortc / zeroconf dependencies |
 
 FFmpeg's GPL applies to FFmpeg itself. The agent only starts it as a separate process and doesn't link to it, and
 nothing from FFmpeg goes into the Unity project. If you redistribute `bin/` (for example in a zip for a friend),
