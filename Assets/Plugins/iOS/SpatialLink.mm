@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const OSStatus kLinkInternalError = -26276; // errSecInternal, spelled out for older SDKs
 static pthread_mutex_t g_keyLock = PTHREAD_MUTEX_INITIALIZER;
 static SecKeyRef g_key = NULL;
 
@@ -21,7 +22,7 @@ static int ErrorCode(CFErrorRef error)
 {
     int code = error != NULL ? (int)CFErrorGetCode(error) : 0;
     if (error != NULL) CFRelease(error);
-    return code != 0 ? code : (int)errSecInternalError;
+    return code != 0 ? code : (int)kLinkInternalError;
 }
 
 // Caller holds g_keyLock. Returns 0 with a retained key in g_key, or an OSStatus.
@@ -35,6 +36,7 @@ static int LoadOrCreateLocked(const char* tag)
     CFDictionarySetValue(query, kSecClass, kSecClassKey);
     CFDictionarySetValue(query, kSecAttrKeyType, kSecAttrKeyTypeRSA);
     CFDictionarySetValue(query, kSecAttrApplicationTag, tagData);
+    CFDictionarySetValue(query, kSecAttrKeyClass, kSecAttrKeyClassPrivate);
     CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
     CFTypeRef found = NULL;
     OSStatus status = SecItemCopyMatching(query, &found);
@@ -46,7 +48,7 @@ static int LoadOrCreateLocked(const char* tag)
         CFRelease(tagData);
         return 0;
     }
-    if (status == errSecSuccess) status = errSecInternalError;
+    if (status == errSecSuccess) status = kLinkInternalError;
     if (status != errSecItemNotFound)
     {
         CFRelease(tagData);
@@ -98,7 +100,7 @@ int SpatialLink_LoadOrCreateKey(const char* tag, uint8_t** pub, int* len)
 
     int result = 0;
     SecKeyRef publicKey = SecKeyCopyPublicKey(key);
-    if (publicKey == NULL) result = (int)errSecInternalError;
+    if (publicKey == NULL) result = (int)kLinkInternalError;
     else
     {
         CFErrorRef error = NULL;
