@@ -7,8 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
 
 import identity
 import winapi
@@ -106,13 +105,9 @@ class SignatureTests(unittest.TestCase):
         sig = identity.sign(self.ident.key, b"hello")
         self.assertTrue(identity.verify(self.ident.spki_der, sig, b"hello"))
 
-    def test_uses_pss_with_salt_32(self):
-        sig = identity.sign(self.ident.key, b"hello")
-        pub = serialization.load_der_public_key(self.ident.spki_der)
-        pss = lambda salt: padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=salt)
-        pub.verify(sig, b"hello", pss(32), hashes.SHA256())
-        with self.assertRaises(Exception):
-            pub.verify(sig, b"hello", pss(20), hashes.SHA256())
+    def test_pkcs1v15_is_deterministic(self):
+        self.assertEqual(identity.sign(self.ident.key, b"hello"), identity.sign(self.ident.key, b"hello"))
+        self.assertEqual(len(identity.sign(self.ident.key, b"hello")), 256)
 
     def test_tamper_fails(self):
         sig = identity.sign(self.ident.key, b"hello")
@@ -120,6 +115,48 @@ class SignatureTests(unittest.TestCase):
         bad = bytes([sig[0] ^ 1]) + sig[1:]
         self.assertFalse(identity.verify(self.ident.spki_der, bad, b"hello"))
         self.assertFalse(identity.verify(b"not a key", sig, b"hello"))
+
+
+# Known-answer signature vector (RSASSA-PKCS1-v1_5, SHA-256), made once with a throwaway key whose private half was
+# discarded. The C# side reuses this exact vector.
+KAT_SPKI_PEM = b"""-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4c97Nn56mpOuYQR+ev4f
+/lGlu800GpiU9xqaFib0RXrDgRhyoke2ki0rxzgUydmY3QHlCwgOwewEQq0gX3B/
+kI/CpFk7/b4nLdxcPVBUJP2RxuBTJiF9Je4XySMljBu+U3eAU1vogRR/hGd0VNOO
+SOKeam8CGMtm2oNXsOFeihz+waLVVS+UmxeMZk12j6SNIT7SfElikTDSNEcboK+I
+xlAsylJLRZhoG2ssNAYVUu7uboAGrpycV34wgolZ4hMzZsDBpDePA57h/nYoArD0
+nkx0d9Yt0AHhb7fwSK9cW73hwDurxTL6yc770AHjL4D90Cly4iKrghwjr2k78n+N
+uQIDAQAB
+-----END PUBLIC KEY-----
+"""
+KAT_SPKI_FP = "Z5KLLXYQCYMIHZMJ"
+KAT_MSG = b"spatial-launcher identity KAT v1"
+KAT_SIG_HEX = (
+    "9986a4a83dbd6abdb6e39f9fede80c5dbee9eb7b58748dc6ca02191bb44038f3"
+    "0717425ed420401db5229e9c48dcc9b0b3638a7abf5e23768f32eada7331070e"
+    "0adcc3c5edde75cacb4f80d2385066f77f02b3a641b952b42a10919cf28f37f1"
+    "d18fbe932c4134be8a09ec49e3949091644fb6d9c678b22c472e03f3284414e8"
+    "a7190a0f6f9b50e5de0ffdeb93b90d58c5222082d22ee970c0ca60c73450ea87"
+    "35638987c7dd0f2b1c7ece84405ec54824be4618873eca654e3d1a3ce2823d0b"
+    "d442b21d65847579386c3c710c86a5c5630ec84c2bcd8633aae585b3b99256cd"
+    "e6f84e3d38134027e3e4cb2da044c183fd75543aa8357d5004f3bd718c5330da"
+)
+
+
+class SignatureVectorTests(unittest.TestCase):
+    def setUp(self):
+        self.spki = serialization.load_pem_public_key(KAT_SPKI_PEM).public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        self.sig = bytes.fromhex(KAT_SIG_HEX)
+
+    def test_vector_verifies(self):
+        self.assertEqual(identity.fingerprint(self.spki), KAT_SPKI_FP)
+        self.assertEqual(len(self.sig), 256)
+        self.assertTrue(identity.verify(self.spki, self.sig, KAT_MSG))
+
+    def test_flipped_bit_fails(self):
+        self.assertFalse(identity.verify(self.spki, self.sig, bytes([KAT_MSG[0] ^ 1]) + KAT_MSG[1:]))
+        self.assertFalse(identity.verify(self.spki, bytes([self.sig[-1] ^ 1]) .join([self.sig[:-1], b""]), KAT_MSG))
 
 
 class FingerprintTests(unittest.TestCase):

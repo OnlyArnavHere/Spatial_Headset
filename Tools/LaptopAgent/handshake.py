@@ -20,8 +20,8 @@ fail in any way, is "malformed frame". "v" must be the JSON integer 1: 1.0, 1e0,
 Encodings: binary fields are RFC 4648 standard base64 (alphabet A-Z a-z 0-9 + /) with '=' padding and no whitespace
 or other characters; the decoder must be strict and the canonical re-encoding of the decoded bytes must equal the
 received text exactly (no non-zero trailing bits). nonce is exactly 32 bytes. spki is DER SubjectPublicKeyInfo, at
-most 1 KiB, an RSA key of exactly 2048 bits with e=65537. sig is exactly 256 bytes, RSA-PSS (SHA-256, MGF1-SHA-256,
-salt 32; identity.sign / identity.verify). sdp is a string of at most 48 KiB of UTF-8.
+most 1 KiB, an RSA key of exactly 2048 bits with e=65537. sig is exactly 256 bytes, RSASSA-PKCS1-v1_5 with SHA-256
+(identity.sign / identity.verify). sdp is a string of at most 48 KiB of UTF-8.
 
 Messages, in order (A = agent, H = headset):
   M1 A->H hello  {nonce: na, spki: spki_a}

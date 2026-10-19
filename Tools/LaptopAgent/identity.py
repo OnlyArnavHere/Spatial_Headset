@@ -2,7 +2,7 @@
 
 The private key never leaves identity.key in the agent's home folder. The public key is shared as DER
 SubjectPublicKeyInfo (what .NET's ExportSubjectPublicKeyInfo returns) and summarised as a 16-character fingerprint.
-Signatures are RSASSA-PSS with SHA-256, MGF1-SHA-256 and a 32-byte salt (what .NET's RSASignaturePadding.Pss uses).
+Signatures are RSASSA-PKCS1-v1_5 with SHA-256 (what .NET's RSASignaturePadding.Pkcs1 uses; deterministic).
 """
 import base64
 import hashlib
@@ -85,12 +85,8 @@ def load_or_create(home: Path) -> Identity:
     return Identity(key, public_der(key))
 
 
-def _pss() -> padding.PSS:
-    return padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH)
-
-
 def sign(key: rsa.RSAPrivateKey, data: bytes) -> bytes:
-    return key.sign(data, _pss(), hashes.SHA256())
+    return key.sign(data, padding.PKCS1v15(), hashes.SHA256())
 
 
 def verify(spki_der: bytes, sig: bytes, data: bytes) -> bool:
@@ -98,7 +94,7 @@ def verify(spki_der: bytes, sig: bytes, data: bytes) -> bool:
         pub = serialization.load_der_public_key(spki_der)
         if not isinstance(pub, rsa.RSAPublicKey):
             return False
-        pub.verify(sig, data, _pss(), hashes.SHA256())
+        pub.verify(sig, data, padding.PKCS1v15(), hashes.SHA256())
         return True
     except Exception:  # InvalidSignature or a malformed key: both mean "not verified"
         return False

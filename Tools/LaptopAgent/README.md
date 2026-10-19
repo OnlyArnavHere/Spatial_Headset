@@ -208,7 +208,7 @@ Read these before using `--input` or `--keyboard`.
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
 | `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
-| `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), PSS signatures and public-key fingerprints |
+| `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), RSASSA-PKCS1-v1_5 (SHA-256) signatures and public-key fingerprints |
 | `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |
 | `handshake.py` | The signed link handshake for already-paired headsets (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
 | `pair_protocol.py` | First-time pairing with the code the headset shows (wire protocol v2, documented at the top of the file; the spec for the C# side) |

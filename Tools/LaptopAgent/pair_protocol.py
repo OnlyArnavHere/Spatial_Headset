@@ -12,7 +12,7 @@ Transport. The headset listens on its usual TCP link port and advertises Bonjour
 big-endian length, then a UTF-8 JSON object; MAX_FRAME 64 KiB; every message has "v":2 and "type". Everything in
 handshake.py about frames holds here unchanged: the JSON rules, depth limit, strict base64 (canonical, '=' padding),
 nonce exactly 32 bytes, spki DER SubjectPublicKeyInfo of at most 1 KiB (RSA 2048, e=65537), sig exactly 256 bytes
-RSA-PSS (identity.sign / identity.verify), the name rules (at most 32 code points, none in Cc Cf Cs Co Cn Zl Zp Zs
+RSASSA-PKCS1-v1_5 with SHA-256 (identity.sign / identity.verify), the name rules (at most 32 code points, none in Cc Cf Cs Co Cn Zl Zp Zs
 except U+0020, "bad name" otherwise), enc(x) = u32 BE length || bytes (strings as UTF-8), and error frames
 {"v":2,"type":"error","reason":...} followed by close. A "v" other than the integer 2 is "unsupported version".
 
