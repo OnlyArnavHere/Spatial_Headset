@@ -5,6 +5,8 @@ the headset move and click the laptop's mouse in them and type into them. The he
 laptop can stream ("Whole desktop" first, then the open windows); each one picked opens in its own window in the
 headset, and several can be open at once, each with its own video stream and its own input routing.
 
+> Pairing, connecting and what is protected are explained in [Doc/connect.md](../../Doc/connect.md).
+
 > Prototype. It has been tested with the agent and the Unity editor on the same Windows machine, not yet with an
 > iPhone over Wi-Fi. Read **Risks** before using `--input` or `--keyboard`.
 

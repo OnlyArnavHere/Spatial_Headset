@@ -12,15 +12,15 @@ Wi-Fi involved.
    Devices app or iTunes. An "Apple Mobile Device Ethernet" adapter then appears.
 3. On the laptop: `python agent.py --wired` (add `--cast-only` or `--input` as usual). The banner shows the line
    `Wired (USB): host 172.20.10.x` and checks the firewall for that adapter.
-4. On the headset: Settings > Laptop > Link > Wired (USB), then Find laptop. It tries 172.20.10.2 to .14 on the control
-   port and fills in Address. Type the pair code the agent printed.
+4. On the headset: open the Laptop picker and tap the paired laptop. The agent dials 172.20.10.1, the phone, over the
+   cable. Pair first if you haven't (see [connect.md](connect.md)).
 
 ## Firewall
 
-Windows usually files the hotspot network under the Public profile, where inbound connections are blocked unless a
-rule allows them. The agent needs no inbound rule: the laptop dials the headset, and the video and input travel back
-over that same connection (WebRTC, replies allowed by the firewall's normal stateful handling). The only port the
-agent opens is MediaMTX on 127.0.0.1:8554, which no other machine can reach. The banner under `--wired` says so.
+No inbound rule is needed. The laptop dials the headset, and the video and input travel back over that same
+connection. The only port the agent opens is MediaMTX on 127.0.0.1:8554, which no other machine can reach.
+
+See [connect.md](connect.md) for pairing, the safeguards and what is protected.
 
 ## Checked so far, and what only the phone can show
 

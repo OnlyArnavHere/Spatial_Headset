@@ -1,4 +1,4 @@
-# Downloaded third-party programs (see setup.py) and per-run files (the MediaMTX config holds the pairing token).
+# Downloaded third-party programs (see setup.py) and per-run files (the MediaMTX config is generated per run).
 bin/
 .runtime/
 __pycache__/
