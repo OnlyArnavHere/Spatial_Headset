@@ -94,9 +94,6 @@ namespace SpatialLauncher.SpatialWindows
             s.immersion ??= new ImmersionSettings();
             s.voice ??= new VoiceSettings();
 
-            s.laptop.host ??= "";
-            s.laptop.pairCode ??= "";
-            if (s.laptop.videoPort <= 0 || s.laptop.videoPort > 65535) s.laptop.videoPort = 8889;
             s.display.brightness = Mathf.Clamp(s.display.brightness, 0.1f, 1f);
             s.display.ipdMm = Mathf.Clamp(s.display.ipdMm, 54f, 74f);
             s.display.viewportOffsetMm = new Vector2(Mathf.Clamp(s.display.viewportOffsetMm.x, -10f, 10f),

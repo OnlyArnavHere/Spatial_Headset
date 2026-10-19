@@ -27,12 +27,8 @@ namespace SpatialLauncher.SpatialWindows
     [Serializable]
     public class LaptopSettings
     {
-        public string host = "127.0.0.1";
-        public int videoPort = 8889;
-        /// <summary>The agent prints a new pair code (pairing token) every run; this is the last one typed.</summary>
-        public string pairCode = "";
         /// <summary>
-        /// Wired (USB): the headset iPhone's Personal Hotspot over a cable; the laptop is on 172.20.10.2..14 (see
+        /// Wired (USB): the headset iPhone's Personal Hotspot over a cable; the laptop dials 172.20.10.1 (see
         /// <see cref="UsbHotspot"/> and Doc/wired.md). False: Wi-Fi (the same network).
         /// </summary>
         public bool wired;

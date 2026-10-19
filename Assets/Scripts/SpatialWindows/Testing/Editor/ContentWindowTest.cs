@@ -84,13 +84,14 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             var picker = laptopWindow != null ? laptopWindow.GetComponentInChildren<LaptopPickerContent>() : null;
             if (picker != null)
             {
-                Check(picker.HostField != null && picker.PortField != null && picker.TokenField != null && picker.ListButton != null
-                      && picker.TokenField.Masked, "the Laptop icon opens the picker: host, port, masked token fields and a List button");
-                Check(picker.EntryButtons.Count == 0 && !picker.MoreButton.gameObject.activeSelf, "the picker lists nothing before List");
-                var testTarget = new LaptopTarget { id = "window:1", path = "test-window", title = "Test window", kind = "window", width = 1280, height = 720 };
-                laptopWindow = launcherWindow.OpenLaptopStream(testTarget);
+                Check(picker.Mode == LaptopPickerContent.PickerMode.List && picker.PairButton != null,
+                    "the Laptop icon opens the picker: the paired laptops and a Pair button, no address or token fields");
+                // A stream screen with no connection, as a linked window shows before its video arrives.
+                var size = new Vector2(0.6f, 0.6f * 9f / 16f) + Vector2.one * (WindowContent.Padding * 2f);
+                laptopWindow = manager.Spawn("Test window", size);
+                new GameObject().AddComponent<RemoteStreamContent>().Init(laptopWindow, manager.WindowMaterial, null, new Vector2Int(1920, 1080));
                 yield return Settle;
-                Check(laptopWindow != null && laptopWindow.Title == "Test window", "a picked target opens a stream window titled after it");
+                Check(laptopWindow != null && laptopWindow.Title == "Test window", "a stream screen opens in its own window");
             }
             var remote = laptopWindow != null ? laptopWindow.GetComponentInChildren<RemoteStreamContent>() : null;
             Check(remote != null, "Laptop window has RemoteStreamContent");
@@ -129,41 +130,6 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
                 remote.Source.Sink = originalSink;
 
-                // Connected mode (WebRTC): the connect panel, and a failed connection that explains itself and retries.
-                if (remote.Video != null)
-                {
-                    Check(remote.HostField != null && remote.PortField != null && remote.TokenField != null && remote.ConnectButton != null,
-                        "the Laptop window has host, port and token fields and a Connect button");
-                    Check(remote.TokenField.Masked, "the token field is masked");
-
-                    string savedHost = RemoteConnectionPrefs.Host(null), savedToken = RemoteConnectionPrefs.Token();
-                    int savedPort = RemoteConnectionPrefs.VideoPort(null);
-                    remote.HostField.SetText("127.0.0.1");
-                    remote.PortField.SetText("1"); // nothing listens on port 1
-                    remote.TokenField.SetText("test-token");
-                    manager.Focus(laptopWindow);
-                    yield return Settle;
-                    Click(input, cam, remote.ConnectButton.transform.position);
-                    yield return 0.2f;
-                    // Nothing connects until the headset approves (ConsentGateTest covers the gate itself).
-                    Check(remote.AwaitingConsent && !remote.IsActive && ConsentGate.Current != null && ConsentGate.Current.HasPending,
-                        "Connect asks for approval first");
-                    if (ConsentGate.Current != null) ConsentGate.Current.Approve();
-                    double deadline = EditorTestRunner.Now + 8.0;
-                    while (remote.Video.CurrentState != RemoteVideoState.Retrying && EditorTestRunner.Now < deadline)
-                        yield return 0.1f;
-                    Check(remote.IsActive && remote.Video.CurrentState == RemoteVideoState.Retrying &&
-                          remote.Video.StatusText.Contains("Can't reach"),
-                        $"connecting to a closed port explains itself and retries (\"{remote.Video.StatusText}\")");
-                    Check(remote.StatusLine.Contains("Video:") && remote.StatusLine.Contains("Input:"),
-                        $"the status line shows video and input state (\"{remote.StatusLine}\")");
-
-                    Click(input, cam, remote.ConnectButton.transform.position);
-                    yield return 0.2f;
-                    Check(!remote.IsActive && remote.Video.CurrentState == RemoteVideoState.Stopped && remote.StatusText == "Not connected",
-                        "Disconnect stops trying and shows \"Not connected\" again");
-                    RemoteConnectionPrefs.Save(savedHost, savedPort, savedToken);
-                }
             }
 
             // Display-only content keeps clicks on the window body (selecting it), so its surface has no collider.

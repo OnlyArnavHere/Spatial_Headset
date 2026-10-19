@@ -19,11 +19,13 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         static double resumeAt;
         static int passed, failed;
         static string testName;
+        static bool needsPlayMode = true;
 
         public static bool IsRunning => routines.Count > 0;
         public static double Now => EditorApplication.timeSinceStartup;
 
-        public static void Run(string name, IEnumerator steps)
+        /// <summary>Suites of pure logic pass <paramref name="playMode"/> false and run in Edit mode.</summary>
+        public static void Run(string name, IEnumerator steps, bool playMode = true)
         {
             if (IsRunning)
             {
@@ -31,6 +33,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 return;
             }
             testName = name;
+            needsPlayMode = playMode;
             passed = failed = 0;
             routines.Push(steps);
             resumeAt = 0;
@@ -47,7 +50,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
         static void Tick()
         {
-            if (!Application.isPlaying)
+            if (needsPlayMode && !Application.isPlaying)
             {
                 Finish(" (aborted: left Play mode)");
                 return;

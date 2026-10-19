@@ -87,7 +87,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             Change("Requires Persistent WiFi", PlayerSettings.iOS.requiresPersistentWiFi, true,
                 () => PlayerSettings.iOS.requiresPersistentWiFi = true);
 
-            // WHEP signaling with the laptop agent is plain HTTP on the local network (http://<laptop>:8889/...).
+            // Left on from the earlier HTTP video path; the WebRTC link itself needs no HTTP.
             Change("Allow downloads over HTTP", PlayerSettings.insecureHttpOption, InsecureHttpOption.AlwaysAllowed,
                 () => PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed);
 

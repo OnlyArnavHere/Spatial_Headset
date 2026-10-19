@@ -58,7 +58,6 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             {
                 if (spawned != null) manager.Close(spawned);
                 if (launcher.SettingsWindow != null) manager.Close(launcher.SettingsWindow);
-                launcher.Settings.DisconnectLaptop();
                 launcher.Settings.SaveNow(); // into the test file
                 SettingsStore.Path = userPath;
                 SettingsStore.Replace(SettingsStore.Load(userPath));
@@ -73,14 +72,12 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         {
             string file = Path.Combine(Folder, "settings.json");
             var defaults = SettingsStore.Load(file);
-            Check(!File.Exists(file) && defaults.version == SpatialSettings.CurrentVersion && defaults.laptop.host == "127.0.0.1"
+            Check(!File.Exists(file) && defaults.version == SpatialSettings.CurrentVersion && !defaults.laptop.wired
                   && defaults.display.ipdMm == 64f && defaults.hands.dominantHand == Handedness.Right && defaults.voice.language == "en-US",
                 "a missing file gives the defaults (and isn't created by reading)");
 
             var changed = new SpatialSettings();
-            changed.laptop.host = "192.168.1.20";
-            changed.laptop.videoPort = 9000;
-            changed.laptop.pairCode = "abc-123";
+            changed.laptop.wired = true;
             changed.display.brightness = 0.4f;
             changed.display.ipdMm = 61.5f;
             changed.display.viewportOffsetMm = new Vector2(-2.5f, 3f);
@@ -99,23 +96,28 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(JsonUtility.ToJson(loaded) == JsonUtility.ToJson(changed) && !File.Exists(file + ".tmp"),
                 $"every section survives a save and load ({new FileInfo(file).Length} bytes, no temporary file left)");
 
-            changed.laptop.host = "10.0.0.5";
+            changed.laptop.wired = false;
             SettingsStore.Save(changed, file);
-            Check(SettingsStore.Load(file).laptop.host == "10.0.0.5", "saving again replaces the file");
+            Check(!SettingsStore.Load(file).laptop.wired, "saving again replaces the file");
 
             File.WriteAllText(file, "{\"version\":1,\"hands\":{\"sensitivity\":1.25}}");
             var partial = SettingsStore.Load(file);
             Check(Mathf.Approximately(partial.hands.sensitivity, 1.25f) && partial.hands.pinch && partial.display.ipdMm == 64f && partial.voice.language == "en-US",
                 "an older file with missing fields keeps what it has and defaults the rest");
 
-            File.WriteAllText(file, "{\"display\":{\"brightness\":5,\"ipdMm\":10},\"windows\":{\"defaultCurve\":-1},\"laptop\":{\"videoPort\":0},\"hands\":{\"sensitivity\":9}}");
+            File.WriteAllText(file, "{\"display\":{\"brightness\":5,\"ipdMm\":10},\"windows\":{\"defaultCurve\":-1},\"laptop\":{\"videoPort\":0,\"host\":\"old\",\"pairCode\":\"x\"},\"hands\":{\"sensitivity\":9}}");
             var clamped = SettingsStore.Load(file);
             Check(clamped.display.brightness == 1f && clamped.display.ipdMm == 54f && clamped.windows.defaultCurve == 0f
-                  && clamped.laptop.videoPort == 8889 && clamped.hands.sensitivity == 2f, "out-of-range values are clamped on load");
+                  && clamped.hands.sensitivity == 2f, "out-of-range values are clamped on load, and the old laptop host/port/code fields are ignored");
+
+            File.WriteAllText(file, "{\"version\":1,\"laptop\":{\"host\":\"192.168.1.5\",\"videoPort\":9000,\"pairCode\":\"123456\",\"wired\":true},\"hands\":{\"sensitivity\":1.5}}");
+            var oldLaptop = SettingsStore.Load(file);
+            Check(oldLaptop != null && oldLaptop.laptop.wired && Mathf.Approximately(oldLaptop.hands.sensitivity, 1.5f) && !File.Exists(file + ".bad"),
+                "an old file with host, videoPort and pairCode loads without error, keeping its other fields");
 
             File.WriteAllText(file, "{ this is not json");
             var broken = SettingsStore.Load(file);
-            Check(broken != null && broken.laptop.host == "127.0.0.1" && File.Exists(file + ".bad"),
+            Check(broken != null && !broken.laptop.wired && File.Exists(file + ".bad"),
                 "a broken file gives the defaults and is kept aside as settings.json.bad");
         }
 
@@ -177,9 +179,6 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                   && SettingsService.ViewportShift(Vector2.one, Vector2.one, 0f) == Vector2.zero,
                 $"a viewport offset in mm becomes a fraction of the screen from its DPI ({shift.x:F4}, {shift.y:F4}; unknown DPI: none)");
 
-            RemoteConnectionPrefs.Save("192.168.7.7", 8899, "token-x");
-            Check(RemoteConnectionPrefs.Host(null) == "192.168.7.7" && SettingsStore.Load(file).laptop.pairCode == "token-x",
-                "the laptop connect panels keep their address and pair code in the settings file");
         }
 
         static IEnumerator Window(LauncherWindow launcher, WindowManager manager, MouseWindowInput mouse, Camera cam)
@@ -227,14 +226,25 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
             settings.Select("Laptop");
             yield return 0.2f;
-            Click(mouse, cam, settings.Control("Laptop", "Connection", "Connect").transform.position);
+            int windowsBefore = manager.Windows.Count;
+            Click(mouse, cam, settings.Control("Laptop", "Connection", "Open Laptop picker").transform.position);
             yield return 0.5f;
-            var link = launcher.Settings.LaptopLink;
-            Check(link.CurrentState != WebSocketRemoteInputSink.State.Disconnected && settings.ValueText("Laptop", "Status") == link.StatusText,
-                $"Connect starts the laptop link and the status row follows it (\"{settings.ValueText("Laptop", "Status")}\")");
-            Click(mouse, cam, settings.Control("Laptop", "Connection", "Connect").transform.position);
-            yield return 0.3f;
-            Check(link.CurrentState == WebSocketRemoteInputSink.State.Disconnected, "clicking it again (now Disconnect) disconnects");
+            Check(manager.Windows.Count == windowsBefore + 1 && manager.FocusedWindow != null && manager.FocusedWindow.Title == "Laptop"
+                  && manager.FocusedWindow.GetComponentInChildren<LaptopPickerContent>() != null,
+                "Connection > Open Laptop picker opens the Laptop picker");
+            Check(settings.ValueText("Laptop", "Status") == SettingsContent.LinkStatus(), "the status row shows the headset's listen state");
+            manager.Close(manager.FocusedWindow);
+
+            // The three "Paired" rows fit inside the window.
+            foreach (var rowName in new[] { "Row Paired laptops", "Row Paired #2", "Row Paired #3" })
+            {
+                Transform row = null;
+                foreach (var t in settings.GetComponentsInChildren<Transform>(true))
+                    if (t.name == rowName) row = t;
+                var value = row != null ? row.Find("Value") : null;
+                float bottom = value != null ? settings.transform.InverseTransformPoint(value.position).y - 0.018f : float.NegativeInfinity;
+                Check(bottom >= -SettingsContent.PreferredSize.y * 0.5f, $"{rowName} fits in the Settings window ({bottom:F3} m from the middle)");
+            }
 
             yield return 0.8f;
             var saved = SettingsStore.Load(SettingsStore.Path);

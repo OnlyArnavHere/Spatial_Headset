@@ -1,6 +1,6 @@
 """Keyboard events from the headset: the key names the protocol accepts, validation, and the rate limit.
 
-Plain Python with no Windows calls, so it can be tested anywhere. input_server.py turns accepted events into SendInput
+Plain Python with no Windows calls, so it can be tested anywhere. dispatch.py turns accepted events into SendInput
 calls through winapi.py.
 
 Keys are named, not sent as Windows virtual-key codes, so the headset doesn't depend on Windows. Only the keys below
@@ -125,7 +125,7 @@ def parse_text(message: dict) -> str | None:
 @dataclass
 class RateLimiter:
     """Token bucket: `rate` events a second on average, bursts of up to `burst`. A typed character counts as one event,
-    so text and key presses share the budget. Releasing a held key never costs anything (see input_server.py)."""
+    so text and key presses share the budget. Releasing a held key never costs anything (see dispatch.py)."""
     rate: float = 30.0
     burst: float = 60.0
     clock: Callable[[], float] = time.monotonic

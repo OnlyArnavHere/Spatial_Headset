@@ -11,9 +11,6 @@ namespace SpatialLauncher.SpatialWindows
     /// <see cref="ImmersionController"/>, whose own changes are recorded back; the phone's brightness; and IPD and
     /// viewport offsets to HoloKit's stereo cameras. Changes are saved half a second after the last one (and when the
     /// app pauses or quits), so dragging a slider doesn't write the file every frame.
-    ///
-    /// It also owns the Settings window's laptop link: a list-only connection to the laptop agent showing status and
-    /// latency (stream windows still open their own links).
     /// </summary>
     public class SettingsService : MonoBehaviour
     {
@@ -21,13 +18,10 @@ namespace SpatialLauncher.SpatialWindows
 
         [SerializeField] WindowManager manager;
         [SerializeField] ImmersionController immersion;
-        [Tooltip("For the agent's control port. Defaults to 8765.")]
         [SerializeField] RemoteConnectionSettings connectionSettings;
 
         public static SettingsService Current { get; private set; }
         public SpatialSettings Settings => SettingsStore.Current;
-        /// <summary>The Settings window's connection to the laptop agent (status and latency).</summary>
-        public WebSocketRemoteInputSink LaptopLink { get; } = new WebSocketRemoteInputSink();
         public bool SavePending => saveAt > 0f;
 
         public WindowManager Manager
@@ -60,7 +54,6 @@ namespace SpatialLauncher.SpatialWindows
         void Awake()
         {
             if (manager == null) manager = GetComponent<WindowManager>();
-            RemoteConnectionPrefs.MigrateFromPlayerPrefs();
         }
 
         void OnEnable()
@@ -158,18 +151,8 @@ namespace SpatialLauncher.SpatialWindows
             });
         }
 
-        /// <summary>Connects the laptop link with the saved address and pair code.</summary>
-        public void ConnectLaptop()
-        {
-            var laptop = SettingsStore.Current.laptop;
-            LaptopLink.Connect(laptop.host, connectionSettings != null ? connectionSettings.inputPort : 8765, laptop.pairCode);
-        }
-
-        public void DisconnectLaptop() => LaptopLink.Disconnect();
-
         void Update()
         {
-            LaptopLink.Tick();
             holoKit.Tick(SettingsStore.Current.display);
             if (saveAt > 0f && Time.unscaledTime >= saveAt) SaveNow();
         }
@@ -196,7 +179,6 @@ namespace SpatialLauncher.SpatialWindows
 
         void OnApplicationQuit() => SaveNow();
 
-        void OnDestroy() => LaptopLink.Dispose();
 
         /// <summary>
         /// The fraction of the screen a viewport moves for a shift in millimetres (Unity camera rects are 0..1 of the

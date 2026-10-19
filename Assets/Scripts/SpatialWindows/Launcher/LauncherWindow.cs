@@ -13,7 +13,7 @@ namespace SpatialLauncher.SpatialWindows
     /// (<see cref="SelectEnvironment"/>, <see cref="ImmersionController"/>). The Settings icon opens the Settings window
     /// (<see cref="OpenSettings"/>, <see cref="SettingsService"/>). The Hide icon hides every other window and becomes Show
     /// (as does the cross-and-sweep gesture, <see cref="CrossSweepRecognizer"/>).
-    /// The Cast icon opens the same picker for a view-only Cast window (<see cref="OpenCastStream"/>): media controls
+    /// The Cast icon opens the same picker for a view-only Cast window (<see cref="OpenLinkedStream"/>): media controls
     /// only, for an agent started with --cast-only.
     /// Press H (or call <see cref="OpenLauncher"/>) to bring the launcher back.
     /// </summary>
@@ -78,6 +78,9 @@ namespace SpatialLauncher.SpatialWindows
         public SettingsService Settings => settings;
         /// <summary>The Settings window, while open.</summary>
         public SpatialWindow SettingsWindow { get; private set; }
+
+        /// <summary>The open pairing screen, if any (a destroyed window reads as null).</summary>
+        public SpatialWindow PairingWindow { get; private set; }
         /// <summary>The Hand Setup window, while open.</summary>
         public SpatialWindow HandSetupWindow { get; private set; }
 
@@ -99,6 +102,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
             if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
+            if (!TryGetComponent<LaptopLink.LinkService>(out _)) gameObject.AddComponent<LaptopLink.LinkService>();
         }
 
         void OnEnable()
@@ -219,34 +223,28 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         /// <summary>A window that lists the laptop's windows and opens a stream window for each one picked.</summary>
-        public SpatialWindow OpenLaptopPicker() => OpenPicker("Laptop", (target, connection) => OpenLaptopStream(target, connection));
+        public SpatialWindow OpenLaptopPicker() => OpenPicker("Laptop");
 
-        /// <summary>The picker for a view-only Cast window: each pick opens <see cref="OpenCastStream"/>.</summary>
-        public SpatialWindow OpenCastPicker() => OpenPicker("Cast", (target, connection) => OpenCastStream(target, connection));
+        /// <summary>The picker for a view-only Cast window: each pick opens a view-only linked stream window.</summary>
+        public SpatialWindow OpenCastPicker() => OpenPicker("Cast");
 
-        SpatialWindow OpenPicker(string title, System.Action<LaptopTarget, LaptopConnection> open)
+        SpatialWindow OpenPicker(string title)
         {
+            bool cast = title == "Cast";
             var size = new Vector2(mediaWidth, LaptopPickerContent.ContentHeight) + Vector2.one * (WindowContent.Padding * 2f);
             var window = manager.Spawn(title, size);
             if (window == null) return null;
             var content = new GameObject().AddComponent<LaptopPickerContent>();
-            content.Init(window, manager.WindowMaterial, connectionSettings, open);
+            content.Init(window, manager.WindowMaterial, () => OpenPairing());
+#if SPATIAL_LAUNCHER_WEBRTC
+            content.OpenLinked = (session, opened, target) => OpenLinkedStream(session, opened, target, cast);
+#endif
             return window;
         }
 
-        /// <summary>
-        /// A window streaming one laptop window (or the whole desktop) with its own video and input connection.
-        /// With a connection it connects at once; without, its connect panel waits for Connect.
-        /// </summary>
-        public SpatialWindow OpenLaptopStream(LaptopTarget target, LaptopConnection connection = null) => OpenStream(target, connection, false);
-
-        /// <summary>
-        /// A view-only Cast window for one laptop window: no pointer or keyboard input, media controls only (play/pause,
-        /// seek, next/previous, volume), asking "view-only" consent. With a connection it connects (after approval).
-        /// </summary>
-        public SpatialWindow OpenCastStream(LaptopTarget target, LaptopConnection connection = null) => OpenStream(target, connection, true);
-
-        SpatialWindow OpenStream(LaptopTarget target, LaptopConnection connection, bool cast)
+#if SPATIAL_LAUNCHER_WEBRTC
+        /// <summary>A stream window on one slot of the link session (view-only until control is requested; Cast: media only).</summary>
+        public SpatialWindow OpenLinkedStream(LinkSession session, OpenedWindow opened, LaptopTarget target, bool cast)
         {
             var resolution = target.width > 0 && target.height > 0 ? new Vector2Int(target.width, target.height)
                 : connectionSettings != null ? connectionSettings.expectedResolution : laptopResolution;
@@ -258,10 +256,26 @@ namespace SpatialLauncher.SpatialWindows
             if (window == null) return null;
 
             var content = new GameObject().AddComponent<RemoteStreamContent>();
-            content.InitConnected(window, manager.WindowMaterial, connectionSettings, cast ? null : InputOverride(), target, cast);
+            content.InitLinked(window, manager.WindowMaterial, connectionSettings, session, opened.Slot, target, cast);
             if (!cast) content.KeyboardRequested += () => OpenKeyboard();
-            if (connection != null) content.ConnectWith(connection);
             return window;
+        }
+#endif
+
+        /// <summary>The pairing screen: a code to type into <c>agent.py --pair</c>. Closing it ends pairing mode.</summary>
+        public SpatialWindow OpenPairing()
+        {
+            if (PairingWindow != null)
+            {
+                manager.Focus(PairingWindow);
+                return PairingWindow;
+            }
+            var link = LaptopLink.LinkService.Current;
+            var size = PairingCodeContent.PreferredSize + Vector2.one * (WindowContent.Padding * 2f);
+            PairingWindow = manager.Spawn("Pair laptop", size);
+            if (PairingWindow == null) return null;
+            new GameObject().AddComponent<PairingCodeContent>().Init(PairingWindow, manager.WindowMaterial, link != null ? link.Host : null);
+            return PairingWindow;
         }
 
         /// <summary>

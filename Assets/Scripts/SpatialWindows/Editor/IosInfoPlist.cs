@@ -10,12 +10,14 @@ namespace SpatialLauncher.SpatialWindows.Editor
     /// Adds the Info.plist keys Unity has no Player Setting for, after every iOS build: why the app uses the local
     /// network (iOS asks once before the app can reach the laptop agent on the Wi-Fi), why it recognises speech (voice
     /// typing; the microphone's reason is a Player Setting), and App Transport Security's local-networking exception for
-    /// the agent's plain-HTTP WHEP endpoint.
+    /// local-network traffic.
     /// </summary>
     static class IosInfoPlist
     {
         public const string LocalNetworkUsage =
-            "Spatial Launcher connects to the laptop agent on your Wi-Fi to show your laptop's windows.";
+            "Spatial Launcher connects to the laptop agent on your Wi-Fi to show your laptop's windows, and listens for your paired laptop and shows a pairing code.";
+
+        public const string BonjourService = "_spatiallauncher._tcp";
 
         [PostProcessBuild(100)]
         static void AddKeys(BuildTarget target, string buildPath)
@@ -27,11 +29,23 @@ namespace SpatialLauncher.SpatialWindows.Editor
             var root = plist.root;
             root.SetString("NSLocalNetworkUsageDescription", LocalNetworkUsage);
             root.SetString("NSSpeechRecognitionUsageDescription", DeviceSettings.SpeechRecognitionUsage);
+            AddBonjourService(root);
             var ats = root.values.TryGetValue("NSAppTransportSecurity", out var existing) && existing is PlistElementDict dict
                 ? dict
                 : root.CreateDict("NSAppTransportSecurity");
             ats.SetBoolean("NSAllowsLocalNetworking", true);
             plist.WriteToFile(plistPath);
+        }
+
+        /// <summary>Adds the link service to NSBonjourServices once, keeping what is already listed.</summary>
+        internal static void AddBonjourService(PlistElementDict root)
+        {
+            var services = root.values.TryGetValue("NSBonjourServices", out var existing) && existing is PlistElementArray array
+                ? array
+                : root.CreateArray("NSBonjourServices");
+            foreach (var element in services.values)
+                if (element is PlistElementString text && text.value == BonjourService) return;
+            services.AddString(BonjourService);
         }
     }
 }

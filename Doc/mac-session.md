@@ -87,8 +87,8 @@ Settings > Control Center if missing).
    untested on a device.
 5. **WebRTC over Wi-Fi with the laptop agent.** Phone and laptop on the same Wi-Fi (set to a *Private* network on
    Windows). On the laptop: `python agent.py --input --dry-run-input` (dry run first: nothing gets clicked), and
-   `python clock.py`. In the app: Home > **Laptop** > enter the laptop address the agent prints (not 127.0.0.1), port
-   8889 and the token > **List** > pick the clock, then **Whole desktop**.
+   `python clock.py`. In the app: Home > **Laptop** > pair the laptop once, then tap it in the picker and run the agent
+   (see [connect.md](connect.md); the old port 8889 and token are gone) > pick the clock, then **Whole desktop**.
    *Capture:* a screen recording, the agent's console text, and both windows' status lines.
 6. **Latency.** With the clock streaming, film the phone screen and the laptop's real clock window together (or take
    several photos). Each photo's difference between the two clocks is the end-to-end delay; take at least 6. Also note
@@ -130,6 +130,6 @@ Voice > On-device only), and any error the keyboard's status line shows.
 | Stereo images don't line up | Phone model not in HoloKit's list | Note the model; see HoloKit's Phone_Calibration_Guide |
 | No hand cursor | Not LiDAR, iOS < 18, hand too close/far, dim light | Check the model and iOS; 30–60 cm; more light |
 | Laptop window: "Can't reach …" | Different network, firewall, wrong address, Local Network denied | Same Wi-Fi; Windows network Private and allow the prompts; use the address the agent prints; Settings > Privacy & Security > Local Network > (app) on. Guest networks often block devices from each other: use the phone's hotspot instead (laptop joins it) |
-| Laptop window: "Wrong token" | The agent prints a new token every run | Type the current one |
+| Laptop window: pairing code rejected | Expired (2 minutes), already used, or 3 wrong tries | Start Pair new laptop again; see [connect.md](connect.md) (replaces the old token) |
 | Laptop window: connected, but no picture | Captured window minimized, or the phone can't decode the stream | Restore the window; restart the agent with `--encoder x264` |
 | App gets slow after a few minutes | Heat: HoloKit lowers the stereo frame rate | That's the temperature test's result: note it, let the phone cool |

@@ -10,22 +10,19 @@ namespace SpatialLauncher.SpatialWindows
     /// placeholder while there is no picture. Pointer move, press, release and scroll on the screen go to the
     /// source's <see cref="IRemoteInputSink"/> in remote-screen coordinates.
     ///
-    /// <see cref="InitConnected"/> adds the real connection to the laptop agent (Tools/LaptopAgent) for one target
-    /// picked in the Laptop picker (a window or the whole desktop): video over WebRTC (<c>WebRtcStreamSource</c>) from
-    /// the target's own stream path, input over its own WebSocket (<see cref="WebSocketRemoteInputSink"/>), so several
-    /// of these windows can show different laptop windows at once. A connect panel under the screen has host, port and
-    /// token fields, a Connect button, a Keys button (opens the virtual keyboard: <see cref="KeyboardRequested"/>) and a
-    /// status line. The title bar shows the input round-trip time; the status line shows the laptop's clock as estimated
-    /// over the input link, to compare with Tools/LaptopAgent/clock.py. Keyboard input reaches the laptop through
-    /// <see cref="KeyboardSink"/> (see <see cref="RemoteKeyboard"/>).
-    ///
-    /// Connect asks <see cref="ConsentGate"/> first: video and input connect only after the user approves, every
-    /// session. Deny or a timeout leaves both disconnected; without a gate in the scene nothing connects.
+    /// Laptop windows are <see cref="InitLinked"/> windows (below). The title bar shows the control round-trip time. Keyboard
+    /// input reaches the laptop through <see cref="KeyboardSink"/> (see <see cref="RemoteKeyboard"/>).
     ///
     /// Cast mode (<see cref="IsCast"/>, the launcher's Cast icon): view-only. The screen takes no pointer input, no
     /// keyboard reaches it and there is no Keys button; a bar of media controls (previous, seek back, play/pause, seek
     /// forward, next, volume down/up, mute) sends only media actions, which an agent started with --cast-only accepts
     /// while dropping everything else. The consent question says "view-only".
+    ///
+    /// <see cref="InitLinked"/> (needs SPATIAL_LAUNCHER_WEBRTC): a window on one slot of the headset's link session. The
+    /// video is the slot's SlotVideoSource and input goes through its DataChannelInputSink. The session starts view-only;
+    /// a badge shows View only / Requesting / Control / Control revoked / Denied, and Request control asks
+    /// <see cref="ConsentGate"/> for "full control": only its approve callback lets the control client send the request.
+    /// Closing the window sends close{slot}. Cast windows have only media buttons and never offer control.
     /// </summary>
     public class RemoteStreamContent : WindowContent, IRemoteSession
     {
@@ -40,9 +37,8 @@ namespace SpatialLauncher.SpatialWindows
         const float StatusHeight = 0.03f;
         const float Gap = 0.01f;
         const float PanelHeight = RowHeight + StatusHeight + Gap;
-        const float ButtonWidth = 0.11f;
         const float KeysButtonWidth = 0.07f;
-        const float PortWidth = 0.08f;
+        const float LinkedButtonWidth = 0.16f;
         const float TextInset = 0.008f;
         const float CastBarRow = 0.04f;
         static readonly Color MediaColor = new Color(0.24f, 0.26f, 0.32f);
@@ -63,10 +59,6 @@ namespace SpatialLauncher.SpatialWindows
         // Connected mode only.
         /// <summary>The video source in connected mode; null without SPATIAL_LAUNCHER_WEBRTC (input still works).</summary>
         public IRemoteVideoSource Video { get; private set; }
-        public WebSocketRemoteInputSink InputLink { get; private set; }
-        public WindowTextField HostField { get; private set; }
-        public WindowTextField PortField { get; private set; }
-        public WindowTextField TokenField { get; private set; }
         public WindowButton ConnectButton { get; private set; }
         /// <summary>Opens the virtual keyboard for this window.</summary>
         public WindowButton KeysButton { get; private set; }
@@ -76,13 +68,13 @@ namespace SpatialLauncher.SpatialWindows
         public IRemoteKeyboardSink KeyboardSink => IsCast ? null : Source?.Sink as IRemoteKeyboardSink;
         /// <summary>A view-only Cast window with media controls instead of pointer and keyboard input.</summary>
         public bool IsCast { get; private set; }
-        /// <summary>Cast mode: the media buttons by action name (WebSocketRemoteInputSink.MediaActions).</summary>
+        /// <summary>Cast mode: the media buttons by action name (RemoteInputEncoding.MediaActions).</summary>
         public IReadOnlyDictionary<string, WindowButton> MediaButtons => mediaButtons;
         /// <summary>Cast mode: the last media button pressed, and whether it was sent.</summary>
         public string LastMediaAction { get; private set; }
         public bool LastMediaSent { get; private set; }
         public string StatusLine => statusLine != null ? statusLine.text : "";
-        /// <summary>True between Connect and Disconnect (whether or not the connection has succeeded yet).</summary>
+        /// <summary>True while a linked window's session is running.</summary>
         public bool IsActive { get; private set; }
         /// <summary>What this window streams from the laptop; null if it wasn't opened from the picker.</summary>
         public LaptopTarget Target { get; private set; }
@@ -93,16 +85,35 @@ namespace SpatialLauncher.SpatialWindows
 
         // IRemoteSession: what the consent question and the live indicator name.
         public string SourceName => Target != null && !string.IsNullOrEmpty(Target.title) ? Target.title : "Laptop";
-        public string Address => connectedHost ?? (HostField != null ? HostField.Text.Trim() : "");
-        /// <summary>"full control" (pointer and keyboard reach the laptop window) or "view-only" (Cast).</summary>
-        public string ModeLabel => IsCast ? "view-only" : "full control";
+        public string Address => LinkedAddress ?? "";
+        /// <summary>
+        /// "full control" (pointer and keyboard reach the laptop window) or "view-only" (Cast). A linked window says
+        /// "full control" only while control is granted or being asked for, otherwise "view-only".
+        /// </summary>
+        public string ModeLabel => IsCast ? "view-only" : linked && !ControlGrantedOrAsking ? "view-only" : "full control";
+
+        bool linked;
+        bool asking;
+        string denial;
+        TextMeshPro badgeLabel;
+        string LinkedAddress =>
+#if SPATIAL_LAUNCHER_WEBRTC
+            Link != null ? Link.Address :
+#endif
+            null;
+        bool ControlGrantedOrAsking =>
+#if SPATIAL_LAUNCHER_WEBRTC
+            Link != null && !Link.IsEnded && (asking || Link.Control.State == LinkSessionState.Control || Link.Control.State == LinkSessionState.Requested);
+#else
+            false;
+#endif
+        /// <summary>The control badge of a linked window: View only, Requesting…, Control, Control revoked, Denied: ...</summary>
+        public string Badge { get; private set; } = "";
+        public bool IsLinked => linked;
 
         RemoteConnectionSettings settings;
-        string connectedHost;
-        int connectedPort;
         TextMeshPro statusLabel, statusLine, connectLabel, keysLabel;
         Transform panel;
-        readonly List<(WindowTextField field, TextMeshPro label)> fields = new List<(WindowTextField, TextMeshPro)>();
         readonly Dictionary<string, WindowButton> mediaButtons = new Dictionary<string, WindowButton>();
         readonly List<TextMeshPro> mediaLabels = new List<TextMeshPro>();
 
@@ -114,40 +125,139 @@ namespace SpatialLauncher.SpatialWindows
             Build(new RemoteStreamSource(sink, expectedSize));
         }
 
+#if SPATIAL_LAUNCHER_WEBRTC
+        /// <summary>The link session this window shows a slot of (linked windows only).</summary>
+        public LinkSession Link { get; private set; }
+        public int Slot { get; private set; } = -1;
+        public DataChannelInputSink LinkInput { get; private set; }
+
         /// <summary>
-        /// A screen connected to the laptop agent for <paramref name="target"/>, with a connect panel. Values typed in
-        /// the panel are remembered on this device. <paramref name="inputOverride"/> replaces the WebSocket input (for
-        /// debugging); usually null.
+        /// A window on slot <paramref name="slot"/> of <paramref name="session"/>, already opened on the laptop for
+        /// <paramref name="target"/>. View-only until the user asks for control (not offered for a cast).
         /// </summary>
-        public void InitConnected(SpatialWindow window, Material baseMaterial, RemoteConnectionSettings connectionSettings,
-            IRemoteInputSink inputOverride = null, LaptopTarget target = null, bool cast = false)
+        public void InitLinked(SpatialWindow window, Material baseMaterial, RemoteConnectionSettings connectionSettings,
+            LinkSession session, int slot, LaptopTarget target, bool cast = false)
         {
             Attach(window, baseMaterial);
             settings = connectionSettings;
+            linked = true;
+            Link = session;
+            Slot = slot;
             Target = target;
             IsCast = cast;
             var expected = target != null && target.width > 0 && target.height > 0
                 ? new Vector2Int(target.width, target.height)
                 : settings != null ? settings.expectedResolution : new Vector2Int(1920, 1080);
-            Video = CreateVideo(expected);
-            InputLink = new WebSocketRemoteInputSink();
-            InputLink.StatusChanged += RefreshStatus;
-            InputLink.StatusChanged += FollowStreamPath;
-            // A cast sends no pointer input: no sink, and a screen without a collider.
-            Build(new RemoteStreamSource(Video, cast ? null : inputOverride ?? InputLink, expected) { ViewOnly = cast });
+            var video = session.Slots[slot];
+            LinkInput = session.Inputs[slot];
+            Video = video;
+            Build(new RemoteStreamSource(video, cast ? null : LinkInput, expected) { ViewOnly = cast });
             BuildPanel();
+            video.Start();
+            session.Control.StateChanged += RefreshStatus;
+            session.Ended += OnLinkEnded;
+            IsActive = !session.IsEnded;
+            if (IsActive) ConsentGate.Current?.BeginLive(this);
             RefreshStatus();
             Relayout();
         }
 
-        IRemoteVideoSource CreateVideo(Vector2Int expected)
+        void OnLinkEnded(string reason)
         {
-#if SPATIAL_LAUNCHER_WEBRTC
-            return new WebRtcStreamSource(this, expected) { User = settings != null ? settings.viewerUser : "viewer" };
-#else
-            return null;
-#endif
+            if (this == null) return;
+            IsActive = false;
+            ConsentGate.Current?.EndLive(this);
+            RefreshStatus();
         }
+
+        // The Request/Release control button.
+        void ToggleControl()
+        {
+            if (Link == null || IsCast || Link.IsEnded) return;
+            var control = Link.Control;
+            var gate = ConsentGate.Current;
+            if (control.State == LinkSessionState.Control || control.State == LinkSessionState.Requested)
+            {
+                if (asking && gate != null) gate.Withdraw(this);
+                asking = false;
+                AwaitingConsent = false;
+                control.ReleaseControl();
+                RefreshStatus();
+                return;
+            }
+            if (control.State != LinkSessionState.ViewOnly) return;
+            denial = null;
+            if (gate == null)
+            {
+                ConsentOutcome = "no consent gate";
+                denial = "no consent gate";
+                RefreshStatus();
+                return;
+            }
+            asking = true;
+            AwaitingConsent = true;
+            gate.Request(this, () =>
+            {
+                asking = false;
+                AwaitingConsent = false;
+                ConsentOutcome = "approved";
+                if (this == null || Link == null || Link.IsEnded) return;
+                // The only place that approves a control request; it sends control-request itself.
+                Link.Control.ApproveControlFromConsent();
+                RefreshStatus();
+            }, reason =>
+            {
+                asking = false;
+                AwaitingConsent = false;
+                ConsentOutcome = reason;
+                if (this == null) return;
+                denial = reason;
+                RefreshStatus();
+            });
+            RefreshStatus();
+        }
+
+        string ComputeBadge()
+        {
+            if (Link.IsEnded) return "Session ended";
+            if (IsCast) return "View only";
+            if (denial != null) return "Denied: " + denial;
+            switch (Link.Control.State)
+            {
+                case LinkSessionState.ViewOnly:
+                    return Link.Control.ControlDeniedReason != null ? "Denied: " + Link.Control.ControlDeniedReason : asking ? "Waiting for approval…" : "View only";
+                case LinkSessionState.Requested: return "Requesting…";
+                case LinkSessionState.Control: return "Control";
+                case LinkSessionState.Revoked: return "Control revoked";
+                default: return "Connecting…";
+            }
+        }
+
+        void RefreshLinked()
+        {
+            var state = Link.Control.State;
+            Badge = ComputeBadge();
+            badgeLabel.text = Badge;
+            bool offer = !IsCast && !Link.IsEnded
+                && (state == LinkSessionState.ViewOnly || state == LinkSessionState.Requested || state == LinkSessionState.Control);
+            ConnectButton.gameObject.SetActive(offer);
+            connectLabel.gameObject.SetActive(offer);
+            bool release = state == LinkSessionState.Requested || state == LinkSessionState.Control;
+            connectLabel.text = release ? "Release control" : "Request control";
+            ConnectButton.GetComponent<MeshRenderer>().sharedMaterial.color = release ? DisconnectColor : ConnectColor;
+            RefreshLinkedLine();
+        }
+
+        void RefreshLinkedLine()
+        {
+            if (statusLine == null) return;
+            var control = Link.Control;
+            string rtt = control.BestRoundTripMs is double best ? $"   {best:0} ms" : "";
+            string throttled = LinkInput.ThrottledCount > 0 ? " (keys throttled)" : "";
+            string wait = asking && ConsentGate.Current != null ? $"   Waiting for approval on the headset ({ConsentGate.Current.TimeoutSeconds:0} s)..." : "";
+            statusLine.text = $"{Link.LaptopName}   Video: {Link.Slots[Slot].StatusText}{throttled}{rtt}{wait}";
+        }
+#endif
 
         void Build(RemoteStreamSource source)
         {
@@ -169,30 +279,16 @@ namespace SpatialLauncher.SpatialWindows
         void BuildPanel()
         {
             panel = CreateQuad("ConnectPanel", transform, CreateMaterial(PanelColor));
-            HostField = CreateField("Host", "Laptop address");
-            PortField = CreateField("Port", "Port");
-            TokenField = CreateField("Token", "Pairing token");
-            PortField.DigitsOnly = true;
-            PortField.MaxLength = 5;
-            TokenField.Masked = true;
-
-            var group = new List<WindowTextField> { HostField, PortField, TokenField };
-            foreach (var (field, _) in fields)
-            {
-                field.Group = group;
-                field.Submitted += _ => Connect();
-            }
-
-            HostField.SetText(RemoteConnectionPrefs.Host(settings));
-            PortField.SetText(RemoteConnectionPrefs.VideoPort(settings).ToString());
-            TokenField.SetText(RemoteConnectionPrefs.Token());
+            badgeLabel = CreateLabel("Badge", transform, "", 0.22f, TextAlignmentOptions.MidlineLeft);
+            badgeLabel.richText = false;
 
             ConnectButton = CreateControl<WindowButton>("ConnectButton", transform, CreateMaterial(ConnectColor));
-            connectLabel = CreateLabel("ConnectLabel", transform, "Connect", 0.22f, TextAlignmentOptions.Center);
+            connectLabel = CreateLabel("ConnectLabel", transform, "Request control", 0.22f, TextAlignmentOptions.Center);
             ConnectButton.Clicked += () =>
             {
-                if (IsActive) Disconnect();
-                else Connect();
+#if SPATIAL_LAUNCHER_WEBRTC
+                if (linked) ToggleControl();
+#endif
             };
 
             KeysButton = CreateControl<WindowButton>("KeysButton", transform, CreateMaterial(KeysColor));
@@ -203,9 +299,9 @@ namespace SpatialLauncher.SpatialWindows
                 // No keyboard for a cast; media controls instead.
                 KeysButton.gameObject.SetActive(false);
                 keysLabel.gameObject.SetActive(false);
-                for (int i = 0; i < WebSocketRemoteInputSink.MediaActions.Length; i++)
+                for (int i = 0; i < RemoteInputEncoding.MediaActions.Length; i++)
                 {
-                    string action = WebSocketRemoteInputSink.MediaActions[i];
+                    string action = RemoteInputEncoding.MediaActions[i];
                     var button = CreateControl<WindowButton>($"Media {action}", transform, CreateMaterial(MediaColor));
                     var label = CreateLabel($"MediaLabel {action}", transform, MediaLabels[i], 0.18f, TextAlignmentOptions.Center);
                     button.Clicked += () => SendMedia(action);
@@ -218,135 +314,48 @@ namespace SpatialLauncher.SpatialWindows
             statusLine.color = new Color(0.75f, 0.77f, 0.82f);
         }
 
-        WindowTextField CreateField(string fieldName, string placeholder)
-        {
-            var material = CreateMaterial(FieldColor);
-            var field = CreateControl<WindowTextField>($"{fieldName}Field", transform, material);
-            var label = CreateLabel($"{fieldName}Text", transform, "", 0.2f, TextAlignmentOptions.MidlineLeft);
-            field.Init(label, material, placeholder);
-            fields.Add((field, label));
-            return field;
-        }
-
-        /// <summary>Fills in the panel and connects (used when the picker opens this window).</summary>
-        public void ConnectWith(LaptopConnection connection)
-        {
-            if (InputLink == null || connection == null) return;
-            HostField.SetText(connection.Host);
-            PortField.SetText(connection.VideoPort.ToString());
-            TokenField.SetText(connection.Token);
-            Connect();
-        }
-
-        /// <summary>Saves the panel's values and connects video and input. Shows what's missing instead if incomplete.</summary>
-        public void Connect()
-        {
-            if (InputLink == null) return;
-            WindowTextField.BlurAll();
-            string host = HostField.Text.Trim();
-            string token = TokenField.Text.Trim();
-            if (Target == null)
-            {
-                statusLine.text = "Open laptop windows from the Laptop picker (the Laptop icon)";
-                return;
-            }
-            if (host.Length == 0 || !int.TryParse(PortField.Text, out int port) || port <= 0 || port > 65535 || token.Length == 0)
-            {
-                statusLine.text = "Enter the laptop's address, port and the token printed by agent.py";
-                return;
-            }
-
-            RemoteConnectionPrefs.Save(host, port, token);
-            Disconnect();
-            connectedHost = host;
-            connectedPort = port;
-            var gate = ConsentGate.Current;
-            if (gate == null)
-            {
-                ConsentOutcome = "no consent gate";
-                statusLine.text = "Not connected: nothing can show here without the headset's approval (no consent gate in this scene).";
-                return;
-            }
-            AwaitingConsent = true;
-            statusLine.text = $"Waiting for approval on the headset ({gate.TimeoutSeconds:0} s)...";
-            gate.Request(this, () =>
-            {
-                AwaitingConsent = false;
-                ConsentOutcome = "approved";
-                if (this == null || InputLink == null) return;
-                StartVideo(Target.path, token);
-                InputLink.Connect(host, settings != null ? settings.inputPort : 8765, token, Target.id);
-                IsActive = true;
-                gate.BeginLive(this);
-                RefreshStatus();
-            }, reason =>
-            {
-                AwaitingConsent = false;
-                ConsentOutcome = reason;
-                if (this == null || statusLine == null) return;
-                statusLine.text = $"Not allowed ({reason}). Nothing was connected.";
-                RefreshStatus();
-            });
-        }
-
         /// <summary>Cast mode: sends a media control (a media button does this). False if it couldn't be sent.</summary>
         public bool SendMedia(string action)
         {
-            if (!IsCast || InputLink == null) return false;
-            LastMediaAction = action;
-            LastMediaSent = IsActive && InputLink.SendMedia(action);
-            if (!LastMediaSent && statusLine != null)
-                statusLine.text = !IsActive ? "Not connected" : !InputLink.IsConnected ? "Not sent: the laptop isn't connected yet"
-                    : "Not sent: start the agent with --cast-only (or --input --keyboard) for media controls";
-            return LastMediaSent;
+#if SPATIAL_LAUNCHER_WEBRTC
+            if (linked)
+            {
+                if (!IsCast) return false;
+                LastMediaAction = action;
+                LastMediaSent = IsActive && LinkInput.SendMedia(action);
+                if (!LastMediaSent && statusLine != null)
+                    statusLine.text = !IsActive ? "Not sent: the session ended" : "Not sent: start the agent with --cast-only for media controls";
+                return LastMediaSent;
+            }
+#endif
+            return false;
         }
 
         /// <summary>Panic stop: disconnects video and input at once (the gate closes the window).</summary>
-        public void StopForPanic() => Disconnect();
-
-        void StartVideo(string path, string token)
+        public void StopForPanic()
         {
-            if (Video == null) return;
-            Video.Stop();
-            Video.Url = $"http://{connectedHost}:{connectedPort}/{path}/whep";
-            Video.Password = token;
-            Video.Start();
-        }
-
-        // The agent names stream paths when it lists windows; if it restarted since, the window may have a new path.
-        void FollowStreamPath()
-        {
-            string path = InputLink.StreamPath;
-            if (!IsActive || Video == null || string.IsNullOrEmpty(path) || Target == null || path == Target.path) return;
-            Target.path = path;
-            StartVideo(path, TokenField.Text.Trim());
-        }
-
-        public void Disconnect()
-        {
-            if (InputLink == null) return;
-            var gate = ConsentGate.Current;
-            if (gate != null)
+#if SPATIAL_LAUNCHER_WEBRTC
+            if (linked)
             {
-                if (AwaitingConsent) gate.Withdraw(this);
-                gate.EndLive(this);
+                Link?.StopForPanic();
+                return;
             }
-            AwaitingConsent = false;
-            Video?.Stop();
-            InputLink.Disconnect();
-            IsActive = false;
-            RefreshStatus();
+#endif
         }
 
         void Update()
         {
-            if (InputLink == null) return;
-            Video?.Tick();
-            InputLink.Tick();
-
-            double? rtt = InputLink.IsConnected ? InputLink.RoundTripMs : null;
-            Window.SetTitleDetail(rtt.HasValue ? $"{rtt.Value:0} ms" : null);
-            RefreshStatusLine();
+#if SPATIAL_LAUNCHER_WEBRTC
+            if (linked)
+            {
+                Video?.Tick();
+                LinkInput.Tick();
+                double? linkRtt = IsActive ? Link.Control.RoundTripMs : null;
+                Window.SetTitleDetail(linkRtt.HasValue ? $"{linkRtt.Value:0} ms" : null);
+                RefreshLinkedLine();
+                return;
+            }
+#endif
         }
 
         void RefreshStatus()
@@ -355,31 +364,13 @@ namespace SpatialLauncher.SpatialWindows
             bool showPlaceholder = !Source.IsConnected || Source.Texture == null;
             statusLabel.gameObject.SetActive(showPlaceholder);
             statusLabel.text = Source.StatusText;
-            if (connectLabel != null)
+#if SPATIAL_LAUNCHER_WEBRTC
+            if (linked && Link != null && connectLabel != null)
             {
-                connectLabel.text = IsActive ? "Disconnect" : "Connect";
-                ConnectButton.GetComponent<MeshRenderer>().sharedMaterial.color = IsActive ? DisconnectColor : ConnectColor;
-            }
-            RefreshStatusLine();
-        }
-
-        void RefreshStatusLine()
-        {
-            if (statusLine == null) return;
-            if (!IsActive)
-            {
-                if (!statusLine.text.StartsWith("Enter") && !statusLine.text.StartsWith("Waiting") && !statusLine.text.StartsWith("Not "))
-                    statusLine.text = "Start agent.py on the laptop, then enter its address and token.";
+                RefreshLinked();
                 return;
             }
-            string clock = InputLink.LaptopNow is System.DateTime now
-                ? $"   Laptop clock {now.ToLocalTime():HH:mm:ss.fff}"
-                : "";
-            string rtt = InputLink.BestRoundTripMs is double best ? $" ({best:0} ms)" : "";
-            string video = Video != null ? Video.StatusText : "needs WebRTC (SPATIAL_LAUNCHER_WEBRTC)";
-            string throttled = InputLink.ThrottledCount > 0 ? " (keys throttled)" : "";
-            string mode = IsCast ? "Cast (view-only)   " : "";
-            statusLine.text = $"{mode}Video: {video}   Input: {InputLink.StatusText}{throttled}{rtt}{clock}";
+#endif
         }
 
         protected override void Layout(Vector2 size)
@@ -408,23 +399,17 @@ namespace SpatialLauncher.SpatialWindows
 
             float rowY = panelTop - Gap * 0.5f - RowHeight * 0.5f;
             float left = -size.x * 0.5f + Gap;
-            float textWidth = Mathf.Max(0.04f, (size.x - ButtonWidth - KeysButtonWidth - PortWidth - Gap * 6f) * 0.5f);
-            float[] widths = { textWidth, PortWidth, textWidth };
-            for (int i = 0; i < fields.Count; i++)
-            {
-                var (field, label) = fields[i];
-                float w = widths[i];
-                field.transform.localPosition = new Vector3(left + w * 0.5f, rowY, -0.002f);
-                field.transform.localScale = new Vector3(w, RowHeight, 1f);
-                label.transform.localPosition = new Vector3(left + w * 0.5f, rowY, -0.003f);
-                label.rectTransform.sizeDelta = new Vector2(w - TextInset * 2f, RowHeight);
-                left += w + Gap;
-            }
-            ConnectButton.transform.localPosition = new Vector3(left + ButtonWidth * 0.5f, rowY, -0.002f);
-            ConnectButton.transform.localScale = new Vector3(ButtonWidth, RowHeight, 1f);
-            connectLabel.transform.localPosition = new Vector3(left + ButtonWidth * 0.5f, rowY, -0.003f);
-            connectLabel.rectTransform.sizeDelta = new Vector2(ButtonWidth, RowHeight);
-            left += ButtonWidth + Gap;
+            float connectWidth;
+            connectWidth = LinkedButtonWidth;
+            float badgeWidth = Mathf.Max(0.04f, size.x - connectWidth - (IsCast ? 0f : KeysButtonWidth) - Gap * 4f);
+            badgeLabel.transform.localPosition = new Vector3(left + badgeWidth * 0.5f, rowY, -0.003f);
+            badgeLabel.rectTransform.sizeDelta = new Vector2(badgeWidth - TextInset * 2f, RowHeight);
+            left += badgeWidth + Gap;
+            ConnectButton.transform.localPosition = new Vector3(left + connectWidth * 0.5f, rowY, -0.002f);
+            ConnectButton.transform.localScale = new Vector3(connectWidth, RowHeight, 1f);
+            connectLabel.transform.localPosition = new Vector3(left + connectWidth * 0.5f, rowY, -0.003f);
+            connectLabel.rectTransform.sizeDelta = new Vector2(connectWidth, RowHeight);
+            left += connectWidth + Gap;
             KeysButton.transform.localPosition = new Vector3(left + KeysButtonWidth * 0.5f, rowY, -0.002f);
             KeysButton.transform.localScale = new Vector3(KeysButtonWidth, RowHeight, 1f);
             keysLabel.transform.localPosition = new Vector3(left + KeysButtonWidth * 0.5f, rowY, -0.003f);
@@ -433,12 +418,12 @@ namespace SpatialLauncher.SpatialWindows
             if (IsCast)
             {
                 float barY = panelTop + Gap * 0.5f + CastBarRow * 0.5f;
-                int count = WebSocketRemoteInputSink.MediaActions.Length;
+                int count = RemoteInputEncoding.MediaActions.Length;
                 float cell = (size.x - Gap * (count + 1)) / count;
                 for (int i = 0; i < count; i++)
                 {
                     float x = -size.x * 0.5f + Gap + cell * (i + 0.5f) + Gap * i;
-                    var button = mediaButtons[WebSocketRemoteInputSink.MediaActions[i]].transform;
+                    var button = mediaButtons[RemoteInputEncoding.MediaActions[i]].transform;
                     button.localPosition = new Vector3(x, barY, -0.002f);
                     button.localScale = new Vector3(cell, CastBarRow, 1f);
                     mediaLabels[i].transform.localPosition = new Vector3(x, barY, -0.003f);
@@ -459,12 +444,13 @@ namespace SpatialLauncher.SpatialWindows
                 gate.Withdraw(this);
                 gate.EndLive(this);
             }
-            if (InputLink != null)
+#if SPATIAL_LAUNCHER_WEBRTC
+            if (Link != null)
             {
-                InputLink.StatusChanged -= RefreshStatus;
-                InputLink.StatusChanged -= FollowStreamPath;
-                InputLink.Dispose();
+                Link.Control.StateChanged -= RefreshStatus;
+                Link.Ended -= OnLinkEnded;
             }
+#endif
             Video?.Stop();
             if (Source != null)
             {

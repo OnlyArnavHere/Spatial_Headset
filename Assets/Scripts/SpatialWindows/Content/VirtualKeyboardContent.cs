@@ -120,9 +120,11 @@ namespace SpatialLauncher.SpatialWindows
             string text;
             if (listening) text = $"{voice.Status}: {voice.Partial}";
             else if (stream == null) text = "Open a laptop window to type into it";
-            else if (stream.InputLink != null && !stream.InputLink.IsConnected) text = $"Typing into: {stream.Window.Title} (not connected)";
-            else if (stream.InputLink != null && !stream.InputLink.KeyboardAllowed)
-                text = $"Typing into: {stream.Window.Title} (keyboard off: start agent.py with --input --keyboard)";
+#if SPATIAL_LAUNCHER_WEBRTC
+            else if (stream.IsLinked && !stream.IsActive) text = $"Typing into: {stream.Window.Title} (not connected)";
+            else if (stream.LinkInput != null && !stream.LinkInput.KeyboardAllowed)
+                text = $"Typing into: {stream.Window.Title} (view only: request control to type)";
+#endif
             else text = $"Typing into: {stream.Window.Title}";
             if (status.text != text) status.text = text;
         }

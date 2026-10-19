@@ -181,7 +181,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             Expect(PlayerSettings.defaultInterfaceOrientation == UIOrientation.LandscapeLeft,
                 $"default orientation is Landscape Left, as the phone sits in the viewer ({PlayerSettings.defaultInterfaceOrientation})", false);
             Expect(PlayerSettings.insecureHttpOption == InsecureHttpOption.AlwaysAllowed,
-                $"HTTP is allowed: WHEP to the laptop agent is plain HTTP on the local network ({PlayerSettings.insecureHttpOption})");
+                $"HTTP is allowed (the WebRTC link does not need it; left on) ({PlayerSettings.insecureHttpOption})", false);
             Expect(PlayerSettings.iOS.requiresPersistentWiFi, "Requires Persistent WiFi is on (streams from the laptop)", false);
 
             bool define = PlayerSettings.GetScriptingDefineSymbols(ios).Split(';').Contains("SPATIAL_LAUNCHER_WEBRTC");
