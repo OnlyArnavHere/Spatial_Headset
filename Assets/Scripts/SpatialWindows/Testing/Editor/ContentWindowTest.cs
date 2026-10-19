@@ -144,6 +144,11 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                     manager.Focus(laptopWindow);
                     yield return Settle;
                     Click(input, cam, remote.ConnectButton.transform.position);
+                    yield return 0.2f;
+                    // Nothing connects until the headset approves (ConsentGateTest covers the gate itself).
+                    Check(remote.AwaitingConsent && !remote.IsActive && ConsentGate.Current != null && ConsentGate.Current.HasPending,
+                        "Connect asks for approval first");
+                    if (ConsentGate.Current != null) ConsentGate.Current.Approve();
                     double deadline = EditorTestRunner.Now + 8.0;
                     while (remote.Video.CurrentState != RemoteVideoState.Retrying && EditorTestRunner.Now < deadline)
                         yield return 0.1f;

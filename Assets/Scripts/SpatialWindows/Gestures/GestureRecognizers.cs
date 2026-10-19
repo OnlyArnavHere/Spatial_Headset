@@ -120,6 +120,10 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         public IHandSource Source { get; private set; }
+        /// <summary>The user's hand length for hand-size depth (Hand Setup); 0 uses the config's.</summary>
+        public float HandLength { get; set; }
+        /// <summary>Stops recognizing (as when hand input is off), for example while Hand Setup measures poses.</summary>
+        public bool Paused { get; set; }
         public HandFeatures Left { get; } = new HandFeatures(Handedness.Left);
         public HandFeatures Right { get; } = new HandFeatures(Handedness.Right);
         public FistGrabRecognizer FistGrab { get; private set; }
@@ -203,7 +207,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             if (Source == null) Source = handSource as IHandSource ?? (hands != null ? hands.HandSource : null) ?? GetComponent<IHandSource>();
             if (head == null && Camera.main != null) head = Camera.main.transform;
-            bool active = Source != null && head != null && (!onlyWithHandInput || (hands != null && hands.isActiveAndEnabled));
+            bool active = !Paused && Source != null && head != null && (!onlyWithHandInput || (hands != null && hands.isActiveAndEnabled));
             if (!active)
             {
                 if (IsRunning) CancelAll();
@@ -218,9 +222,11 @@ namespace SpatialLauncher.SpatialWindows
             UpdateFeatures(Right, Source.GetHand(Handedness.Right), dt);
 
             var frame = new GestureFrame { Left = Left, Right = Right, Head = HeadPose, DeltaTime = dt, Time = Now };
+            // The panic stop (cross and sweep while a remote screen is live) works even with that gesture switched off.
+            bool panicArmed = ConsentGate.Current != null && ConsentGate.Current.IsActive;
             foreach (var recognizer in recognizers)
             {
-                if (recognizer.Enabled) recognizer.Tick(frame);
+                if (recognizer.Enabled || (recognizer == CrossSweep && panicArmed)) recognizer.Tick(frame);
                 else recognizer.Cancel();
             }
         }
@@ -233,7 +239,7 @@ namespace SpatialLauncher.SpatialWindows
                 f.State = state;
                 f.Fresh = f.Tracked = true;
                 f.LostFor = 0f;
-                f.Depth = f.Estimator.Update(state.ApparentSize, dt, c);
+                f.Depth = f.Estimator.Update(state.ApparentSize, dt, c, HandLength > 0f ? HandLength : c.handLength);
                 f.DepthVelocity = f.Estimator.Velocity;
                 f.RecentVelocities.Enqueue((Now, f.DepthVelocity));
                 while (f.RecentVelocities.Count > 0 && f.RecentVelocities.Peek().time < Now - c.pushTransitionTime)

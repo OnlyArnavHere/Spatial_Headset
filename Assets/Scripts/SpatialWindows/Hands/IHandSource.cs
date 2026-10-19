@@ -38,6 +38,16 @@ namespace SpatialLauncher.SpatialWindows
         /// </summary>
         public float ApparentSize;
 
+        // Raw measures behind Pinch, Grab and Openness, for Hand Setup (HandCalibrator). Zero when a source has none.
+        /// <summary>Thumb tip to index tip, as a fraction of the hand's size (wrist to middle knuckle).</summary>
+        public float PinchRatio;
+        /// <summary>The four fingers' mean tip-to-wrist distance over their knuckle-to-wrist distance (about 1 curled, 1.8 open).</summary>
+        public float FingerExtension;
+        /// <summary>Wrist to middle knuckle, metres. A real measurement only when <see cref="MetricDepth"/>.</summary>
+        public float HandSize;
+        /// <summary>The joints' depth was measured (LiDAR), not estimated from the hand's size, so <see cref="HandSize"/> is real.</summary>
+        public bool MetricDepth;
+
         public bool IsPinched => IsTracked && Pinch == PinchState.Pinched;
         public bool IsGrabbing => IsTracked && Grab;
 

@@ -100,6 +100,15 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 var stream = window != null ? window.GetComponentInChildren<RemoteStreamContent>() : null;
                 Check(stream != null && stream.Target != null && stream.Target.id == target.id && window.Title.StartsWith(target.title.Substring(0, Mathf.Min(20, target.title.Length))),
                     $"picking \"{target.title}\" opens its own stream window (/{target.path})");
+                if (stream != null && streams.Count == 0)
+                {
+                    // The first screen from the laptop asks first; the next ones from it are covered while it is live.
+                    Check(stream.AwaitingConsent && !stream.IsActive && !stream.InputLink.IsConnected && ConsentGate.Current.HasPending,
+                        $"nothing connects before the headset approves (\"{ConsentGate.Current?.Question}\")");
+                    yield return ApproveIfAsked(manager, mouse, cam);
+                    Check(stream.IsActive && stream.ConsentOutcome == "approved" && ConsentGate.Current.LiveText.Contains("LIVE"),
+                        $"Approve connects it and the live indicator shows (\"{ConsentGate.Current.LiveText}\")");
+                }
                 if (stream != null) streams.Add(stream);
             }
             if (streams.Count < 2) yield break;
@@ -288,6 +297,18 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             while (laptop.InputLink.AckCount < acks + 2 && EditorTestRunner.Now < deadline) yield return 0.05f; // down + up
             if (laptop.InputLink.AckCount >= acks + 2 && laptop.InputLink.LastAck.HasValue)
                 result(laptop.InputLink.LastAck.Value, laptop.InputLink.LastAckPath);
+        }
+
+        /// <summary>Clicks Approve on the consent modal if it is asking.</summary>
+        internal static IEnumerator ApproveIfAsked(WindowManager manager, MouseWindowInput mouse, Camera cam)
+        {
+            var gate = ConsentGate.Current;
+            if (gate == null || !gate.HasPending || gate.Modal == null) yield break;
+            manager.Focus(gate.Modal);
+            yield return Settle;
+            var content = gate.Modal.GetComponentInChildren<ConsentContent>();
+            Click(mouse, cam, content.ApproveButton.transform.position);
+            yield return Settle;
         }
 
         internal static void Click(MouseWindowInput mouse, Camera cam, Vector3 worldPoint)

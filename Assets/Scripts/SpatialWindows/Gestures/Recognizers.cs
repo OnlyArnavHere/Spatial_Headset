@@ -276,7 +276,9 @@ namespace SpatialLauncher.SpatialWindows
     /// <see cref="GestureConfig.crossHoldTime"/>, then sweeping them apart by <see cref="GestureConfig.sweepDistance"/>
     /// within <see cref="GestureConfig.sweepTime"/>, hides every window but the launcher; the same gesture (or the
     /// launcher's Show button) brings them back. Both hands must be tracked throughout (short drops within the tracking
-    /// grace are tolerated), so one stray hand can't trigger it.
+    /// grace are tolerated), so one stray hand can't trigger it. While a remote screen is live or asking for approval
+    /// (<see cref="ConsentGate.IsActive"/>) the same gesture is the panic stop instead: it disconnects every remote screen
+    /// and returns to Home. It runs then even if Settings switched the gesture off.
     /// </summary>
     public sealed class CrossSweepRecognizer : GestureRecognizer
     {
@@ -335,9 +337,18 @@ namespace SpatialLauncher.SpatialWindows
                     if (float.IsNaN(uncrossedAt)) uncrossedAt = frame.Time;
                     if (rw.x - lw.x >= c.sweepDistance)
                     {
-                        bool hiding = Host.Manager != null && !Host.Manager.WindowsHidden;
-                        Host.ToggleHideAll();
-                        Event(hiding ? "hide all windows" : "show all windows");
+                        var gate = ConsentGate.Current;
+                        if (gate != null && gate.IsActive)
+                        {
+                            gate.PanicStop("panic stop (cross and sweep)");
+                            Event("panic stop: remote screens disconnected");
+                        }
+                        else
+                        {
+                            bool hiding = Host.Manager != null && !Host.Manager.WindowsHidden;
+                            Host.ToggleHideAll();
+                            Event(hiding ? "hide all windows" : "show all windows");
+                        }
                         Reset();
                         cooldownUntil = frame.Time + c.crossCooldown;
                     }

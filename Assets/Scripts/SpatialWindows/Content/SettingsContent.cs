@@ -6,7 +6,7 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// The Settings window: section tabs on the left (Laptop, Display, Hands, Windows, Immersion, Voice, About) and the
+    /// The Settings window: section tabs on the left (Laptop, Display, Hands, Gestures, Windows, Immersion, Voice, About) and the
     /// selected section's rows on the right. Every change goes into <see cref="SettingsStore"/>, which
     /// <see cref="SettingsService"/> applies and saves. Rows are built from a few kinds: a read-only value, a slider, a
     /// choice of buttons, an on/off toggle, a text field and buttons. Wi-Fi and Bluetooth are shown, never changed.
@@ -28,7 +28,7 @@ namespace SpatialLauncher.SpatialWindows
         const float LabelWidth = 0.17f;
         const float HeaderHeight = 0.045f;
 
-        public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Windows", "Immersion", "Voice", "About" };
+        public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "About" };
 
         /// <summary>Content size the window needs.</summary>
         public static readonly Vector2 PreferredSize = new Vector2(0.86f, 0.52f);
@@ -90,10 +90,11 @@ namespace SpatialLauncher.SpatialWindows
             BuildLaptop(sections[0]);
             BuildDisplay(sections[1]);
             BuildHands(sections[2]);
-            BuildWindows(sections[3]);
-            BuildImmersion(sections[4]);
-            BuildVoice(sections[5]);
-            BuildAbout(sections[6]);
+            BuildGestures(sections[3]);
+            BuildWindows(sections[4]);
+            BuildImmersion(sections[5]);
+            BuildVoice(sections[6]);
+            BuildAbout(sections[7]);
 
             Select(0);
         }
@@ -213,15 +214,32 @@ namespace SpatialLauncher.SpatialWindows
             Slider("Sensitivity", 0.5f, 2f, () => S.hands.sensitivity, v => SettingsStore.Update(x => x.hands.sensitivity = Mathf.Round(v * 20f) / 20f),
                 v => $"{v:0.00}x");
             Toggle("Pinch", () => S.hands.pinch, v => SettingsStore.Update(x => x.hands.pinch = v));
+            Choice("Tracking rate", HandSettings.VisionRateLabels,
+                () => Array.IndexOf(HandSettings.VisionFrameIntervals, S.hands.visionFrameInterval),
+                i => SettingsStore.Update(x => x.hands.visionFrameInterval = HandSettings.VisionFrameIntervals[i]));
+            Value("Heat", () => HandSettings.HeatNote(S.hands.visionFrameInterval));
+            Choice("Pointer", Enum.GetNames(typeof(PointerMode)), () => (int)S.hands.pointerMode,
+                i => SettingsStore.Update(x => x.hands.pointerMode = (PointerMode)i));
+            Slider("Relative speed", 0.5f, 3f, () => S.hands.relativeGain,
+                v => SettingsStore.Update(x => x.hands.relativeGain = Mathf.Round(v * 10f) / 10f),
+                v => $"{v:0.0}x" + (S.hands.pointerMode == PointerMode.Relative ? "" : " (relative only)"));
+            Buttons("Hand setup", ("Calibrate", () =>
+            {
+                var launcher = Service != null ? Service.GetComponent<LauncherWindow>() : null;
+                if (launcher != null) launcher.OpenHandSetup();
+            }, null), ("Reset", () => SettingsStore.Update(x => x.hands.calibration = new HandCalibration()), null));
+            Value("Calibration", () => S.hands.calibration.Summary);
+        }
+
+        void BuildGestures(Section s)
+        {
+            building = s;
             Toggle("Fist grab", () => S.hands.fistGrab, v => SettingsStore.Update(x => x.hands.fistGrab = v));
             Toggle("Palm push/pull", () => S.hands.palmPush, v => SettingsStore.Update(x => x.hands.palmPush = v));
             Toggle("Two-hand stretch", () => S.hands.twoHandStretch, v => SettingsStore.Update(x => x.hands.twoHandStretch = v));
             Toggle("Cross to hide all", () => S.hands.crossSweepHide, v => SettingsStore.Update(x => x.hands.crossSweepHide = v));
             Toggle("Debug overlay", () => S.hands.debugOverlay, v => SettingsStore.Update(x => x.hands.debugOverlay = v));
-            Choice("Tracking rate", HandSettings.VisionRateLabels,
-                () => Array.IndexOf(HandSettings.VisionFrameIntervals, S.hands.visionFrameInterval),
-                i => SettingsStore.Update(x => x.hands.visionFrameInterval = HandSettings.VisionFrameIntervals[i]));
-            Value("Heat", () => HandSettings.HeatNote(S.hands.visionFrameInterval));
+            Value("Note", () => "While a remote screen is live, cross and sweep always stops it (panic stop), even when off here.");
         }
 
         void BuildWindows(Section s)

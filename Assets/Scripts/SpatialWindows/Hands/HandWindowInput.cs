@@ -10,7 +10,8 @@ namespace SpatialLauncher.SpatialWindows
     /// pinch any part to select and focus its window; hold a pinch on the title bar to drag (in the
     /// window's plane, and in/out as the hand moves towards or away from the head); pinch the resize
     /// handle to resize; pinch the close button to close; and pinch content controls to use them.
-    /// Both hands work independently.
+    /// Both hands work independently. In <see cref="PointerMode.Relative"/> (Settings > Hands > Pointer) each hand's
+    /// cursor moves by the hand's motion and freezes from the start of a pinch (<see cref="RelativePointer"/>).
     /// </summary>
     public class HandWindowInput : MonoBehaviour, IWindowInput
     {
@@ -57,6 +58,10 @@ namespace SpatialLauncher.SpatialWindows
         public float Sensitivity { get; set; } = 1f;
         /// <summary>False ignores pinches (Settings > Hands): the cursor still shows, nothing is pressed.</summary>
         public bool PinchEnabled { get; set; } = true;
+        /// <summary>Absolute (the hand's own ray) or relative (moves by the hand's motion, freezes during a pinch).</summary>
+        public PointerMode Mode { get; set; } = PointerMode.Absolute;
+        /// <summary>Relative mode: cursor rotation per unit of hand rotation (Settings > Hands > Relative speed).</summary>
+        public float RelativeGain { get; set; } = 1.5f;
         public float DepthGain => depthGain;
         public float DeadZoneDistance => deadZoneDistance;
 
@@ -96,6 +101,12 @@ namespace SpatialLauncher.SpatialWindows
 
         /// <summary>The hand's pointing ray after filtering.</summary>
         public Ray GetFilteredRay(Handedness hand) => Pointer(hand).Filter.Current;
+
+        /// <summary>The ray the hand last aimed with: the filtered ray, or in relative mode the relative cursor's.</summary>
+        public Ray GetPointerRay(Handedness hand) => Pointer(hand).LastRay;
+
+        /// <summary>The hand's relative cursor (relative mode).</summary>
+        public RelativePointer GetRelativePointer(Handedness hand) => Pointer(hand).Relative;
 
         HandPointer Pointer(Handedness hand)
         {
@@ -170,6 +181,8 @@ namespace SpatialLauncher.SpatialWindows
 
             public readonly Handedness Hand;
             public readonly RayFilter Filter = new RayFilter();
+            public readonly RelativePointer Relative = new RelativePointer();
+            public Ray LastRay { get; private set; }
             public SpatialWindow ActiveWindow { get; private set; }
             public bool CursorVisible { get; private set; }
             public Vector3 CursorPosition { get; private set; }
@@ -216,6 +229,13 @@ namespace SpatialLauncher.SpatialWindows
                 Filter.DeadZoneDistance = handDistance.DeadZone = owner.deadZoneDistance / sensitivity;
 
                 var ray = Filter.Update(state.PointingRay, deltaTime);
+                if (owner.Mode == PointerMode.Relative)
+                {
+                    Relative.Gain = Mathf.Clamp(owner.RelativeGain, 0.5f, 3f);
+                    ray = Relative.Update(ray, state.PinchStrength, state.IsPinched && owner.PinchEnabled, deltaTime);
+                }
+                else Relative.Reset();
+                LastRay = ray;
                 float rawHandDistance = owner.head != null ? Vector3.Distance(state.IndexTipPosition, owner.head.position) : 0f;
                 float handDepth = handDistance.Update(rawHandDistance, deltaTime);
 
@@ -353,6 +373,7 @@ namespace SpatialLauncher.SpatialWindows
                 ResetGesture();
                 wasPinched = false;
                 Filter.Reset();
+                Relative.Reset();
                 handDistance.Reset();
                 CursorVisible = false;
                 if (cursor != null) cursor.SetActive(false);

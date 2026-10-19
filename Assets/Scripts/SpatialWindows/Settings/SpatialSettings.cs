@@ -94,6 +94,12 @@ namespace SpatialLauncher.SpatialWindows
         /// fps). More often follows hands more closely and heats the phone more.
         /// </summary>
         public int visionFrameInterval = HoloKitHandSource.DefaultVisionFrameInterval;
+        /// <summary>Absolute: the hand's own ray. Relative: the cursor moves by the hand's motion and freezes during a pinch.</summary>
+        public PointerMode pointerMode = PointerMode.Absolute;
+        /// <summary>Relative pointer: cursor rotation per unit of hand rotation, 0.5..3.</summary>
+        public float relativeGain = 1.5f;
+        /// <summary>The user's own thresholds and hand length from Hand Setup (defaults until calibrated).</summary>
+        public HandCalibration calibration = new HandCalibration();
 
         /// <summary>Settings > Hands > Tracking rate: the choices, in order, and what each one costs in heat.</summary>
         public static readonly int[] VisionFrameIntervals = { 3, 2, 1 };

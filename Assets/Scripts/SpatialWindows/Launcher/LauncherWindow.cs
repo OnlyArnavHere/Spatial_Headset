@@ -75,6 +75,8 @@ namespace SpatialLauncher.SpatialWindows
         public SettingsService Settings => settings;
         /// <summary>The Settings window, while open.</summary>
         public SpatialWindow SettingsWindow { get; private set; }
+        /// <summary>The Hand Setup window, while open.</summary>
+        public SpatialWindow HandSetupWindow { get; private set; }
 
         void Awake()
         {
@@ -93,6 +95,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<StereoPassthrough>(out _)) gameObject.AddComponent<StereoPassthrough>();
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
+            if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
         }
 
         void OnEnable()
@@ -279,6 +282,22 @@ namespace SpatialLauncher.SpatialWindows
             if (SettingsWindow == null) return null;
             new GameObject().AddComponent<SettingsContent>().Init(SettingsWindow, manager.WindowMaterial, settings);
             return SettingsWindow;
+        }
+
+        /// <summary>Opens Hand Setup (calibration of pinch, fist and hand length), or brings it to the front.</summary>
+        public SpatialWindow OpenHandSetup()
+        {
+            if (HandSetupWindow != null)
+            {
+                manager.Focus(HandSetupWindow);
+                return HandSetupWindow;
+            }
+            HandSetupWindow = manager.Spawn("Hand Setup", HandSetupContent.PreferredSize + Vector2.one * (WindowContent.Padding * 2f));
+            if (HandSetupWindow == null) return null;
+            var hands = GetComponent<HandWindowInput>();
+            if (hands == null) hands = FindFirstObjectByType<HandWindowInput>();
+            new GameObject().AddComponent<HandSetupContent>().Init(HandSetupWindow, manager.WindowMaterial, hands, GetComponent<GestureRecognizers>());
+            return HandSetupWindow;
         }
 
         /// <summary>Opens the virtual keyboard, which types into the front-most laptop window.</summary>
