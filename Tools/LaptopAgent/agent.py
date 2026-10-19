@@ -18,7 +18,6 @@ Run `python agent.py --help` for every option. See README.md, especially the ris
 import argparse
 import asyncio
 import logging
-import secrets
 import shutil
 import socket
 import subprocess
@@ -32,7 +31,6 @@ import identity
 import network
 import pairing
 import winapi
-from input_server import InputServer
 from session import LinkRunner
 from streams import StreamManager, Target, monitor_target, window_target
 
@@ -90,9 +88,8 @@ def parse_args() -> argparse.Namespace:
                    help="most windows the headset can have open at once (default 4, at most 8)")
     p.add_argument("--input", action="store_true",
                    help="let the paired headset move and click the mouse in the windows it streams")
-    p.add_argument("--input-port", type=int, default=8765, help="control and input WebSocket port (default 8765)")
     p.add_argument("--keyboard", action="store_true",
-                   help="with --input: also let the headset type into the windows it streams (unencrypted: no passwords)")
+                   help="with --input: also let the headset type into the windows it streams")
     p.add_argument("--dry-run-input", action="store_true",
                    help="with --input or --cast-only: log the mapped events instead of injecting them")
     p.add_argument("--cast-only", action="store_true",
@@ -221,26 +218,6 @@ paths:
     return path
 
 
-def lan_addresses() -> list[str]:
-    """This laptop's IPv4 addresses, the one on the default route (usually Wi-Fi) first. Virtual adapters
-    (WSL, Hyper-V, VirtualBox) also appear, but the headset can only reach the first one."""
-    addresses = set()
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            addresses.add(info[4][0])
-    except socket.gaierror:
-        pass
-    primary = None
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.0.2.1", 9))  # TEST-NET address: picks the outgoing interface, sends nothing
-            primary = probe.getsockname()[0]
-    except OSError:
-        pass
-    others = sorted(a for a in addresses if not a.startswith("127.") and a != primary)
-    return ([primary] if primary else []) + others or ["127.0.0.1"]
-
-
 def wait_for_port(port: int, process: subprocess.Popen, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -287,16 +264,29 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: winapi.KillOnExit
     return launch
 
 
-async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, server: InputServer,
-                    runner: LinkRunner) -> None:
-    tasks = [asyncio.create_task(server.run()), asyncio.create_task(runner.run())]
+def watch_kill_switch(runner: LinkRunner, enabled: bool) -> None:
+    """Ctrl+Alt+Shift+Q revokes control and stops media for the rest of the run (video keeps streaming)."""
+    if not enabled:
+        return
+    loop = asyncio.get_running_loop()
+    if winapi.watch_kill_switch(lambda: loop.call_soon_threadsafe(runner.kill_switch)):
+        log.info("Kill switch: press %s on this laptop to stop all input at once", winapi.KILL_SWITCH)
+    else:
+        log.warning("Kill switch %s is taken by another program; stop the agent with Ctrl+C instead",
+                    winapi.KILL_SWITCH)
+
+
+async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, runner: LinkRunner,
+                    kill_switch: bool = False) -> None:
+    watch_kill_switch(runner, kill_switch)
+    tasks = [asyncio.create_task(runner.run())]
     try:
         while True:
             if mediamtx.poll() is not None:
                 raise SystemExit(f"MediaMTX stopped (exit code {mediamtx.returncode}); shutting down.")
             for task in tasks:
                 if task.done():
-                    task.result()  # re-raises, e.g. the control port is already in use
+                    task.result()  # re-raises
             streams.tick()
             await asyncio.sleep(0.5)
     finally:
@@ -505,7 +495,6 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
-    logging.getLogger("websockets").setLevel(logging.WARNING)
     winapi.make_dpi_aware()
 
     if args.list:
@@ -532,7 +521,6 @@ def main() -> None:
     store = pairing.PairStore(identity.default_home())
 
     encoder = probe_encoder(tool("ffmpeg"), args.encoder)
-    token = secrets.token_urlsafe(18)  # the control server below still wants one
     job = winapi.KillOnExitJob()
     mediamtx = start_mediamtx(args, job)
     streams = StreamManager(capture_launcher(args, encoder, job), only_pinned=args.no_picker)
@@ -542,26 +530,19 @@ def main() -> None:
             pinned_stream = streams.pin(pinned.id)
         except LookupError:
             raise SystemExit(f"Can't capture {pinned.description}: it has no usable size (minimized?).")
-    server = InputServer(token, streams, port=args.input_port, input_enabled=args.input,
-                         keyboard_enabled=args.keyboard, dry_run=args.dry_run_input, cast_only=args.cast_only)
     runner = LinkRunner(ident, store, streams, RTSP_PORT, max_windows=args.max_windows,
                         input_enabled=args.input, keyboard_enabled=args.keyboard, cast_only=args.cast_only,
-                        pinned=args.headset, discover=not args.headset)
+                        dry_run=args.dry_run_input, pinned=args.headset, discover=not args.headset)
 
     keyboard = "off (start with --input --keyboard to allow it)"
     if args.keyboard:
-        keyboard = ("ON - " + ("DRY RUN, logging only" if args.dry_run_input else "the paired headset can type into streamed windows")
-                    + "\n                    UNENCRYPTED on the network: don't type passwords")
+        keyboard = ("ON - " + ("DRY RUN, logging only" if args.dry_run_input else "the paired headset can type into streamed windows"))
     kill_switch = f"{winapi.KILL_SWITCH} stops all mouse and keyboard input for the rest of the run" if args.input \
         else f"{winapi.KILL_SWITCH} stops the media controls for the rest of the run" if args.cast_only else "-"
     cast = ("ON - view only; the headset may play/pause, seek, skip and change volume. Every other key, mouse,"
             "\n                    typing and scroll event is dropped" + (" (DRY RUN, logging only)" if args.dry_run_input else "")) \
         if args.cast_only else "off (start with --cast-only for a view-only Cast window)"
-    hosts = lan_addresses()
-    wired = network.wired_report(args.input_port) if args.wired else None
-    if wired is not None and wired.interface is not None and wired.interface.address in hosts:
-        hosts.remove(wired.interface.address)
-        hosts.insert(0, wired.interface.address)  # over the cable first
+    wired = network.wired_report() if args.wired else None
     wired_lines = ("\n " + "\n ".join(wired.lines())) if wired is not None else ""
     offered = f"only {pinned.description}" if args.no_picker else "the headset picks a window or the whole desktop"
     if args.headset:
@@ -577,8 +558,6 @@ def main() -> None:
 
  Headset link:      {link}
                     up to {args.max_windows} windows at once; this laptop is {identity.format_fp(ident.fingerprint)}
- Control server:    host {hosts[0]}   port {args.input_port}   (unencrypted, token-protected; replaced soon)
-                    (same machine: 127.0.0.1; other adapters: {', '.join(hosts[1:]) or 'none'})
  Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse') if args.input else 'off (start with --input to allow it)'}
  Keyboard input:    {keyboard}
  Cast only:         {cast}
@@ -589,7 +568,7 @@ def main() -> None:
 """, flush=True)
 
     try:
-        asyncio.run(supervise(mediamtx, streams, server, runner), loop_factory=LOOP_FACTORY)
+        asyncio.run(supervise(mediamtx, streams, runner, args.input or args.cast_only), loop_factory=LOOP_FACTORY)
     except KeyboardInterrupt:
         pass
     finally:

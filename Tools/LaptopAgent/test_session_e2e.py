@@ -8,6 +8,7 @@ bin/ffmpeg.exe or bin/mediamtx.exe is missing. aioice is patched to offer only 1
 """
 import asyncio
 import contextlib
+import json
 import socket
 import subprocess
 import tempfile
@@ -155,9 +156,9 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
         command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{self.rtsp_port}/{path}"]
         return self.start_process(command, f"ffmpeg-{path}"), SIZE
 
-    async def start_runner(self, ident=None, store=None, port=None) -> session.LinkRunner:
+    async def start_runner(self, ident=None, store=None, port=None, **options) -> session.LinkRunner:
         runner = session.LinkRunner(ident or self.agent_ident, store or self.store, self.streams, self.rtsp_port,
-                                    max_windows=2, pinned=[("127.0.0.1", port or self.port)])
+                                    max_windows=2, pinned=[("127.0.0.1", port or self.port)], **options)
         task = asyncio.ensure_future(runner.run())
 
         async def stop():
@@ -276,6 +277,111 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
 
 class NvencLinkTests(LinkTests):
     encoder_choice = "nvenc"
+
+
+class InputLinkTests(LinkTests):
+    """Input over the data channels, with the Windows input calls replaced so nothing is ever injected."""
+    test_frames_second_slot_and_redial = None
+    test_pair_by_typed_code_then_session_without_one = None
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.keys: list[tuple] = []
+        self.focused: list[int] = []
+        self.enterContext(mock.patch.object(winapi, "key", lambda vk, down, extended: self.keys.append((vk, down, extended))))
+        self.enterContext(mock.patch.object(winapi, "focus_window", lambda handle: self.focused.append(handle) or True))
+        for name in ("mouse_move", "mouse_button", "mouse_wheel", "type_text", "raise_window"):
+            self.enterContext(mock.patch.object(winapi, name, lambda *a, **k: None))
+
+    async def opened_window(self, headset):
+        opened = await headset.request({"type": "open", "target": "window:1"}, ("opened", "error"), 15)
+        self.assertEqual(opened["type"], "opened", opened)
+        return opened
+
+    async def test_key_reaches_windows_only_after_a_grant(self):
+        approver = mock.AsyncMock(return_value=True)
+        runner = await self.start_runner(input_enabled=True, keyboard_enabled=True, approver=approver)
+        headset = await self.welcomed(runner)
+        welcome = await headset.wait_for("welcome", 10)
+        self.assertEqual((welcome["control"], welcome["input"], welcome["keyboard"], welcome["media"], welcome["cast_only"]),
+                         ("view-only", True, True, True, False))
+        opened = await self.opened_window(headset)
+        self.assertEqual(opened["slot"], 0)
+
+        headset.send_input(0, {"type": "key", "code": "A", "down": True})
+        headset.send_input(0, {"type": "media", "action": "mute"})
+        await asyncio.sleep(0.7)
+        self.assertEqual(self.keys, [], "nothing may reach Windows before a grant")
+        approver.assert_not_called()
+
+        denied = await headset.request({"type": "control-request"}, ("control-granted", "control-denied"))
+        self.assertEqual(denied, {"type": "control-denied", "reason": "no consent"})
+        approver.assert_not_called()
+        granted = await headset.request({"type": "control-request", "consent": "full control"},
+                                        ("control-granted", "control-denied"))
+        self.assertEqual(granted, {"type": "control-granted", "keyboard": True})
+        self.assertEqual(approver.await_args.args[0]["name"], self.headset.name)
+
+        headset.send_input(0, {"type": "key", "code": "A", "down": True})
+        headset.send_input(0, {"type": "key", "code": "A", "down": False})
+        await until(lambda: len(self.keys) == 2, 5, "the key to reach winapi.key")
+        self.assertEqual(self.keys, [(0x41, True, False), (0x41, False, False)])
+        self.assertEqual(self.focused, [1])
+
+        # input-1 has no window yet: dropped. A key held when the headset goes away is released.
+        headset.send_input(1, {"type": "key", "code": "B", "down": True})
+        headset.send_input(0, {"type": "key", "code": "Shift", "down": True})
+        await until(lambda: (0x10, True, False) in self.keys, 5, "Shift to go down")
+        self.assertNotIn((0x42, True, False), self.keys)
+        await self.headset.drop_session()
+        await until(lambda: (0x10, False, False) in self.keys, 10, "Shift to be released when the session ends")
+
+    async def test_release_and_stop(self):
+        runner = await self.start_runner(input_enabled=True, keyboard_enabled=True)
+        headset = await self.welcomed(runner)
+        await headset.wait_for("welcome", 10)
+        await self.opened_window(headset)
+        await headset.request({"type": "control-request", "consent": "full control"}, "control-granted")
+        headset.send_input(0, {"type": "key", "code": "Ctrl", "down": True})
+        await until(lambda: self.keys == [(0x11, True, False)], 5, "Ctrl to go down")
+        headset.send({"type": "control-release"})
+        await until(lambda: self.keys[-1] == (0x11, False, False), 5, "Ctrl to be released")
+        headset.send_input(0, {"type": "key", "code": "A", "down": True})
+        await asyncio.sleep(0.5)
+        self.assertEqual(len(self.keys), 2)
+        headset.send({"type": "stop"})
+        await until(lambda: runner.end_reasons == ["headset stopped"], 10, "the session to end")
+
+    async def test_cast_only_media_arrives_and_keys_do_not(self):
+        approver = mock.AsyncMock()
+        runner = await self.start_runner(cast_only=True, approver=approver)
+        headset = await self.welcomed(runner)
+        welcome = await headset.wait_for("welcome", 10)
+        self.assertEqual((welcome["cast_only"], welcome["media"], welcome["input"], welcome["keyboard"]),
+                         (True, True, False, False))
+        await self.opened_window(headset)
+        headset.send_input(0, {"type": "key", "code": "A", "down": True})
+        headset.send_input(0, {"type": "text", "text": "hi"})
+        headset.send_input(0, {"type": "media", "action": "play_pause"})
+        await until(lambda: self.keys == [(0xB3, True, True), (0xB3, False, True)], 5, "the media key to arrive")
+        await asyncio.sleep(0.3)
+        self.assertEqual(len(self.keys), 2)
+        denied = await headset.request({"type": "control-request", "consent": "full control"}, "control-denied")
+        self.assertEqual(denied["reason"], "cast only")
+        approver.assert_not_called()
+
+
+class WelcomeControlTests(unittest.TestCase):
+    def welcome(self, revoked):
+        link = session.LinkSession(mock.Mock(), 8554, max_windows=1, revoked=revoked)
+        sent = []
+        link.control = SimpleNamespace(readyState="open", send=sent.append)
+        link._on_control_open()
+        return json.loads(sent[0])["control"]
+
+    def test_welcome_says_revoked_when_the_session_starts_revoked(self):
+        self.assertEqual(self.welcome(True), "revoked")
+        self.assertEqual(self.welcome(False), "view-only")
 
 
 class CancelledOpenTests(unittest.IsolatedAsyncioTestCase):

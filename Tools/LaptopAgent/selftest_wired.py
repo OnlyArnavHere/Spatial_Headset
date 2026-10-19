@@ -5,9 +5,10 @@
 
 The checks feed network.py made-up adapters and firewall rules: the USB hotspot adapter is picked over a Wi-Fi one on
 the same subnet and over other adapters; the phone's own address and other subnets are never picked; a Public profile
-with no matching rule blocks the agent's three ports; program rules (as Windows' "allow access" prompt makes them),
+with no matching rule blocks a needed port; program rules (as Windows' "allow access" prompt makes them),
 port rules, Any rules and port ranges allow them only on the right profile; service and store-app rules never count;
-and the fix commands allow exactly the blocked ports on that adapter only. The live part only reads (no admin rights,
+and the fix commands allow exactly the blocked ports on that adapter only. The agent itself needs no inbound port any
+more (it dials the headset), so those checks use a made-up port to keep the rule logic covered. The live part only reads (no admin rights,
 nothing changed) and can't prove the phone reaches the laptop: that needs the phone (see Doc/wired.md).
 """
 import sys
@@ -40,9 +41,10 @@ def checks() -> None:
           Interface("a", "172.20.10.3", "", "DomainAuthenticated").profile == "Domain",
           "the firewall profile follows the network category (none yet counts as Public)")
 
-    wanted = network.needs(8765)
-    check([(n.protocol, n.port) for n in wanted] == [("TCP", 8765)], "the agent needs one inbound port: TCP 8765")
-    check(network.blocked("Public", True, [], wanted) == wanted, "with no rules, Public blocks the control port")
+    check(network.needs() == [], "the agent needs no inbound port")
+    check(network.blocked("Public", True, [], network.needs()) == [], "so no firewall rule is ever missing")
+    wanted = [Need("TCP", 9000, "python.exe", "example")]  # made up: the rule logic still has to work
+    check(network.blocked("Public", True, [], wanted) == wanted, "with no rules, Public blocks a needed port")
     check(network.blocked("Public", False, [], wanted) == [], "with the Public firewall off nothing is blocked")
 
     python_rule = Rule("Private, Public", "?", "?", r"C:\Python313\python.exe")
@@ -50,23 +52,23 @@ def checks() -> None:
     check(network.blocked("Public", True, [python_rule], wanted) == [],
           "a program rule from Windows' prompt allows its program's ports, on its profiles only")
     check(network.blocked("Public", True, [mediamtx_private], wanted) == wanted, "another program's rule doesn't count")
-    check(network.blocked("Private", True, [Rule("Public", "TCP", "8765", "Any")], wanted) == wanted,
+    check(network.blocked("Private", True, [Rule("Public", "TCP", "9000", "Any")], wanted) == wanted,
           "a rule for another profile doesn't count")
-    port_rules = [Rule("Public", "TCP", "8100,8765", "Any"), Rule("Any", "TCP", "8700-8800", "Any")]
+    port_rules = [Rule("Public", "TCP", "8100,9000", "Any"), Rule("Any", "TCP", "8900-9100", "Any")]
     check(all(network.blocked("Public", True, [r], wanted) == [] for r in port_rules), "port lists, ranges and Any profiles allow")
     check(network.blocked("Public", True, [Rule("Public", "UDP", "Any", "Any")], wanted) == wanted,
-          "a UDP-only rule leaves the TCP control port blocked")
+          "a UDP-only rule leaves the TCP port blocked")
     scoped = [Rule("Any", "Any", "Any", "Any", scope="service"), Rule("Any", "Any", "Any", "Any", scope="package"),
               Rule("Any", "?", "?", "?")]
     check(network.blocked("Public", True, scoped, wanted) == wanted,
           "service and store-app rules, and rules unreadable without admin rights, never count")
-    check(network.blocked("Public", True, [Rule("Public", "TCP", "8765", r"C:\Other\other.exe")], wanted) == wanted,
+    check(network.blocked("Public", True, [Rule("Public", "TCP", "9000", r"C:\Other\other.exe")], wanted) == wanted,
           "a port rule for another program doesn't allow ours")
 
     commands = network.fix_commands("Ethernet 3", "Public", wanted)
     check(len(commands) == 1 and '-InterfaceAlias "Ethernet 3"' in commands[0] and "-Profile Public" in commands[0] and
           "-Direction Inbound" in commands[0] and "-Action Allow" in commands[0] and
-          "-Protocol TCP -LocalPort 8765" in commands[0],
+          "-Protocol TCP -LocalPort 9000" in commands[0],
           f"the fix allows exactly that port, inbound, on that adapter and profile only: {commands[0]}")
 
     report = network.WiredReport(usb, True, wanted, commands, complete=False)
@@ -86,7 +88,7 @@ def live() -> None:
                   f"{interface.category or 'no profile'}){mark}")
     except OSError as error:
         print(f"  couldn't list adapters: {error}")
-    for line in network.wired_report(8765).lines():
+    for line in network.wired_report().lines():
         print(" " + line)
 
 

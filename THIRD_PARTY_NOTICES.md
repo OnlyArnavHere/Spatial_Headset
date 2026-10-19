@@ -52,7 +52,6 @@ From the package's `Third Party Notices.md` (full texts there, in `Library/Packa
 |---|---|---|---|
 | MediaMTX | v1.21.2 | MIT | Downloaded by `setup.py` into `bin/` (git-ignored); run as a separate program |
 | FFmpeg, essentials build by gyan.dev | 9.0.2 | GPLv3 (includes x264 and other GPL components) | Downloaded by `setup.py` into `bin/` (git-ignored); run as a separate program, not linked |
-| websockets | 16.0 | BSD-3-Clause | Python package installed by `setup.py` |
 | Python standard library (incl. tkinter) | 3.10+ | PSF License | Runtime |
 
 `setup.py` pins each download to a version and SHA-256 checksum. If you redistribute the downloaded `bin/` folder,

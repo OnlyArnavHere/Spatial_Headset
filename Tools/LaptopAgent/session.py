@@ -9,7 +9,8 @@ ever renegotiated: opening a window attaches a stream to a free slot, closing it
 no ICE servers and no trickle: the offer already holds every candidate when it is signed.
 
 Control channel (JSON text, at most 16 KiB per message; anything bigger ends the session):
-  agent -> headset  {"type":"welcome","version":5,"slots":[{"slot","mid"}],"input","keyboard","cast_only"}
+  agent -> headset  {"type":"welcome","version":5,"slots":[{"slot","mid"}],"input","keyboard","cast_only","media",
+                     "dry_run","control":"view-only"}
   headset -> agent  {"type":"list"}                  agent -> headset {"type":"targets","targets":[...]}
   headset -> agent  {"type":"open","target":id}      agent -> headset {"type":"opened","id","path","slot","mid","target"}
                                                      or {"type":"error","reason":"gone"|"minimized"|"no slot"}
@@ -18,7 +19,11 @@ Control channel (JSON text, at most 16 KiB per message; anything bigger ends the
   agent -> headset  {"type":"error","reason":"gone","slot":n} when a streamed window goes away
   agent -> headset  {"type":"closed","slot":n,"reason":"stream ended"} when a window's video feed stopped on its own
                                                      (the slot is already free again)
-The input channels are a stub for now: they count messages and drop them.
+  headset -> agent  {"type":"control-request","consent":"full control"}, {"type":"control-release"}, {"type":"stop"}
+                    agent -> headset {"type":"control-granted"|"control-denied"|"control-revoked",...}: see dispatch.py
+  headset -> agent  {"type":"stop"} ends the session ("headset stopped"), after revoking control and releasing input
+The input channels carry the mouse, key, text and media messages described in dispatch.py, which are checked there; the
+agent has no other way in for input.
 
 Each slot's sender holds a SlotTrack, a small queue the window's packets are forwarded into. sender.replaceTrack
 (slot.track) opens a window and replaceTrack(None) closes it. The extra queue is what keeps a slot reusable: aiortc's
@@ -43,6 +48,7 @@ from aiortc.contrib.media import MediaPlayer
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
 
 import discovery
+import dispatch
 import handshake
 import identity
 import pairing
@@ -170,13 +176,18 @@ def open_player(url: str) -> MediaPlayer:
 
 class LinkSession:
     def __init__(self, streams: StreamManager, rtsp_port: int, *, max_windows: int = 4, input_enabled: bool = False,
-                 keyboard_enabled: bool = False, cast_only: bool = False):
+                 keyboard_enabled: bool = False, cast_only: bool = False, dry_run: bool = False,
+                 approver: dispatch.Approver | None = None, revoked: bool = False):
         self.streams = streams
         self.rtsp_port = rtsp_port
         self.max_windows = max_windows
         self.input_enabled = input_enabled
         self.keyboard_enabled = keyboard_enabled
         self.cast_only = cast_only
+        self.dry_run = dry_run
+        self.dispatcher = dispatch.InputDispatcher(
+            max_windows, self._send, self._send_input, input_enabled=input_enabled, keyboard_enabled=keyboard_enabled,
+            dry_run=dry_run, cast_only=cast_only, approver=approver, revoked=revoked)
         self.pc: RTCPeerConnection | None = None
         self.control = None
         self.slots: list[Slot] = []
@@ -186,6 +197,7 @@ class LinkSession:
         self._requests: set[asyncio.Task] = set()
         self._welcomed = False
         self._oversize = False
+        self._end_reason: str | None = None
 
     # --- Setup ---------------------------------------------------------------------------------------------------
 
@@ -223,6 +235,8 @@ class LinkSession:
             now = loop.time()
             if self._oversize:
                 return "control message too large"
+            if self._end_reason is not None:
+                return self._end_reason
             if state in ("failed", "closed"):
                 return f"connection {state}"
             if self.control_closed:
@@ -241,6 +255,7 @@ class LinkSession:
                     await self._end_window(slot, "gone")
                 elif window is not None and window.pump is not None and window.pump.done():
                     await self._end_window(slot, "stream ended", closed=True)
+            self.dispatcher.release_idle()
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), 0.5)
@@ -252,6 +267,7 @@ class LinkSession:
         if self.closed:
             return
         self.closed = True
+        self.dispatcher.close()  # never leave a button or key held down after the headset goes away
         for task in list(self._requests):
             task.cancel()
         if self._requests:
@@ -270,6 +286,15 @@ class LinkSession:
         if self.control is not None and self.control.readyState == "open":
             self.control.send(json.dumps(message, separators=(",", ":")))
 
+    def _send_input(self, index: int, message: dict) -> None:
+        channel = self.slots[index].channel if index < len(self.slots) else None
+        if channel is not None and channel.readyState == "open":
+            channel.send(json.dumps(message, separators=(",", ":")))
+
+    def set_headset(self, name: str, fingerprint: str) -> None:
+        """Who is on the other end, for the approver."""
+        self.dispatcher.headset = {"name": name, "fingerprint": fingerprint}
+
     def _on_control_open(self) -> None:
         if self._welcomed:
             return
@@ -277,14 +302,17 @@ class LinkSession:
         self._send({"type": "welcome", "version": PROTOCOL_VERSION,
                     "slots": [{"slot": s.index, "mid": s.mid} for s in self.slots],
                     "input": self.input_enabled, "keyboard": self.input_enabled and self.keyboard_enabled,
-                    "cast_only": self.cast_only})
+                    "cast_only": self.cast_only, "media": self.dispatcher.media_enabled, "dry_run": self.dry_run,
+                    "control": "revoked" if self.dispatcher.state is dispatch.ControlState.REVOKED else "view-only"})
 
     def _on_control_close(self) -> None:
         self.control_closed = True
+        self.dispatcher.release_everything("control channel closed")
         self._wake.set()
 
     def _on_input(self, slot: Slot, message) -> None:
-        slot.input_messages += 1  # the dispatcher comes later; for now the message is counted and dropped
+        slot.input_messages += 1
+        self.dispatcher.on_input(slot.index, message)
 
     def _on_control_message(self, raw) -> None:
         size = len(raw) if isinstance(raw, (bytes, bytearray)) else len(raw.encode("utf-8", "replace"))
@@ -296,9 +324,17 @@ class LinkSession:
         try:
             message = json.loads(raw)
             kind = message["type"]
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, RecursionError):
             return
-        if not isinstance(kind, str):
+        if not isinstance(kind, str) or not isinstance(message, dict):
+            return
+        if kind == "control-release":
+            self.dispatcher.release_control()
+            return
+        if kind == "stop":
+            self.dispatcher.revoke("headset stopped")
+            self._end_reason = "headset stopped"
+            self._wake.set()
             return
         if kind == "ping":
             self._send({"type": "pong", "id": message.get("id"), "t": message.get("t"),
@@ -318,6 +354,8 @@ class LinkSession:
                 target = message.get("target")
                 if isinstance(target, str) and 0 < len(target) <= 200:
                     await self._open(target)
+            elif kind == "control-request":
+                await self.dispatcher.request_control(message)
             elif kind == "close":
                 slot = message.get("slot")
                 if isinstance(slot, int) and not isinstance(slot, bool) and 0 <= slot < len(self.slots):
@@ -361,6 +399,7 @@ class LinkSession:
             slot.track.clear()
             slot.window = window
             attached = True
+            self.dispatcher.attach(slot.index, stream)
             slot.transceiver.sender.replaceTrack(slot.track)
             self._send({"type": "opened", "id": target_id, "path": stream.path, "slot": slot.index, "mid": slot.mid,
                         "target": stream.target.describe()})
@@ -447,6 +486,7 @@ class LinkSession:
         window, slot.window = slot.window, None
         if window is None:
             return
+        self.dispatcher.detach(slot.index)
         slot.transceiver.sender.replaceTrack(None)
         if window.pump is not None:
             window.pump.cancel()
@@ -469,7 +509,8 @@ class LinkRunner:
 
     def __init__(self, ident: identity.Identity, store: pairing.PairStore,
                  streams: StreamManager, rtsp_port: int, *, max_windows: int = 4, input_enabled: bool = False,
-                 keyboard_enabled: bool = False, cast_only: bool = False,
+                 keyboard_enabled: bool = False, cast_only: bool = False, dry_run: bool = False,
+                 approver: dispatch.Approver | None = None,
                  pinned: list[tuple[str, int]] | None = None, discover: bool = False,
                  browse: Callable = discovery.browse, wired: Callable = discovery.wired_candidates):
         self.ident = ident
@@ -477,7 +518,9 @@ class LinkRunner:
         self.streams = streams
         self.rtsp_port = rtsp_port
         self.options = dict(max_windows=max_windows, input_enabled=input_enabled,
-                            keyboard_enabled=keyboard_enabled, cast_only=cast_only)
+                            keyboard_enabled=keyboard_enabled, cast_only=cast_only, dry_run=dry_run,
+                            approver=approver)
+        self.revoked = False  # the kill switch was pressed: it holds for the rest of the run
         self.pinned = list(pinned or [])
         self.discover = discover
         self._browse = browse
@@ -508,6 +551,12 @@ class LinkRunner:
             await asyncio.gather(*tasks, *[w[0] for w in self._workers.values()], return_exceptions=True)
             if self.active is not None:
                 await self.active.close()
+
+    def kill_switch(self) -> None:
+        """Ctrl+Alt+Shift+Q: no more input or media for the rest of the run, in this session and in every later one."""
+        self.revoked = True
+        if self.active is not None:
+            self.active.dispatcher.revoke("kill switch")
 
     # --- Finding headsets ----------------------------------------------------------------------------------------
 
@@ -586,7 +635,7 @@ class LinkRunner:
 
         async def make_offer() -> str:
             nonlocal session
-            session = LinkSession(self.streams, self.rtsp_port, **self.options)
+            session = LinkSession(self.streams, self.rtsp_port, revoked=self.revoked, **self.options)
             return await session.build_offer()
 
         try:
@@ -613,6 +662,9 @@ class LinkRunner:
             await session.close()
             return "ignored", ""
         self.active, self.active_spki = session, result.headset_spki
+        session.set_headset(result.name, identity.format_fp(identity.fingerprint(result.headset_spki)))
+        if self.revoked:
+            session.dispatcher.revoke("kill switch")  # pressed while the handshake ran
         self._idle.clear()
         reason = "?"
         try:

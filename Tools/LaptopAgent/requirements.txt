@@ -1,4 +1,3 @@
-websockets==16.0  # BSD-3-Clause
 cryptography==46.0.5  # Apache-2.0 OR BSD-3-Clause
 aiortc==1.15.0  # BSD-3-Clause
 av==17.1.0  # BSD-3-Clause (its wheels bundle LGPL FFmpeg libraries)

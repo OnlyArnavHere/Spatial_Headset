@@ -71,6 +71,9 @@ class HeadsetSession:
         self.frames: list[tuple[float, str | None, int, int]] = []   # (time, mid, width, height)
         self.messages: list[dict] = []
         self.inbox: asyncio.Queue = asyncio.Queue()
+        self.inputs: list = []                                       # the input-k channels, by slot
+        self.input_messages: list[tuple[int, dict]] = []             # (slot, message) the agent sent on them
+        self.input_inbox: asyncio.Queue = asyncio.Queue()
         self._readers: list[asyncio.Task] = []
 
     async def answer(self, offer_sdp: str) -> str:
@@ -79,7 +82,9 @@ class HeadsetSession:
         self.control = pc.createDataChannel("control", negotiated=True, id=0)
         self.control.on("message", self._on_message)
         for k in range(slots):
-            pc.createDataChannel(f"input-{k}", negotiated=True, id=1 + k)
+            channel = pc.createDataChannel(f"input-{k}", negotiated=True, id=1 + k)
+            channel.on("message", lambda raw, k=k: self._on_input_message(k, raw))
+            self.inputs.append(channel)
 
         @pc.on("track")
         def on_track(track):
@@ -97,6 +102,26 @@ class HeadsetSession:
             return
         self.messages.append(message)
         self.inbox.put_nowait(message)
+
+    def _on_input_message(self, slot: int, raw) -> None:
+        try:
+            message = json.loads(raw)
+        except ValueError:
+            return
+        self.input_messages.append((slot, message))
+        self.input_inbox.put_nowait((slot, message))
+
+    def send_input(self, slot: int, message) -> None:
+        """Sends a message on input-`slot`; a str or bytes goes out as it is (to test malformed input)."""
+        self.inputs[slot].send(message if isinstance(message, (str, bytes)) else json.dumps(message))
+
+    async def wait_for_input(self, types: tuple[str, ...] | str, timeout: float = 10.0) -> tuple[int, dict]:
+        types = (types,) if isinstance(types, str) else types
+        async with asyncio.timeout(timeout):
+            while True:
+                slot, message = await self.input_inbox.get()
+                if message.get("type") in types:
+                    return slot, message
 
     async def _read(self, track) -> None:
         while True:

@@ -8,10 +8,6 @@ headset, and several can be open at once, each with its own video stream and its
 > Prototype. It has been tested with the agent and the Unity editor on the same Windows machine, not yet with an
 > iPhone over Wi-Fi. Read **Risks** before using `--input` or `--keyboard`.
 
-> **The input link is not encrypted.** Everything typed on the headset's keyboard travels over the local network in
-> plain text (`ws://`), as do clicks and the pairing token. Anyone who can watch your Wi-Fi can read it. **Don't type
-> passwords or anything else secret through the headset until the link uses TLS.**
-
 ## What runs
 
 | Piece | Role | Listens on |
@@ -19,7 +15,7 @@ headset, and several can be open at once, each with its own video stream and its
 | `ffmpeg` (one per streamed window) | Captures a window or the screen (Windows Graphics Capture) and encodes H.264: NVENC, QuickSync or AMF if one works, else x264 with zero-latency settings. Started when the headset opens that window, stopped 15 s after the last headset window showing it closes | nothing (publishes to MediaMTX on 127.0.0.1) |
 | `MediaMTX` | A local relay between ffmpeg and the agent: ffmpeg publishes each stream to it over RTSP and the agent reads the H.264 packets back out and forwards them to the headset over WebRTC. WebRTC, HLS, RTMP, SRT, the API, metrics, pprof and playback are all switched off in its config | TCP 8554 on 127.0.0.1 only |
 | `session.py` | Dials the headset (found over Bonjour, or `--headset`), runs the signed handshake, and then one WebRTC session: a control data channel, one input channel and one video track per window slot. The headset opens its own listening socket; the laptop dials out | outbound TCP to the headset (port 47810 unless given); media goes over WebRTC (UDP) between the two |
-| `input_server.py` | The control server: lists windows, starts streams, and (only with `--input`) injects mouse input, and with `--keyboard` also keyboard input, into the window each headset connection opened | TCP 8765 (WebSocket) |
+| `dispatch.py` | Turns the headset's input messages (from the per-window `input-k` data channels) into mouse and keyboard input, and runs the control state machine (view only until you allow it). Only with `--input` does it inject mouse input, and with `--keyboard` also keyboard input, into the window of the channel it arrived on | nothing: it reads the DTLS data channel of the existing session |
 
 `agent.py` starts and stops all of them. They run only while `agent.py` runs: nothing is installed as a service or
 started at login, and if `agent.py` is closed or killed, Windows ends ffmpeg and MediaMTX with it.
@@ -34,7 +30,7 @@ python setup.py
 ```
 
 This downloads pinned versions of MediaMTX and FFmpeg into `bin/` (git-ignored), verifies their SHA-256 checksums,
-and installs the Python dependency (`websockets`). Nothing downloaded is committed to the repository.
+and installs the Python dependencies (`requirements.txt`). Nothing downloaded is committed to the repository.
 
 ## Use
 
@@ -42,7 +38,7 @@ and installs the Python dependency (`websockets`). Nothing downloaded is committ
 python agent.py --list                                   # monitors and windows
 python agent.py                                          # the headset picks what to stream; view only
 python agent.py --input                                  # ...and may move and click the mouse in streamed windows
-python agent.py --input --keyboard                       # ...and type into them (unencrypted: no passwords)
+python agent.py --input --keyboard                       # ...and type into them
 python agent.py --window "Notepad"                       # also stream one window right away (part of its title)
 python agent.py --window "Notepad" --no-picker           # offer only that window, no window list
 python agent.py --max-width 1280 --max-height 720 --fps 60 --bitrate 8M --encoder nvenc
@@ -70,7 +66,7 @@ its own window, up to `--max-windows`. With USB Personal Hotspot use `--wired` (
 
 Options: `--monitor N`, `--max-width`, `--max-height` (each picture is scaled down to fit, never padded, so pointer
 positions map 1:1), `--fps`, `--bitrate` (per stream), `--encoder auto|nvenc|qsv|amf|x264`, `--max-windows`, `--headset`, `--pair`,
-`--wired`, `--input`, `--keyboard` (with `--input`), `--input-port` (the control server), `--dry-run-input` (log
+`--wired`, `--input`, `--keyboard` (with `--input`), `--cast-only`, `--dry-run-input` (log
 mapped mouse and key events instead of injecting them), `--no-picker`, `--verbose`.
 
 Windows Graphics Capture only delivers a frame when a window changes, so a window nobody is typing in (or one behind
@@ -88,9 +84,9 @@ keyboard is also forwarded while a stream window (or the keyboard) is in front.
 The agent brings the streamed window to the front before typing and drops the key if it can't, so keys never land in
 another window. For the whole desktop, keys go to whatever window is in front on the laptop.
 
-**Kill switch:** press **Ctrl+Alt+Shift+Q** on the laptop to stop all mouse and keyboard input at once. Held keys and
-buttons are released, the headset shows "Input stopped", and video keeps streaming. Input stays off until you restart
-the agent.
+**Kill switch:** press **Ctrl+Alt+Shift+Q** on the laptop to stop all mouse, keyboard and media input at once. Held keys
+and buttons are released, the headset is told ("control-revoked"), and video keeps streaming. Input stays off until you
+restart the agent.
 
 ### Measuring delay
 
@@ -109,47 +105,48 @@ headset pointed.
 
 ### Firewall
 
-The laptop dials the headset, so video and the link need no inbound port. The only port other machines can reach is
-TCP 8765 (the control server, `--input-port`). MediaMTX listens on 127.0.0.1:8554 only. The WebRTC media uses
-ephemeral UDP ports chosen by the connection, with replies allowed by the firewall's normal stateful handling.
-Allow 8765 for `python.exe` on **Private networks only**, and set your home Wi-Fi to Private. On a Public profile
-Windows blocks it, which is the safe default for cafés and hotels. There is no `--webrtc-port` or `--ice-udp-port` any
-more.
+The agent needs **no inbound firewall rule and listens on no network port**. The laptop dials the headset, and
+video and input come back over that connection. The only socket it opens is MediaMTX on 127.0.0.1:8554, reachable from
+this machine only. The WebRTC media uses ephemeral UDP ports chosen by the connection, with replies allowed by the
+firewall's normal stateful handling, so the Public profile's default of blocking inbound connections is fine for
+cafés and hotels. There is no `--webrtc-port`, `--ice-udp-port` or `--input-port`.
 
 ## Security model
 
-- **Pairing token:** `agent.py` generates a random token (18 random bytes, URL-safe) every run and prints it. Every
-  control connection must send it as its first message
-  within 5 seconds. It's compared in constant time. After 5 wrong tokens from one address, that address is locked out
-  until the agent restarts; each wrong attempt also waits 2 seconds.
-- **Local network only:** the control server accepts only loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7)
-  and link-local addresses. MediaMTX only lets viewers in from the same ranges, and only lets ffmpeg on this machine
-  publish. Its control API, metrics, RTMP, HLS, SRT, MoQ and playback servers are switched off, and RTSP listens on
-  127.0.0.1 only.
+- **No token and no listener:** the agent accepts no inbound connection. Input arrives on the DTLS-protected data
+  channels of the one WebRTC session the signed handshake set up with a paired headset (pinned keys), so it is
+  encrypted and only that headset can send it. There is no pairing token, no WebSocket and no port to scan.
+- **View only until granted:** every session starts view only. The headset asks for control with the consent its own
+  gate approved (`control-request`, `"consent":"full control"`); the laptop's approver then decides (today `--input`
+  itself is the consent, a later release asks on the laptop). Until it is granted, all mouse, key and text messages
+  are dropped. The headset can hand control back (`control-release`) or end the session (`stop`).
+- **Cast-only rules:** with `--cast-only` the only accepted input is a media action (play/pause, next, previous, volume
+  up/down, mute, seek back/forward), each one press and release of one whitelisted key with no modifier, and no grant
+  or approval is asked. Every other message (keys, text, moves, clicks, scrolls, unknown actions) is dropped before
+  anything reaches Windows and counted. A control request is refused ("cast only").
 - **Nothing streams until asked:** a window is captured only while a paired headset has it open (plus 15 seconds),
   or when you name it with `--window`/`--monitor`. `--no-picker` limits the headset to that one target.
 - **Opt-in input:** without `--input` the headset can list windows and watch them, but the agent never moves or
   clicks the mouse. Without `--keyboard` it never types.
-- **Paired connections only:** key and text events are accepted only on a connection that sent the right pairing
-  token first. Anything else sent first (a key, say) counts as a wrong token.
 - **Limited keys:** only named keys are accepted: letters, digits, punctuation, F1-F12, Enter, Backspace, Tab, Esc,
   Space, Shift, Ctrl, Alt, arrows and the Insert/Delete/Home/End/Page block. There is no Windows key, Apps key, Print
   Screen or media key, so the headset can't open the Start menu, Run (Win+R) or lock the screen (Win+L). Ctrl+Alt+Del
   can't be injected on Windows. Text is at most 64 characters per message, control characters removed.
-- **Rate limit:** each connection may send about 30 key presses or characters a second (bursts of 60); the rest are
-  dropped and the headset is told. Releasing a held key is never dropped, and at most 6 keys can be held at once.
-- **Kill switch:** Ctrl+Alt+Shift+Q on the laptop stops all input for the rest of the run (see Typing).
-- **One headset:** only one headset (one address) can be connected at a time; it may open several windows, each on
-  its own connection. Others are refused while it's connected.
-- **Clicks go to the window they're meant for:** each connection's input goes only to the window it opened. Before a
+- **Size and rate limits:** an input message is at most 1 KiB (bigger ones are dropped), each window's channel may send
+  about 240 messages a second, and about 30 key presses or characters a second (bursts of 60); the rest are dropped
+  and the headset is told. Releasing a held key or button is never dropped, and at most 6 keys can be held at once.
+- **Kill switch:** Ctrl+Alt+Shift+Q on the laptop revokes control and stops media for the rest of the run (see Typing).
+- **One headset:** only one paired headset is linked at a time; it may open several windows, each with its own input
+  channel. Others are ignored while it's connected.
+- **Clicks go to the window they're meant for:** each channel's input goes only to the window on its slot. Before a
   click or scroll the agent brings that window to the top, and drops the click if another window still covers the
   point, so it never lands on a different window.
-- **Letting go:** when a connection closes or drops, any mouse button or key it held is released. Dead connections are
-  detected by WebSocket pings within about 6 seconds, and a held button is released after 3 seconds without any
-  message. Input aimed at a closed or minimized window is dropped rather than sent to whatever is behind it.
-- **What it can do:** list the titles of the open windows, stream them or the whole desktop, (with `--input`) move the
-  pointer, left/right click and scroll within the streamed window or monitor, and (with `--keyboard`) type into the
-  streamed window. No file access, no commands.
+- **Letting go:** when a window closes, the session ends or the headset drops (its peer connection closes), any mouse
+  button or key it held is released, and a held button is released after 3 seconds without any message. Input aimed at
+  a closed or minimized window is dropped rather than sent to whatever is behind it.
+- **What it can do:** list the titles of the open windows, stream them or the whole desktop, (with `--input`, once
+  granted) move the pointer, left/right click and scroll within the streamed window or monitor, and (with `--keyboard`)
+  type into the streamed window. No file access, no commands.
 
 ## Pairing identity
 
@@ -173,14 +170,13 @@ Read these before using `--input` or `--keyboard`.
 
 - **Video and the headset link are protected.** They use the signed v1 handshake with pinned keys (a headset must be
   paired first, with a code shown on the headset) and DTLS-SRTP. MediaMTX listens only on 127.0.0.1.
-- **The 8765 control/input server is still plain `ws://` with a token**, until the next commit removes it. Anyone on
-  your network who has the token can list your windows, stream any of them, and with `--input` move and click your
-  mouse; pointer events and **every key typed** travel unencrypted. **Don't type passwords until it is gone.** Use only
-  on networks you trust; never on public Wi-Fi, and never forward these ports from a router. Use
-  `--window ... --no-picker` to offer only one window.
-- **With `--keyboard`, anyone with the token can type into the windows they stream:** in a terminal or a Run box that
-  means running commands as you. Stream only the windows you mean to type into (`--window ... --no-picker`), and keep
-  the kill switch (Ctrl+Alt+Shift+Q) in mind.
+- **Input is protected too.** It travels over the same DTLS data channel, only from a paired headset, and only after
+  a grant; the agent has no inbound listener at all. The remaining risk is a paired headset that is stolen or
+  compromised: while control is granted it can move and click your mouse and, with `--keyboard`, type as you. Revoke it
+  with `--revoke NAME`, keep the kill switch (Ctrl+Alt+Shift+Q) in mind, and use `--window ... --no-picker` to offer
+  only one window.
+- **With `--keyboard`, a granted headset can type into the windows it streams:** in a terminal or a Run box that means
+  running commands as you. Stream only the windows you mean to type into (`--window ... --no-picker`).
 - **Window capture can show more than the window.** Menus, pop-ups and notifications drawn over it are not captured,
   but a full-monitor capture shows everything on that monitor, including notifications and anything you open.
 - **Clicks follow the screen, not the window's content.** The agent raises the streamed window before each click and
@@ -196,9 +192,9 @@ Read these before using `--input` or `--keyboard`.
 
 | File | Purpose |
 |---|---|
-| `agent.py` | The launcher: MediaMTX, the capture processes and the control server |
+| `agent.py` | The launcher: MediaMTX, the capture processes, the headset link and the kill switch |
 | `streams.py` | What can be streamed (desktop, windows), each stream's path, starting and stopping captures |
-| `input_server.py` | WebSocket control and input server (protocol documented at the top of the file) |
+| `dispatch.py` | The input dispatcher: per-window input channels, the control state machine, cast-only rules, rate limits (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), PSS signatures and public-key fingerprints |
@@ -208,12 +204,12 @@ Read these before using `--input` or `--keyboard`.
 | `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`; `m=pair` marks a headset showing a code), `ip[:port]` parsing, the USB-hotspot address |
 | `session.py` | The link to the headset: dialling, the WebRTC session, window slots, the control channel |
 | `fake_headset.py` | A Python stand-in for the headset (pairing or paired mode) for testing the agent without a phone |
-| `network.py` | The USB-hotspot address and the firewall check for `--wired` |
+| `network.py` | The USB-hotspot address and the firewall check for `--wired` (the agent needs no inbound port) |
 | `test_session_e2e.py` | End-to-end tests: real MediaMTX and ffmpeg against the fake headset (x264 and, if present, NVENC), pairing and discovery: `python -m unittest test_session_e2e` |
-| `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs `websockets` |
+| `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs the Python packages |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
-| `selftest_input.py` | Checks a running agent's control server: token, ping, window list, streams per window, one headset, per-window input routing, keys, text and the rate limit (dry run), and with `--kill-switch` the kill switch |
-| `test_keyboard.py` | Unit tests for keyboard input (no agent needed): `python -m unittest test_keyboard` |
+| `selftest_wired.py` | Checks wired-mode detection and the firewall logic with made-up adapters and rules: `python selftest_wired.py --no-live` |
+| `test_dispatch.py` | Unit tests for the input dispatcher (no network, no real input): routing per window, the control states, cast-only, rate limits, malformed input, releasing held input: `python -m unittest test_dispatch` |
 | `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
 | `test_handshake.py`, `test_pair_protocol.py`, `test_discovery.py` | Unit tests for the link handshake and the code-based pairing exchange (both roles over loopback sockets, with known-answer vectors) and discovery (Bonjour on 127.0.0.1; skipped if multicast is unavailable): `python -m unittest test_handshake test_pair_protocol test_discovery` |
 
@@ -225,7 +221,6 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 |---|---|---|---|
 | [MediaMTX](https://github.com/bluenviron/mediamtx) | v1.21.2 | MIT | downloaded by `setup.py`, run as a separate program |
 | [FFmpeg](https://ffmpeg.org), essentials build by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) | 9.0.2 | GPLv3 (the build includes x264 and other GPL components) | downloaded by `setup.py`, run as a separate program |
-| [websockets](https://github.com/python-websockets/websockets) | 16.0 | BSD-3-Clause | Python package, installed by `setup.py` |
 | [cryptography](https://github.com/pyca/cryptography) | 46.0.5 | Apache-2.0 OR BSD-3-Clause | Python package (`requirements.txt`): RSA key and signatures |
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15.0 | BSD-3-Clause | Python package (`requirements.txt`): WebRTC link to the headset |
 | [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; its wheels bundle LGPL-licensed FFmpeg libraries |

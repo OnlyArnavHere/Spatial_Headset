@@ -18,14 +18,9 @@ Wi-Fi involved.
 ## Firewall
 
 Windows usually files the hotspot network under the Public profile, where inbound connections are blocked unless a
-rule allows them. If the banner warns, run the two commands it prints in an administrator PowerShell. They allow TCP
-8889 and 8765 and UDP 8189 on that adapter only, for example:
-
-    New-NetFirewallRule -DisplayName "Spatial Launcher agent (USB TCP)" -Direction Inbound -Action Allow -Profile Public -InterfaceAlias "Ethernet 3" -Protocol TCP -LocalPort 8889,8765
-    New-NetFirewallRule -DisplayName "Spatial Launcher agent (USB UDP)" -Direction Inbound -Action Allow -Profile Public -InterfaceAlias "Ethernet 3" -Protocol UDP -LocalPort 8189
-
-Without admin rights the agent can't read every firewall rule. Rules it can't read never count as allowing anything,
-so the banner says "probably blocks" in that case.
+rule allows them. The agent needs no inbound rule: the laptop dials the headset, and the video and input travel back
+over that same connection (WebRTC, replies allowed by the firewall's normal stateful handling). The only port the
+agent opens is MediaMTX on 127.0.0.1:8554, which no other machine can reach. The banner under `--wired` says so.
 
 ## Checked so far, and what only the phone can show
 
