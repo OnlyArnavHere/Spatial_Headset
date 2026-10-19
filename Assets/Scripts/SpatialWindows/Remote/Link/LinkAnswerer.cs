@@ -40,6 +40,8 @@ namespace SpatialLauncher.SpatialWindows
         byte[] expected;
         Attempt current;
         LinkSession live;
+        bool panicked;
+        ConsentGate hooked;
 
         /// <summary>The live session, or null.</summary>
         public LinkSession Session { get { lock (gate) return live != null && !live.IsEnded ? live : null; } }
@@ -58,12 +60,37 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>The picker is waiting for this laptop (its SPKI); only its offers are answered.</summary>
         public void ExpectLaptop(byte[] spki)
         {
-            lock (gate) expected = spki == null ? null : (byte[])spki.Clone();
+            lock (gate) { expected = spki == null ? null : (byte[])spki.Clone(); panicked = false; }
+            var consent = ConsentGate.Current;
+            if (consent != hooked)
+            {
+                if (hooked != null) hooked.Panicked -= OnPanic;
+                hooked = consent;
+                if (hooked != null) hooked.Panicked += OnPanic; // a panic stop refuses offers until the next ExpectLaptop
+            }
         }
 
         public void StopExpecting()
         {
             lock (gate) expected = null;
+        }
+
+        // Panic stop: refuse further offers, cancel an answer in progress and refuse to commit one already accepted.
+        // A live session is ended by its LiveEntry.StopForPanic.
+        void OnPanic()
+        {
+            Attempt attempt;
+            lock (gate)
+            {
+                expected = null;
+                panicked = true;
+                attempt = current;
+                current = null;
+            }
+            if (attempt == null) return;
+            attempt.Cancelled = true;
+            attempt.Tcs.TrySetResult(null);
+            queue.Enqueue(() => { if (!attempt.Committed) attempt.Session?.Dispose(); });
         }
 
         public async Task<LinkAnswer> AnswerAsync(LinkOffer offer, CancellationToken ct)
@@ -103,6 +130,7 @@ namespace SpatialLauncher.SpatialWindows
                     attempt = current;
                     if (attempt == null || !ReferenceEquals(attempt.Offer, offer)) return;
                     current = null;
+                    if (panicked) { attempt.Cancelled = true; attempt.Session?.Dispose(); return; }
                 }
                 if (attempt.Session == null || attempt.Session.IsEnded) return;
                 var session = attempt.Session;
@@ -113,6 +141,7 @@ namespace SpatialLauncher.SpatialWindows
                     lock (gate) live = session;
                     session.Begin(lease);
                     run(Pump(session));
+                    BeginLive(session);
                     SessionStarted?.Invoke(session);
                 }
                 catch (Exception e)
@@ -122,6 +151,28 @@ namespace SpatialLauncher.SpatialWindows
                     session.Dispose();
                 }
             });
+        }
+
+        // The session owns its live entry, so the indicator and the panic stop cover it with no windows open.
+        static void BeginLive(LinkSession session)
+        {
+            var consent = ConsentGate.Current;
+            if (consent == null) return;
+            var entry = new LiveEntry(session);
+            consent.BeginLive(entry);
+            session.Ended += _ => consent.EndLive(entry);
+        }
+
+        sealed class LiveEntry : IRemoteSession
+        {
+            readonly LinkSession session;
+            public LiveEntry(LinkSession session) { this.session = session; }
+            public string SourceName => session.LaptopName ?? "Laptop";
+            public string Address => session.Address ?? "";
+            public string ModeLabel => session.Control.State == LinkSessionState.Control || session.Control.State == LinkSessionState.Requested
+                ? "full control" : "view-only";
+            public SpatialWindow Window => null;
+            public void StopForPanic() => session.StopForPanic();
         }
 
         public void Abort(LinkOffer offer, string reason)
@@ -154,6 +205,8 @@ namespace SpatialLauncher.SpatialWindows
                     current = null;
                 }
             }
+            if (hooked != null) hooked.Panicked -= OnPanic;
+            hooked = null;
             session?.Dispose();
         }
 

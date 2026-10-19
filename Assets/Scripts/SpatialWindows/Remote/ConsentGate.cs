@@ -70,6 +70,8 @@ namespace SpatialLauncher.SpatialWindows
         public string LiveText => live.Count == 0 ? "" : LiveTextFor(live);
         /// <summary>Panic stops so far.</summary>
         public int PanicCount { get; private set; }
+        /// <summary>A panic stop ran (after it refused everything waiting and stopped everything live).</summary>
+        public event Action Panicked;
         /// <summary>The stereo bar's TRIGGER was used to approve this frame (so it doesn't also step the zoom).</summary>
         public bool TriggerUsedThisFrame => triggerFrame == Time.frameCount;
         /// <summary>The Mono on-screen buttons are drawn (asking, or live).</summary>
@@ -144,14 +146,16 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>
         /// Asks the user whether <paramref name="session"/> may show its screen. <paramref name="approved"/> runs on
         /// Approve (connect then), <paramref name="denied"/> on Deny, timeout, panic stop or <see cref="Withdraw"/>
-        /// (with the reason). A source already live in the same mode this session is approved at once.
+        /// (with the reason). A view-only source already live is approved at once; full control always asks.
         /// </summary>
         public void Request(IRemoteSession session, Action approved, Action<string> denied)
         {
             if (session == null) return;
             Withdraw(session);
-            foreach (var other in live)
-                if (other != session && Same(other, session))
+            // Full control always asks, whatever else is live; an other that is still waiting for its own answer covers nothing.
+            if (session.ModeLabel != "full control")
+                foreach (var other in live)
+                    if (other != session && Same(other, session) && !pending.Exists(p => p.Session == other))
                 {
                     approved?.Invoke();
                     return;
@@ -241,6 +245,7 @@ namespace SpatialLauncher.SpatialWindows
             if (manager != null && manager.WindowsHidden) manager.ShowAll();
             if (TryGetComponent<LauncherWindow>(out var launcher)) launcher.OpenLauncher();
             Debug.Log($"[Consent] {why}: {sessions.Count} remote screen(s) disconnected");
+            Panicked?.Invoke();
         }
 
         void ShowModal()

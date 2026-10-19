@@ -13,7 +13,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     /// Play-mode test for the consent gate: the question and indicator text, Approve and Deny on the modal (as a pinch or
     /// click would), the 30 s timeout (shortened here), closing the modal, approval covering a source only while it is
     /// live and never remembered, panic stop (disconnects, closes, refuses what waits, returns Home), the Mono touch
-    /// buttons (simulated mouse), and a real laptop stream window that connects nothing until approved. In DeviceMain it
+    /// buttons (simulated mouse), and the Laptop picker, which connects nothing until a laptop is tapped. In DeviceMain it
     /// also approves with the stereo bar's TRIGGER (ALLOW) and checks it doesn't also step the zoom. Results use a
     /// [ConsentGateTest] prefix.
     /// </summary>
@@ -154,15 +154,15 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
         static IEnumerator CheckSessions(ConsentGate gate)
         {
-            var a = new FakeSession();
+            var a = new FakeSession { ModeLabel = "view-only" };
             var first = Ask(gate, a);
             gate.Approve();
             gate.BeginLive(a);
-            var sameSource = Ask(gate, new FakeSession { SourceName = "Clock" });
-            var otherMode = Ask(gate, new FakeSession { ModeLabel = "view-only" });
+            var sameSource = Ask(gate, new FakeSession { SourceName = "Clock", ModeLabel = "view-only" });
+            var otherMode = Ask(gate, new FakeSession());
             yield return 0.1f;
             Check(first.Approved && sameSource.Approved && !otherMode.Answered && gate.HasPending,
-                "while a source is live, another screen from it in the same mode is covered; a different mode asks again");
+                "while a source is live, another view-only screen from it is covered; full control always asks");
             gate.Deny();
             Check(gate.LiveText.StartsWith("LIVE: Notepad"), $"the live indicator shows ({gate.LiveText})");
 
@@ -232,44 +232,13 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         static IEnumerator CheckStreamWindow(ConsentGate gate, LauncherWindow launcher)
         {
             var manager = launcher.Settings.Manager;
-            var target = new LaptopTarget { id = "test", title = "Consent test window", path = "test", width = 1280, height = 720 };
-            var window = launcher.OpenLaptopStream(target);
+            var window = launcher.OpenLaptopPicker();
             try
             {
                 yield return 0.2f;
-                var stream = window.GetComponentInChildren<RemoteStreamContent>();
-                // Port 9 on this machine: nothing listens, so even an approved stream connects to nothing real.
-                stream.HostField.SetText("127.0.0.1");
-                stream.PortField.SetText("9");
-                stream.TokenField.SetText("consent-test");
-                stream.Connect();
-                yield return 0.2f;
-                Check(stream.AwaitingConsent && !stream.IsActive && stream.InputLink.CurrentState == WebSocketRemoteInputSink.State.Disconnected &&
-                      (stream.Video == null || !stream.Video.IsConnected) && gate.Question.Contains("Consent test window (127.0.0.1)") &&
-                      gate.Question.Contains("full control") && stream.StatusLine.StartsWith("Waiting for approval"),
-                    $"a laptop stream asks before anything connects (\"{gate.Question}\"; \"{stream.StatusLine}\")");
-                gate.Deny();
-                yield return 0.2f;
-                Check(!stream.IsActive && !stream.AwaitingConsent && stream.ConsentOutcome == "denied" &&
-                      stream.InputLink.CurrentState == WebSocketRemoteInputSink.State.Disconnected && stream.StatusLine.StartsWith("Not allowed (denied)"),
-                    $"denied, it stays disconnected and says so (\"{stream.StatusLine}\")");
-
-                stream.Connect();
-                yield return 0.1f;
-                gate.Approve();
-                yield return 0.2f;
-                Check(stream.IsActive && stream.ConsentOutcome == "approved" && stream.InputLink.CurrentState != WebSocketRemoteInputSink.State.Disconnected &&
-                      gate.Live.Contains(stream) && gate.LiveText.Contains("Consent test window"),
-                    $"approved, it connects and shows as live ({stream.InputLink.CurrentState}; \"{gate.LiveText}\")");
-
-                stream.Disconnect();
-                Check(!gate.Live.Contains(stream) && gate.LiveText == "", "disconnecting ends the live session");
-                stream.Connect();
-                yield return 0.1f;
-                Check(stream.AwaitingConsent && gate.HasPending, "and the next connect asks again");
-                manager.Close(window);
-                yield return 0.1f;
-                Check(!gate.HasPending, "closing a window that waits withdraws its question");
+                var picker = window.GetComponentInChildren<LaptopPickerContent>();
+                Check(picker != null && picker.Mode == LaptopPickerContent.PickerMode.List && !gate.HasPending && !gate.IsActive,
+                    "opening the Laptop picker connects nothing and asks nothing: the question comes when a paired laptop is tapped");
             }
             finally
             {

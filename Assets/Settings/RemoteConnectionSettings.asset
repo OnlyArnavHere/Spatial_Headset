@@ -12,8 +12,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 443574f066b3d6648a99d98625ee39ef, type: 3}
   m_Name: RemoteConnectionSettings
   m_EditorClassIdentifier: 
-  defaultHost: 127.0.0.1
-  defaultVideoPort: 8889
-  inputPort: 8765
-  viewerUser: viewer
   expectedResolution: {x: 1920, y: 1080}

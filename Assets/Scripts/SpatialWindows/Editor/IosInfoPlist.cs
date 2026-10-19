@@ -10,7 +10,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
     /// Adds the Info.plist keys Unity has no Player Setting for, after every iOS build: why the app uses the local
     /// network (iOS asks once before the app can reach the laptop agent on the Wi-Fi), why it recognises speech (voice
     /// typing; the microphone's reason is a Player Setting), and App Transport Security's local-networking exception for
-    /// the agent's plain-HTTP WHEP endpoint.
+    /// local-network traffic.
     /// </summary>
     static class IosInfoPlist
     {

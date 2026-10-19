@@ -238,63 +238,30 @@ namespace SpatialLauncher.SpatialWindows
         void BuildLaptop(Section s)
         {
             building = s;
-            Field("Address", () => S.laptop.host, v => SettingsStore.Update(x => x.laptop.host = v.Trim()), false, false, "Laptop address");
-            Field("Video port", () => S.laptop.videoPort.ToString(),
-                v => { if (int.TryParse(v, out int port)) SettingsStore.Update(x => x.laptop.videoPort = port); }, false, true, "8889");
-            Field("Pair code", () => S.laptop.pairCode, v => SettingsStore.Update(x => x.laptop.pairCode = v.Trim()), true, false,
-                "The token agent.py prints");
-            Buttons("Connection", ("Connect", () =>
+            Buttons("Connection", ("Open Laptop picker", () =>
             {
                 WindowTextField.BlurAll();
-                if (Service == null) return;
-                if (Service.LaptopLink.CurrentState == WebSocketRemoteInputSink.State.Disconnected ||
-                    Service.LaptopLink.CurrentState == WebSocketRemoteInputSink.State.Rejected) Service.ConnectLaptop();
-                else Service.DisconnectLaptop();
-            }, () => Service != null && Service.LaptopLink.CurrentState != WebSocketRemoteInputSink.State.Disconnected
-                     && Service.LaptopLink.CurrentState != WebSocketRemoteInputSink.State.Rejected ? "Disconnect" : "Connect"));
-            Value("Status", () => Service != null ? Service.LaptopLink.StatusText : "No settings service");
-            Value("Latency", () => Service != null && Service.LaptopLink.BestRoundTripMs is double best
-                ? $"{Service.LaptopLink.RoundTripMs:0} ms round trip (best {best:0} ms)" : "-");
+                FindFirstObjectByType<LauncherWindow>()?.OpenLaptopPicker();
+            }, () => "Open Laptop picker"));
+            Value("Status", LinkStatus);
             Value("Network", () => DeviceStatus.Network);
             Choice("Link", new[] { "Wi-Fi", "Wired (USB)" }, () => S.laptop.wired ? 1 : 0,
                 i => SettingsStore.Update(x => x.laptop.wired = i == 1));
-            Buttons("Wired (USB)", ("Find laptop", () => FindWiredLaptop(), () => findingLaptop ? "Searching..." : "Find laptop"));
-            Value("Wired help", () => wiredStatus ?? (S.laptop.wired ? UsbHotspot.Help(UsbHotspot.PhoneHotspotAddress())
-                : "Wi-Fi: phone and laptop on the same network. Wired (USB): Personal Hotspot over the cable."));
+            Value("Wired help", () => S.laptop.wired ? UsbHotspot.Help + " " + HotspotState()
+                : "Wi-Fi: phone and laptop on the same network. Wired (USB): Personal Hotspot over the cable.");
             for (int i = 0; i < PairedSlots; i++) PairedRow(i);
         }
 
-        bool findingLaptop;
-        string wiredStatus;
-
-        /// <summary>Wired: tries 172.20.10.2..14 on the agent's control port and puts the one that answers in Address.</summary>
-        public async void FindWiredLaptop()
+        /// <summary>The headset's side of the link: listening for a laptop, or not.</summary>
+        public static string LinkStatus()
         {
-            if (findingLaptop) return;
-            findingLaptop = true;
-            wiredStatus = "Looking for the laptop on 172.20.10.2..14...";
-            int port = Service != null && Service.ConnectionSettings != null ? Service.ConnectionSettings.inputPort : 8765;
-            string found = await UsbHotspot.FindAgentAsync(WiredHosts ?? UsbHotspot.CandidateHosts(), port);
-            findingLaptop = false;
-            if (this == null) return;
-            if (found != null)
-            {
-                SettingsStore.Update(x =>
-                {
-                    x.laptop.host = found;
-                    x.laptop.wired = true;
-                });
-                wiredStatus = $"Found the agent at {found}: Address set. Type the pair code it printed.";
-            }
-            else wiredStatus = "No agent answered on 172.20.10.2..14. Is the cable in, Personal Hotspot on and agent.py running? See Doc/wired.md";
+            var host = LinkService.Current != null ? LinkService.Current.Host : null;
+            if (host == null) return "The laptop link is unavailable";
+            return host.Listener.IsListening ? "Listening for a laptop (open Laptop and pick a paired one)" : "Not listening";
         }
 
-        /// <summary>The addresses Find laptop tries (tests point it at this machine); null means 172.20.10.2..14.</summary>
-        public IEnumerable<string> WiredHosts { get; set; }
-
-        /// <summary>The last Find laptop result, or null before one.</summary>
-        public string WiredStatus => wiredStatus;
-        public bool FindingLaptop => findingLaptop;
+        /// <summary>Whether the phone's Personal Hotspot is on.</summary>
+        public static string HotspotState() => UsbHotspot.PhoneHotspotAddress() != null ? "Hotspot on." : "Hotspot off.";
 
         void BuildDisplay(Section s)
         {

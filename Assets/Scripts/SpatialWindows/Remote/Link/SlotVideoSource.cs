@@ -8,8 +8,8 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// The video of one slot (one m-line) of the link session as a content texture. The slot's track exists for the
     /// whole session; a window is bound to it when the agent answers an open (<see cref="Bind"/>) and unbound when it ends.
-    /// Drives the texture, <see cref="Tick"/> and <see cref="Changed"/> like <c>WebRtcStreamSource</c>; no reconnect loop
-    /// (the session ending ends it). <see cref="Url"/>, <see cref="User"/> and <see cref="Password"/> are unused here.
+    /// Drives the texture, <see cref="Tick"/> and <see cref="Changed"/>; no reconnect loop
+    /// (the session ending ends it).
     /// </summary>
     public sealed class SlotVideoSource : IRemoteVideoSource
     {
@@ -29,10 +29,6 @@ namespace SpatialLauncher.SpatialWindows
         public bool IsBound => bound;
         public string Path { get; private set; }
         public string Description { get; private set; } = "";
-
-        public string Url { get; set; }
-        public string User { get; set; }
-        public string Password { get; set; }
 
         public Texture Texture { get; private set; }
         public Rect UVRect => new Rect(0f, 0f, 1f, 1f);

@@ -11,7 +11,7 @@ namespace SpatialLauncher.SpatialWindows
     {
         /// <summary>The agent's id: "desktop", "monitor:N" or "window:HWND".</summary>
         public string id;
-        /// <summary>The MediaMTX path the agent streams it on (WHEP at http://host:port/path/whep).</summary>
+        /// <summary>The MediaMTX path the agent streams it on.</summary>
         public string path;
         public string title;
         /// <summary>"window" or "monitor".</summary>
@@ -19,20 +19,5 @@ namespace SpatialLauncher.SpatialWindows
         public string description;
         /// <summary>Its size on the laptop in pixels (0 if unknown).</summary>
         public int width, height;
-    }
-
-    /// <summary>Where the laptop agent is and the pairing token for this run.</summary>
-    public sealed class LaptopConnection
-    {
-        public readonly string Host;
-        public readonly int VideoPort;
-        public readonly string Token;
-
-        public LaptopConnection(string host, int videoPort, string token)
-        {
-            Host = host;
-            VideoPort = videoPort;
-            Token = token;
-        }
     }
 }

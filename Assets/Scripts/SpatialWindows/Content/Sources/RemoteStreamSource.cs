@@ -4,7 +4,7 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// A remote screen in a window: the picture comes from a video source (for example <c>WebRtcStreamSource</c>),
+    /// A remote screen in a window: the picture comes from a video source (for example <c>SlotVideoSource</c>),
     /// and pointer input on the window is converted to the remote screen's convention and forwarded to <see cref="Sink"/>.
     /// Without a video source (or before it has a frame) there is no texture and the status reads "Not connected".
     /// Starting and stopping this source doesn't connect or disconnect the video; its owner does that.

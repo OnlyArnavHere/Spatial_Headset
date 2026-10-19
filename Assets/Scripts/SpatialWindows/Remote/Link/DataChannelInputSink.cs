@@ -9,8 +9,7 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// Input for one laptop window over the session's "input-k" data channel; the messages are byte for byte those of
-    /// <see cref="WebSocketRemoteInputSink"/>. Moves are coalesced to one per <see cref="MoveInterval"/>; presses,
+    /// Input for one laptop window over the session's "input-k" data channel; Moves are coalesced to one per <see cref="MoveInterval"/>; presses,
     /// releases, scrolls, keys and text go at once (after a pending move). Until the control state is Control only media
     /// controls are sent, and only when the agent runs cast-only, or accepts media and control was granted; everything
     /// else is dropped here. Acks and throttle notices come back on the same channel (<see cref="ReceiveInput"/>).
@@ -43,7 +42,7 @@ namespace SpatialLauncher.SpatialWindows
         public int MediaSentCount { get; private set; }
         public int MediaAckCount { get; private set; }
 
-        public static readonly string[] MediaActions = WebSocketRemoteInputSink.MediaActions;
+        public static readonly string[] MediaActions = RemoteInputEncoding.MediaActions;
 
         public event Action StatusChanged;
 
@@ -94,7 +93,7 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         /// <summary>{"type":"media","action":...} for one of <see cref="MediaActions"/>, or null for anything else.</summary>
-        public static string EncodeMedia(string action) => WebSocketRemoteInputSink.EncodeMedia(action);
+        public static string EncodeMedia(string action) => RemoteInputEncoding.EncodeMedia(action);
 
         /// <summary>
         /// Sends a media control (Cast windows). False, and nothing sent, unless the agent is cast-only, or takes media
@@ -103,7 +102,7 @@ namespace SpatialLauncher.SpatialWindows
         public bool SendMedia(string action)
         {
             string json = EncodeMedia(action);
-            bool permitted = control.CastOnly || (control.MediaAllowed && control.State == LinkSessionState.Control && control.State != LinkSessionState.Revoked);
+            bool permitted = control.State != LinkSessionState.Revoked && (control.CastOnly || (control.MediaAllowed && control.State == LinkSessionState.Control));
             if (json == null || !control.IsLive || !permitted) return false;
             send(json);
             LastMediaSent = action;

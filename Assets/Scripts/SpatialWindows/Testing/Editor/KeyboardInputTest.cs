@@ -12,7 +12,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     /// (encode, decode, splitting), the virtual keyboard's layout and what each key sends with modifiers, the physical
     /// key map, and focus routing: two stream windows with recording sinks, the virtual keyboard opened from the launcher
     /// and its keys clicked through MouseWindowInput, checking which window receives what. Results use a [KeyboardTest]
-    /// prefix. The agent side has its own tests (Tools/LaptopAgent/test_keyboard.py and selftest_input.py).
+    /// prefix. The agent side has its own tests (Tools/LaptopAgent/test_keyboard.py).
     /// </summary>
     static class KeyboardInputTest
     {

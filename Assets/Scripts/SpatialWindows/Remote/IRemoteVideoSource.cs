@@ -3,16 +3,12 @@ namespace SpatialLauncher.SpatialWindows
     public enum RemoteVideoState { Stopped, Connecting, WaitingForVideo, Receiving, Retrying, Failed }
 
     /// <summary>
-    /// Video from the laptop agent for the Laptop window. Implemented by <c>WebRtcStreamSource</c> (WHEP over Unity
-    /// WebRTC), which is compiled only with the SPATIAL_LAUNCHER_WEBRTC scripting define and the com.unity.webrtc
-    /// package; without them the Laptop window still connects input and says video is unavailable.
+    /// Video from the laptop agent for a laptop window. Implemented by <c>SlotVideoSource</c> (one slot of the link
+    /// session), which is compiled only with the SPATIAL_LAUNCHER_WEBRTC scripting define and the com.unity.webrtc
+    /// package; without them there are no laptop windows.
     /// </summary>
     public interface IRemoteVideoSource : IContentSource, IConnectionStatus
     {
-        /// <summary>The WHEP endpoint of one laptop window's stream, e.g. http://192.168.1.5:8889/untitled-notepad/whep.</summary>
-        string Url { get; set; }
-        string User { get; set; }
-        string Password { get; set; }
         RemoteVideoState CurrentState { get; }
         /// <summary>How many times the stream has been (re)established since Start.</summary>
         int ConnectCount { get; }
