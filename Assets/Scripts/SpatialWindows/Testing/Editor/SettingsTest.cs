@@ -110,6 +110,11 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(clamped.display.brightness == 1f && clamped.display.ipdMm == 54f && clamped.windows.defaultCurve == 0f
                   && clamped.hands.sensitivity == 2f, "out-of-range values are clamped on load, and the old laptop host/port/code fields are ignored");
 
+            File.WriteAllText(file, "{\"version\":1,\"laptop\":{\"host\":\"192.168.1.5\",\"videoPort\":9000,\"pairCode\":\"123456\",\"wired\":true},\"hands\":{\"sensitivity\":1.5}}");
+            var oldLaptop = SettingsStore.Load(file);
+            Check(oldLaptop != null && oldLaptop.laptop.wired && Mathf.Approximately(oldLaptop.hands.sensitivity, 1.5f) && !File.Exists(file + ".bad"),
+                "an old file with host, videoPort and pairCode loads without error, keeping its other fields");
+
             File.WriteAllText(file, "{ this is not json");
             var broken = SettingsStore.Load(file);
             Check(broken != null && !broken.laptop.wired && File.Exists(file + ".bad"),
@@ -229,6 +234,17 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 "Connection > Open Laptop picker opens the Laptop picker");
             Check(settings.ValueText("Laptop", "Status") == SettingsContent.LinkStatus(), "the status row shows the headset's listen state");
             manager.Close(manager.FocusedWindow);
+
+            // The three "Paired" rows fit inside the window.
+            foreach (var rowName in new[] { "Row Paired laptops", "Row Paired #2", "Row Paired #3" })
+            {
+                Transform row = null;
+                foreach (var t in settings.GetComponentsInChildren<Transform>(true))
+                    if (t.name == rowName) row = t;
+                var value = row != null ? row.Find("Value") : null;
+                float bottom = value != null ? settings.transform.InverseTransformPoint(value.position).y - 0.018f : float.NegativeInfinity;
+                Check(bottom >= -SettingsContent.PreferredSize.y * 0.5f, $"{rowName} fits in the Settings window ({bottom:F3} m from the middle)");
+            }
 
             yield return 0.8f;
             var saved = SettingsStore.Load(SettingsStore.Path);

@@ -42,6 +42,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         static IEnumerator Steps()
         {
             ProtocolChecks();
+            LaptopSinkChecks();
             LayoutChecks();
             PhysicalKeyChecks();
 
@@ -67,6 +68,46 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                     if (window != null) manager.Close(window);
                 if (previousInput >= 0) manager.SetActiveInput(previousInput);
             }
+        }
+
+        // Keyboard to the laptop goes through DataChannelInputSink: only with control granted and the keyboard granted.
+        static void LaptopSinkChecks()
+        {
+#if SPATIAL_LAUNCHER_WEBRTC
+            string welcome = "{\"type\":\"welcome\",\"version\":" + ControlChannelClient.ProtocolVersion + ",\"slots\":[{\"slot\":0,\"mid\":\"0\"}],\"input\":true,\"keyboard\":true}";
+            var sent = new List<string>();
+            var client = new ControlChannelClient(null);
+            client.Receive(welcome);
+            var sink = new DataChannelInputSink(0, client, sent.Add);
+            sink.Key("A", true);
+            sink.Text("hi");
+            Check(sent.Count == 0 && !sink.KeyboardAllowed, "keyboard to the laptop: view-only sends no key or text");
+            client.ApproveControlFromConsent();
+            sink.Key("A", true);
+            Check(sent.Count == 0, "keyboard to the laptop: a requested but ungranted control sends nothing");
+            client.Receive("{\"type\":\"control-granted\",\"keyboard\":true}");
+            sink.Key("A", true);
+            sink.Key("A", false);
+            sink.Text("hi");
+            Check(sink.KeyboardAllowed && sent.Count == 3 && sent[0] == RemoteKeyProtocol.EncodeKey("A", true) && sent[1] == RemoteKeyProtocol.EncodeKey("A", false) &&
+                  sent[2] == RemoteKeyProtocol.EncodeText("hi"), "keyboard to the laptop: with Control and the keyboard granted a key or text is sent");
+            sink.Key("NotAKey", true);
+            Check(sent.Count == 3, "keyboard to the laptop: an unknown key code is not sent");
+
+            var noKeys = new List<string>();
+            var other = new ControlChannelClient(null);
+            other.Receive(welcome);
+            var otherSink = new DataChannelInputSink(0, other, noKeys.Add);
+            other.ApproveControlFromConsent();
+            other.Receive("{\"type\":\"control-granted\",\"keyboard\":false}");
+            otherSink.Key("A", true);
+            otherSink.Text("hi");
+            Check(noKeys.Count == 0 && otherSink.InputAllowed && !otherSink.KeyboardAllowed, "keyboard to the laptop: Control without the keyboard grant sends no key or text");
+            client.Receive("{\"type\":\"control-revoked\",\"reason\":\"stop\"}");
+            sink.Key("A", true);
+            sink.Text("hi");
+            Check(sent.Count == 3, "keyboard to the laptop: nothing after control is revoked");
+#endif
         }
 
         static void ProtocolChecks()

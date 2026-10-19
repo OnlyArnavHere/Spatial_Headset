@@ -95,6 +95,22 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(sink.MediaSentCount == 1 + DataChannelInputSink.MediaActions.Length && sent.Count == 1 + DataChannelInputSink.MediaActions.Length,
                 "every media button sends exactly its own action");
 
+            // Every media button sends exactly its own message and nothing else; anything off the whitelist sends nothing.
+            var each = new List<string>();
+            var cast = new DataChannelInputSink(0, control, each.Add);
+            bool exact = true;
+            foreach (var action in RemoteInputEncoding.MediaActions)
+            {
+                int before = each.Count;
+                exact &= cast.SendMedia(action) && each.Count == before + 1 && each[before] == "{\"type\":\"media\",\"action\":\"" + action + "\"}";
+            }
+            int sentBefore = each.Count;
+            bool leaked = false;
+            foreach (var bad in new[] { "power", "Alt+F4", "PLAY_PAUSE", "play_pause ", "", "volume_up;", "shutdown", "key" })
+                leaked |= cast.SendMedia(bad);
+            Check(exact && each.Count == RemoteInputEncoding.MediaActions.Length, "through the input sink, each of the 8 media buttons yields exactly its own message");
+            Check(!leaked && each.Count == sentBefore, "through the input sink, an action that isn't on the whitelist sends nothing");
+
             var plain = new ControlChannelClient(null);
             plain.Receive("{\"type\":\"welcome\",\"version\":" + ControlChannelClient.ProtocolVersion +
                           ",\"slots\":[{\"slot\":0,\"mid\":\"0\"}],\"input\":true,\"keyboard\":true,\"cast_only\":false,\"media\":true}");
