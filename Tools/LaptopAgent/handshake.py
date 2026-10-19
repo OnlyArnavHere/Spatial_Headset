@@ -1,10 +1,11 @@
-"""The signed link handshake between the laptop agent (client) and the headset (server). Wire protocol v1.
+"""The signed link handshake between the laptop agent (client) and the headset (server), for headsets that are
+already paired. Wire protocol v1. First-time pairing is a separate exchange (pair_protocol.py, wire v2).
 
 The C# headset mirrors this file; change both together. Both roles are implemented here so tests and the fake headset
 can run either side.
 
 Transport: the headset listens on TCP (LINK_PORT, 47810 by default) and advertises Bonjour `_spatiallauncher._tcp.local.`
-with TXT `v=1` only, under an instance name from a CSPRNG with at least 64 bits: "SL-" + 16 lowercase hex characters
+with TXT `v=1` (plus `m=pair` while it is showing a pairing code), under an instance name from a CSPRNG with at least 64 bits: "SL-" + 16 lowercase hex characters
 (discovery.random_instance_name). The agent connects, runs the handshake below, then both sides close TCP; the WebRTC
 session negotiated in the offer/answer carries everything after that.
 
@@ -24,26 +25,19 @@ salt 32; identity.sign / identity.verify). sdp is a string of at most 48 KiB of 
 
 Messages, in order (A = agent, H = headset):
   M1 A->H hello  {nonce: na, spki: spki_a}
-  M2 H->A hello  {nonce: nh, spki: spki_h, mode: "paired"|"pair", name: <headset name>}
-       The headset answers "paired" if spki_a is pinned, "pair" if fingerprint(spki_a) equals the fingerprint it
-       scanned or had typed in, and otherwise sends error "unknown laptop". The agent accepts "paired" only if
-       spki_h is pinned and "pair" only while a pairing code is active, otherwise it sends error "not paired". The
-       agent refuses nh == na. In pair mode the agent also checks, before it spends any code attempt, that the
-       name is free in its pair store ("name taken").
+  M2 H->A hello  {nonce: nh, spki: spki_h, mode: "paired", name: <headset name>}
+       The headset answers only if spki_a is pinned; otherwise it sends error "unknown laptop". The only mode is
+       "paired" (any other value is "unsupported mode"). The agent accepts it only if spki_h is pinned, otherwise it
+       sends error "not paired". The agent refuses nh == na.
   M3 A->H offer  {sdp, sig: Sign_A(T_A)}
-  M4 H->A answer {sdp, sig: Sign_H(T_H), mac}
-       Only the headset proves the pairing code. In pair mode, and only after verifying the M3 signature with spki_a
-       and fingerprint(spki_a) == the scanned fingerprint, the headset sends
-       mac = HMAC-SHA256(key = code as ASCII uppercase, msg = enc("pair-mac") || T_H). mac is required in pair mode
-       and forbidden in paired mode. The agent never sends anything derived from the code. The agent verifies sig,
-       then mac (a wrong mac counts as a wrong code attempt), then stores the headset and applies the answer.
+  M4 H->A answer {sdp, sig: Sign_H(T_H)}
+       The agent verifies sig and then applies the answer.
   M5 A->H done   {sig: Sign_A(enc("agent-done") || T_H)}
-       The headset pins spki_a (pair mode) only after M5 verifies.
 
 Name. The headset computes name = name.strip() or "headset-" + fp[:4] (fp = identity.fingerprint(spki_h), 16
 base32 characters), validates it and sends it in M2; it is also signed into both transcripts, so an on-path rewrite
-breaks a signature. Rules, applied to the name as it appears on the wire (the agent then stores name.strip() or the
-same default; after validation only U+0020 can be stripped):
+breaks a signature. Rules, applied to the name as it appears on the wire (after validation only U+0020 can be
+stripped):
   - a JSON string of at most 32 Unicode code points (count runes / scalar values, not UTF-16 units; a surrogate
     pair is one);
   - no character whose Unicode general category is Cc, Cf, Cs, Co, Cn, Zl or Zp, and none in Zs except U+0020.
@@ -83,10 +77,9 @@ read may wait for that long. Past either limit: "handshake timeout".
 Error reasons. Sent to the peer in {"type":"error","reason":...} (the receiver never echoes them back):
   "bad frame length", "read timeout", "malformed frame", "unsupported version", "unexpected message",
   "too many frames", "handshake timeout", "missing <field>", "malformed <field>" (field is one of nonce, spki, sig,
-  mac, sdp), "bad public key", "sdp too large", "malformed sdp", "sdp needs exactly one fingerprint",
-  "unsupported fingerprint algorithm", "malformed fingerprint", "bad name", "bad mode", "not paired",
-  "replayed nonce", "unknown laptop", "bad signature", "wrong code", "unexpected mac", "name taken", "no offer",
-  "no answer".
+  sdp), "bad public key", "sdp too large", "malformed sdp", "sdp needs exactly one fingerprint",
+  "unsupported fingerprint algorithm", "malformed fingerprint", "bad name", "unsupported mode", "not paired",
+  "replayed nonce", "unknown laptop", "bad signature", "no offer", "no answer".
 Local only (never sent): "connection closed", "frame too large", "peer refused: <peer's reason, at most 100
 characters>", "rate limited", "blocked after a failed authentication", "can't connect".
 """
@@ -228,14 +221,6 @@ def done_message(t_h: bytes) -> bytes:
     return enc("agent-done") + t_h
 
 
-def mac_message(t_h: bytes) -> bytes:
-    return enc("pair-mac") + t_h
-
-
-def compute_mac(code: str, t_h: bytes) -> bytes:
-    return hmac.new(code.upper().encode("ascii"), mac_message(t_h), "sha256").digest()
-
-
 def check_spki(spki: bytes) -> None:
     from cryptography.hazmat.primitives import serialization
     if not 0 < len(spki) <= MAX_SPKI:
@@ -326,7 +311,8 @@ class Channel:
     """JSON frames over a StreamReader/StreamWriter, with the size cap, per-read timeout and frame budget."""
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                 read_timeout: float, max_frames: int = MAX_FRAMES):
+                 read_timeout: float, max_frames: int = MAX_FRAMES, version: int = VERSION):
+        self.version = version
         self.reader = reader
         self.writer = writer
         self.read_timeout = read_timeout
@@ -358,7 +344,7 @@ class Channel:
                 or _depth(msg) > MAX_JSON_DEPTH):
             raise HandshakeError("malformed frame")
         v = msg.get("v")
-        if type(v) is not int or v != VERSION:
+        if type(v) is not int or v != self.version:
             raise HandshakeError("unsupported version")
         if msg["type"] == "error":
             reason = msg.get("reason")
@@ -370,7 +356,7 @@ class Channel:
 
     async def write(self, msg_type: str, **fields) -> None:
         self._count()
-        await self.write_raw({"v": VERSION, "type": msg_type, **fields})
+        await self.write_raw({"v": self.version, "type": msg_type, **fields})
 
     async def write_raw(self, msg: dict) -> None:
         body = json.dumps(msg, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -387,7 +373,7 @@ async def _finish(ch: Channel, error: HandshakeError | None) -> None:
     """Tells the peer why (when we are the one refusing), then closes TCP."""
     if error is not None and not error.remote:
         try:
-            await asyncio.wait_for(ch.write_raw({"v": VERSION, "type": "error", "reason": error.reason}), 1.0)
+            await asyncio.wait_for(ch.write_raw({"v": ch.version, "type": "error", "reason": error.reason}), 1.0)
         except Exception:
             pass
     try:
@@ -434,16 +420,16 @@ async def _run(ch: Channel, body, total_timeout: float, authed: asyncio.Event | 
 # --- Agent (client) --------------------------------------------------------------------------
 
 async def agent_handshake(reader, writer, ident: identity.Identity, store: pairing.PairStore,
-                          issuer: pairing.CodeIssuer | None, make_offer,
+                          make_offer,
                           *, read_timeout: float = AGENT_READ_TIMEOUT,
                           total_timeout: float = AGENT_TOTAL_TIMEOUT) -> AgentResult:
-    """Runs M1-M5 as the connecting agent. make_offer() is awaited once the headset is acceptable and returns the
+    """Runs M1-M5 as the connecting agent (paired headsets only). make_offer() is awaited once the headset is acceptable and returns the
     offer SDP; the caller applies the returned answer_sdp only because this function returned."""
     ch = Channel(reader, writer, read_timeout)
-    return await _run(ch, _agent_body(ch, ident, store, issuer, make_offer), total_timeout)
+    return await _run(ch, _agent_body(ch, ident, store, make_offer), total_timeout)
 
 
-async def _agent_body(ch: Channel, ident, store, issuer, make_offer) -> AgentResult:
+async def _agent_body(ch: Channel, ident, store, make_offer) -> AgentResult:
     na = secrets.token_bytes(NONCE_LEN)
     await ch.write("hello", nonce=_b64s(na), spki=_b64s(ident.spki_der))
 
@@ -456,18 +442,10 @@ async def _agent_body(ch: Channel, ident, store, issuer, make_offer) -> AgentRes
     name = wire_name.strip() or default_name(spki_h)
     if hmac.compare_digest(nh, na):
         raise HandshakeError("replayed nonce", auth=True)
-    if mode == "paired":
-        if pairing.pinned(store, spki_h) is None:
-            raise HandshakeError("not paired")
-    elif mode == "pair":
-        if issuer is None or not issuer.active:
-            raise HandshakeError("not paired")
-        try:
-            store.check_can_add(name, spki_h)  # before redeem_mac, so a clash doesn't burn the code
-        except ValueError:
-            raise HandshakeError("name taken") from None
-    else:
-        raise HandshakeError("bad mode")
+    if mode != "paired":
+        raise HandshakeError("unsupported mode")
+    if pairing.pinned(store, spki_h) is None:
+        raise HandshakeError("not paired")
 
     offer_sdp = await make_offer()
     if not isinstance(offer_sdp, str):
@@ -485,17 +463,6 @@ async def _agent_body(ch: Channel, ident, store, issuer, make_offer) -> AgentRes
                              fp_answer)
     if not identity.verify(spki_h, sig, t_h):
         raise HandshakeError("bad signature", auth=True)
-    if mode == "paired":
-        if "mac" in m4:
-            raise HandshakeError("unexpected mac")
-    else:
-        mac = _b64(m4, "mac", exact=32)
-        if not issuer.redeem_mac(mac_message(t_h), mac):
-            raise HandshakeError("wrong code", auth=True)
-        try:
-            store.add(name, spki_h)
-        except ValueError:
-            raise HandshakeError("name taken") from None
 
     await ch.write("done", sig=_b64s(identity.sign(ident.key, done_message(t_h))))
     return AgentResult(answer_sdp, spki_h, mode, name)
@@ -504,36 +471,31 @@ async def _agent_body(ch: Channel, ident, store, issuer, make_offer) -> AgentRes
 # --- Headset (server) reference role ---------------------------------------------------------
 
 async def headset_handshake(reader, writer, headset: identity.Identity, name: str, pinned_agents,
-                            scanned_offer: pairing.PairOffer | None, make_answer,
+                            make_answer,
                             *, read_timeout: float = HEADSET_TOTAL_TIMEOUT,
                             total_timeout: float = HEADSET_TOTAL_TIMEOUT,
                             authed_timeout: float = HEADSET_AUTHED_TIMEOUT) -> HeadsetResult:
-    """Runs M1-M5 as the listening headset. pinned_agents is an iterable of SPKI DER; scanned_offer carries the
-    fingerprint and code from a QR scan or typed entry. make_answer(offer_sdp) is awaited only after the offer's
-    signature verified. The caller pins agent_spki (pair mode) only because this function returned.
+    """Runs M1-M5 as the listening headset. pinned_agents is an iterable of SPKI DER. make_answer(offer_sdp) is
+    awaited only after the offer's signature verified.
 
     total_timeout (and read_timeout) apply only until the offer signature has verified; from then on the whole
     handshake, including make_answer and the M5 read, may last authed_timeout seconds."""
     ch = Channel(reader, writer, read_timeout)
     authed = asyncio.Event()
-    body = _headset_body(ch, headset, name, list(pinned_agents), scanned_offer, make_answer, authed, authed_timeout)
+    body = _headset_body(ch, headset, name, list(pinned_agents), make_answer, authed, authed_timeout)
     return await _run(ch, body, total_timeout, authed, authed_timeout)
 
 
-async def _headset_body(ch: Channel, headset, name, pinned_agents, scanned_offer, make_answer, authed,
+async def _headset_body(ch: Channel, headset, name, pinned_agents, make_answer, authed,
                         authed_timeout) -> HeadsetResult:
     name = validate_name(name.strip() or default_name(headset.spki_der))
     m1 = await ch.read("hello")
     na = _b64(m1, "nonce", exact=NONCE_LEN)
     spki_a = _b64(m1, "spki", maximum=MAX_SPKI)
     check_spki(spki_a)
-    if any(hmac.compare_digest(spki_a, bytes(p)) for p in pinned_agents):
-        mode = "paired"
-    elif scanned_offer is not None and hmac.compare_digest(
-            identity.fingerprint(spki_a).encode("ascii"), scanned_offer.fingerprint.encode("ascii")):
-        mode = "pair"
-    else:
+    if not any(hmac.compare_digest(spki_a, bytes(p)) for p in pinned_agents):
         raise HandshakeError("unknown laptop")
+    mode = "paired"
 
     nh = secrets.token_bytes(NONCE_LEN)
     await ch.write("hello", nonce=_b64s(nh), spki=_b64s(headset.spki_der), mode=mode, name=name)
@@ -554,10 +516,7 @@ async def _headset_body(ch: Channel, headset, name, pinned_agents, scanned_offer
     answer_sdp = _sdp({"sdp": answer_sdp})
     fp_answer = sdp_fingerprint(answer_sdp)
     t_h = transcript_headset(na, nh, spki_a, headset.spki_der, mode, name, offer_sdp, answer_sdp, fp_offer, fp_answer)
-    fields = {"sdp": answer_sdp, "sig": _b64s(identity.sign(headset.key, t_h))}
-    if mode == "pair":
-        fields["mac"] = _b64s(compute_mac(scanned_offer.code, t_h))
-    await ch.write("answer", **fields)
+    await ch.write("answer", sdp=answer_sdp, sig=_b64s(identity.sign(headset.key, t_h)))
 
     m5 = await ch.read("done")
     if not identity.verify(spki_a, _b64(m5, "sig", exact=SIG_LEN), done_message(t_h)):
@@ -598,7 +557,7 @@ class AuthBlocklist:
         return key in self._until
 
 
-async def agent_connect(host: str, port: int, ident, store, issuer, make_offer, *,
+async def agent_connect(host: str, port: int, ident, store, make_offer, *,
                         limiter: HandshakeLimiter, blocklist: AuthBlocklist,
                         connect_timeout: float = CONNECT_TIMEOUT, **timeouts) -> AgentResult:
     """Connects to a headset and runs the handshake, within the concurrency limit and the block list."""
@@ -611,7 +570,7 @@ async def agent_connect(host: str, port: int, ident, store, issuer, make_offer, 
         except (asyncio.TimeoutError, OSError):
             raise HandshakeError("can't connect") from None
         try:
-            return await agent_handshake(reader, writer, ident, store, issuer, make_offer, **timeouts)
+            return await agent_handshake(reader, writer, ident, store, make_offer, **timeouts)
         except HandshakeError as e:
             if e.auth:
                 blocklist.block(key)
@@ -660,7 +619,7 @@ class HeadsetGate:
         self._busy.discard(source)
 
 
-async def serve_headset_connection(reader, writer, gate: HeadsetGate, headset, name, pinned_agents, scanned_offer,
+async def serve_headset_connection(reader, writer, gate: HeadsetGate, headset, name, pinned_agents,
                                    make_answer, **timeouts) -> HeadsetResult:
     """asyncio.start_server callback body: applies the gate, then the handshake. Refused sources are dropped
     without a reply (nothing to learn from a flood)."""
@@ -670,7 +629,6 @@ async def serve_headset_connection(reader, writer, gate: HeadsetGate, headset, n
         writer.close()
         raise HandshakeError("rate limited")
     try:
-        return await headset_handshake(reader, writer, headset, name, pinned_agents, scanned_offer, make_answer,
-                                       **timeouts)
+        return await headset_handshake(reader, writer, headset, name, pinned_agents, make_answer, **timeouts)
     finally:
         gate.leave(source)

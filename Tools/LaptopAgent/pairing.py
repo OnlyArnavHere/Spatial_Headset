@@ -1,12 +1,10 @@
-"""Pairing: one-time codes, the store of paired headsets, and the QR / typed pairing offer.
+"""Pairing: the one-time code the headset shows, and the store of paired headsets.
 
 pairs.json lives in the agent's home folder next to identity.key. A headset is trusted only if its full public key
 (SPKI DER) matches a stored pair; the fingerprint is always recomputed, never read back as proof.
 """
 import base64
 import hmac
-import io
-import ipaddress
 import json
 import re
 import secrets
@@ -14,22 +12,46 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, quote
 
 import identity
 
 PAIRS_FILE = "pairs.json"
-_B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-_CODE_RE = re.compile(r"^[A-Z2-7]{8}$")
-MAX_WRONG_ATTEMPTS = 5
+ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32: no I, L, O, U
+CODE_LEN = 12  # 60 bits
+CODE_TTL = 120.0
+MAX_WRONG_ATTEMPTS = 3
+_CONFUSABLE = str.maketrans("ILO", "110")
 
 
 # --- One-time pairing code -------------------------------------------------------------------
 
-class CodeIssuer:
-    """Issues one 8-character code at a time. It works once, expires, and is burned after 5 wrong guesses."""
+def new_code() -> str:
+    """A fresh canonical code: CODE_LEN characters from the Crockford base32 alphabet (60 bits), from a CSPRNG."""
+    return "".join(secrets.choice(ALPHABET) for _ in range(CODE_LEN))
 
-    def __init__(self, clock=time.monotonic, ttl: float = 300):
+
+def format_code(code: str) -> str:
+    """'ABCDEFGHJKMN' -> 'ABCD-EFGH-JKMN'."""
+    return "-".join(code[i:i + 4] for i in range(0, CODE_LEN, 4))
+
+
+def parse_code(text: str) -> str:
+    """What the user typed into the canonical 12 characters: spaces and dashes are dropped, case is ignored, I and L
+    read as 1, O reads as 0. U (and anything else outside the alphabet) is refused. Raises ValueError."""
+    chars = re.sub(r"[\s\-]", "", str(text)).upper().translate(_CONFUSABLE)
+    if len(chars) != CODE_LEN or any(c not in ALPHABET for c in chars):
+        raise ValueError(f"A pairing code is {CODE_LEN} characters: digits and letters, without U.")
+    return chars
+
+
+class CodeIssuer:
+    """The headset's pairing-code policy (the reference for the C# side, used by tests and the fake headset).
+
+    One code at a time. It lasts ttl seconds, is consumed by the first correct proof (whatever happens afterwards),
+    and is invalidated by MAX_WRONG_ATTEMPTS wrong proofs in total, from any address. issue() replaces any old code.
+    """
+
+    def __init__(self, clock=time.monotonic, ttl: float = CODE_TTL):
         self._clock = clock
         self._ttl = ttl
         self._code: str | None = None
@@ -37,47 +59,43 @@ class CodeIssuer:
         self._wrong = 0
 
     def issue(self) -> str:
-        self._code = "".join(secrets.choice(_B32) for _ in range(8))
+        self._code = new_code()
         self._expires = self._clock() + self._ttl
         self._wrong = 0
         return self._code
 
-    def redeem(self, code: str) -> bool:
-        if self._code is None:
-            return False
-        if self._clock() >= self._expires:
-            self._code = None
-            return False
-        guess = re.sub(r"[\s-]", "", str(code)).upper()
-        if hmac.compare_digest(guess.encode("utf-8"), self._code.encode("ascii")):
-            self._code = None
-            return True
-        return self._wrong_guess()
-
     @property
     def active(self) -> bool:
-        """True while a code is issued, unexpired and not burned."""
-        return self._code is not None and self._clock() < self._expires
-
-    def redeem_mac(self, msg: bytes, mac: bytes) -> bool:
-        """Checks mac == HMAC-SHA256(key=the code, msg) without the code crossing the wire. Same expiry, single use
-        and 5-wrong-attempts burn as redeem."""
-        if self._code is None:
-            return False
-        if self._clock() >= self._expires:
+        """True while a code is issued, unexpired, unused and not invalidated."""
+        if self._code is not None and self._clock() >= self._expires:
             self._code = None
-            return False
-        expected = hmac.new(self._code.encode("ascii"), bytes(msg), "sha256").digest()
-        if hmac.compare_digest(bytes(mac), expected):
-            self._code = None
-            return True
-        return self._wrong_guess()
+        return self._code is not None
 
-    def _wrong_guess(self) -> bool:
+    @property
+    def code(self) -> str | None:
+        """The active canonical code, for the headset to show and to derive keys from. None when not active."""
+        return self._code if self.active else None
+
+    def correct(self, guess: str) -> bool:
+        """Constant-time comparison, no side effects. Used by tests; the pairing exchange uses strike()/consume()."""
+        code = self.code
+        return code is not None and hmac.compare_digest(str(guess).encode("utf-8"), code.encode("ascii"))
+
+    def strike(self) -> None:
+        """A wrong proof: counts, and invalidates the code at MAX_WRONG_ATTEMPTS."""
+        if not self.active:
+            return
         self._wrong += 1
         if self._wrong >= MAX_WRONG_ATTEMPTS:
             self._code = None
-        return False
+
+    def consume(self) -> None:
+        """The first correct proof: the code is spent."""
+        self._code = None
+
+    @property
+    def strikes(self) -> int:
+        return self._wrong
 
 
 # --- Pair store ------------------------------------------------------------------------------
@@ -178,74 +196,3 @@ def check_headset(store: PairStore, spki_der: bytes, expected_name: str | None =
     if expected_name is not None and p.name.casefold() != expected_name.casefold():
         raise PermissionError("This key is paired under a different headset name.")
     return p
-
-
-# --- Pairing offer (QR and typed) ------------------------------------------------------------
-
-@dataclass(frozen=True)
-class PairOffer:
-    fingerprint: str
-    code: str
-    host: str | None = None
-    port: int | None = None
-    name: str | None = None
-
-
-def _norm_code(text: str) -> str:
-    code = re.sub(r"[\s-]", "", text).upper()
-    if not _CODE_RE.match(code):
-        raise ValueError("A pairing code is 8 characters from A-Z and 2-7.")
-    return code
-
-
-def _norm_port(value) -> int:
-    text = str(value)
-    if not text.isascii() or not text.isdigit() or not 1 <= int(text) <= 65535:
-        raise ValueError("Port must be 1-65535.")
-    return int(text)
-
-
-def encode_payload(fp: str, code: str, host: str | None = None, port: int | None = None,
-                   name: str | None = None) -> str:
-    out = f"slpair:1?f={identity.normalize_fp(fp)}&c={_norm_code(code)}"
-    if host:
-        out += f"&h={ipaddress.ip_address(host)}"
-    if port is not None:
-        out += f"&p={_norm_port(port)}"
-    if name:
-        out += f"&n={quote(name, safe='')}"
-    return out
-
-
-def parse_payload(text: str) -> PairOffer:
-    text = text.strip()
-    prefix = "slpair:1?"
-    if not text.startswith(prefix):
-        raise ValueError("Not a Spatial Launcher pairing code (wrong scheme or version).")
-    fields: dict[str, str] = {}
-    for k, v in parse_qsl(text[len(prefix):], keep_blank_values=True, separator="&"):
-        fields.setdefault(k, v)
-    if "f" not in fields or "c" not in fields:
-        raise ValueError("Pairing code is missing the fingerprint or code.")
-    host = str(ipaddress.ip_address(fields["h"])) if "h" in fields else None
-    port = _norm_port(fields["p"]) if "p" in fields else None
-    return PairOffer(identity.normalize_fp(fields["f"]), _norm_code(fields["c"]), host, port, fields.get("n"))
-
-
-def typed_text(offer: PairOffer) -> str:
-    return f"{identity.format_fp(offer.fingerprint)} {offer.code[:4]}-{offer.code[4:]}"
-
-
-def parse_typed(text: str) -> tuple[str, str]:
-    """Reads 'XXXX-XXXX-XXXX-XXXX ABCD-EFGH' (any case, spacing or dashes) into (fingerprint, code)."""
-    chars = re.sub(r"[\s-]", "", text).upper()
-    if len(chars) != 24:
-        raise ValueError("Expected 16 fingerprint characters followed by 8 code characters.")
-    return identity.normalize_fp(chars[:16]), _norm_code(chars[16:])
-
-
-def render_qr(payload: str) -> str:
-    import segno
-    buf = io.StringIO()
-    segno.make(payload, error="m").terminal(out=buf, compact=True, border=2)
-    return buf.getvalue()

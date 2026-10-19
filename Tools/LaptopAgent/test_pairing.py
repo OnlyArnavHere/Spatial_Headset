@@ -1,4 +1,4 @@
-"""Unit tests for pairing: codes, the pair store, pinning and the QR / typed offer. No agent needs to be running.
+"""Unit tests for pairing: the one-time code and its policy, the pair store and pinning. No agent needs to be running.
 
   python -m unittest test_pairing -v        (from Tools/LaptopAgent)
 """
@@ -27,53 +27,107 @@ class FakeClock:
         return self.t
 
 
-class CodeTests(unittest.TestCase):
-    def setUp(self):
-        self.clock = FakeClock()
-        self.issuer = pairing.CodeIssuer(clock=self.clock, ttl=300)
+class CodeFormatTests(unittest.TestCase):
+    def test_new_code_shape_and_entropy(self):
+        codes = {pairing.new_code() for _ in range(200)}
+        self.assertEqual(len(codes), 200)
+        for c in codes:
+            self.assertRegex(c, r"^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{12}$")
+
+    def test_alphabet_is_crockford(self):
+        self.assertEqual(pairing.ALPHABET, "0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        self.assertEqual(len(set(pairing.ALPHABET)), 32)
+        self.assertEqual(pairing.CODE_LEN, 12)
 
     def test_format(self):
-        self.assertRegex(self.issuer.issue(), r"^[A-Z2-7]{8}$")
+        self.assertEqual(pairing.format_code("ABCDEFGHJKMN"), "ABCD-EFGH-JKMN")
+
+    def test_parse_accepts_typed_forms(self):
+        for text in ("ABCD-EFGH-JKMN", "abcd efgh jkmn", " abcdefghjkmn  ", "ab-cd ef-gh-jk mn"):
+            self.assertEqual(pairing.parse_code(text), "ABCDEFGHJKMN", text)
+
+    def test_parse_maps_confusables(self):
+        self.assertEqual(pairing.parse_code("iL0o-1111-0000"), "1100" + "1111" + "0000")
+        self.assertEqual(pairing.parse_code("IIII-LLLL-OOOO"), "1111" + "1111" + "0000")
+
+    def test_parse_rejects(self):
+        for text in ("", "ABCD-EFGH-JKM", "ABCD-EFGH-JKMNP", "ABCD-EFGH-JKMU", "UUUUUUUUUUUU", "ABCD-EFGH-JKM!",
+                     "ABCD-EFGH-JKÉN", "ABCD_EFGH_JKMN"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                pairing.parse_code(text)
+
+    def test_round_trip(self):
+        code = pairing.new_code()
+        self.assertEqual(pairing.parse_code(pairing.format_code(code)), code)
+
+
+class CodeIssuerTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = FakeClock()
+        self.issuer = pairing.CodeIssuer(clock=self.clock)
+
+    def wrong_for(self, code):
+        return "000000000000" if code != "000000000000" else "111111111111"
+
+    def test_defaults(self):
+        self.assertEqual(pairing.CODE_TTL, 120.0)
+        self.assertEqual(pairing.MAX_WRONG_ATTEMPTS, 3)
+        self.assertFalse(self.issuer.active)
+        self.assertIsNone(self.issuer.code)
+
+    def test_issue_gives_canonical_code(self):
+        code = self.issuer.issue()
+        self.assertEqual(pairing.parse_code(code), code)
+        self.assertTrue(self.issuer.active)
+        self.assertTrue(self.issuer.correct(code))
+        self.assertFalse(self.issuer.correct(self.wrong_for(code)))
 
     def test_single_use(self):
         code = self.issuer.issue()
-        self.assertTrue(self.issuer.redeem(code))
-        self.assertFalse(self.issuer.redeem(code))
+        self.issuer.consume()
+        self.assertFalse(self.issuer.active)
+        self.assertFalse(self.issuer.correct(code))
 
-    def test_expires(self):
-        code = self.issuer.issue()
-        self.clock.t += 301
-        self.assertFalse(self.issuer.redeem(code))
-
-    def test_valid_just_before_expiry(self):
-        code = self.issuer.issue()
-        self.clock.t += 299
-        self.assertTrue(self.issuer.redeem(code))
+    def test_expires_at_ttl(self):
+        self.issuer.issue()
+        self.clock.t += 119
+        self.assertTrue(self.issuer.active)
+        self.clock.t += 2
+        self.assertFalse(self.issuer.active)
+        self.assertIsNone(self.issuer.code)
 
     def test_reissue_invalidates_old(self):
         old = self.issuer.issue()
         new = self.issuer.issue()
         while new == old:
             new = self.issuer.issue()
-        self.assertFalse(self.issuer.redeem(old))
-        self.assertTrue(self.issuer.redeem(new))
+        self.assertFalse(self.issuer.correct(old))
+        self.assertTrue(self.issuer.correct(new))
 
-    def test_five_wrong_attempts_burn_it(self):
-        code = self.issuer.issue()
-        wrong = "AAAAAAAA" if code != "AAAAAAAA" else "BBBBBBBB"
-        for _ in range(5):
-            self.assertFalse(self.issuer.redeem(wrong))
-        self.assertFalse(self.issuer.redeem(code))
+    def test_reissue_resets_strikes(self):
+        self.issuer.issue()
+        self.issuer.strike()
+        self.issuer.strike()
+        self.issuer.issue()
+        self.assertEqual(self.issuer.strikes, 0)
 
-    def test_four_wrong_then_right_works(self):
-        code = self.issuer.issue()
-        wrong = "AAAAAAAA" if code != "AAAAAAAA" else "BBBBBBBB"
-        for _ in range(4):
-            self.assertFalse(self.issuer.redeem(wrong))
-        self.assertTrue(self.issuer.redeem(code))
+    def test_third_strike_invalidates(self):
+        self.issuer.issue()
+        self.issuer.strike()
+        self.issuer.strike()
+        self.assertTrue(self.issuer.active)
+        self.issuer.strike()
+        self.assertFalse(self.issuer.active)
 
-    def test_nothing_issued(self):
-        self.assertFalse(self.issuer.redeem("AAAAAAAA"))
+    def test_strike_without_code_does_nothing(self):
+        self.issuer.strike()
+        self.assertEqual(self.issuer.strikes, 0)
+
+    def test_comparison_is_constant_time(self):
+        with mock.patch.object(pairing.hmac, "compare_digest", wraps=pairing.hmac.compare_digest) as spy:
+            code = self.issuer.issue()
+            self.issuer.correct(code)
+        spy.assert_called()
 
 
 class StoreTests(unittest.TestCase):
@@ -184,61 +238,6 @@ class StoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.store.revoke("Phone")
             self.assertEqual(path.read_bytes(), content)
-
-
-class OfferTests(unittest.TestCase):
-    def test_minimal_round_trip(self):
-        text = pairing.encode_payload(FP, "ABCDEFGH")
-        self.assertEqual(text, f"slpair:1?f={FP}&c=ABCDEFGH")
-        offer = pairing.parse_payload(text)
-        self.assertEqual(offer, pairing.PairOffer(FP, "ABCDEFGH"))
-
-    def test_full_round_trip(self):
-        text = pairing.encode_payload(FP, "ABCDEFGH", host="192.168.1.20", port=8765, name="Arnav's PC & co")
-        self.assertEqual(text, f"slpair:1?f={FP}&c=ABCDEFGH&h=192.168.1.20&p=8765&n=Arnav%27s%20PC%20%26%20co")
-        offer = pairing.parse_payload(text)
-        self.assertEqual(offer, pairing.PairOffer(FP, "ABCDEFGH", "192.168.1.20", 8765, "Arnav's PC & co"))
-
-    def test_ipv6_round_trip(self):
-        offer = pairing.parse_payload(pairing.encode_payload(FP, "ABCDEFGH", host="fe80::1"))
-        self.assertEqual(offer.host, "fe80::1")
-
-    def test_unknown_keys_ignored(self):
-        offer = pairing.parse_payload(f"slpair:1?f={FP}&c=ABCDEFGH&zz=1")
-        self.assertEqual(offer.code, "ABCDEFGH")
-
-    def test_rejects(self):
-        good = f"f={FP}&c=ABCDEFGH"
-        bad = [
-            f"slpair:2?{good}", f"other:1?{good}", f"http://x/?{good}", "",
-            f"slpair:1?f=SHORT&c=ABCDEFGH", f"slpair:1?f={FP}&c=ABC", f"slpair:1?f={FP}&c=ABCDEFG1",
-            f"slpair:1?c=ABCDEFGH", f"slpair:1?f={FP}",
-            f"slpair:1?{good}&p=0", f"slpair:1?{good}&p=65536", f"slpair:1?{good}&p=abc", f"slpair:1?{good}&p=-1",
-            f"slpair:1?{good}&h=999.1.1.1", f"slpair:1?{good}&h=example.com",
-        ]
-        for text in bad:
-            with self.assertRaises(ValueError, msg=text):
-                pairing.parse_payload(text)
-
-    def test_encode_rejects(self):
-        with self.assertRaises(ValueError):
-            pairing.encode_payload(FP, "ABCDEFGH", port=70000)
-        with self.assertRaises(ValueError):
-            pairing.encode_payload(FP, "ABCDEFGH", host="nope")
-
-    def test_typed_round_trip(self):
-        offer = pairing.PairOffer(FP, "ABCDEFGH")
-        text = pairing.typed_text(offer)
-        self.assertEqual(text, "4OYM-IQUY-7QOB-JGX3 ABCD-EFGH")
-        self.assertEqual(pairing.parse_typed(text), (FP, "ABCDEFGH"))
-        self.assertEqual(pairing.parse_typed("4oymiquy 7qobjgx3  abcd efgh"), (FP, "ABCDEFGH"))
-        with self.assertRaises(ValueError):
-            pairing.parse_typed("4OYM-IQUY-7QOB-JGX3 ABCD")
-
-    def test_render_qr_smoke(self):
-        out = pairing.render_qr(pairing.encode_payload(FP, "ABCDEFGH", host="192.168.1.20", port=8765))
-        self.assertIsInstance(out, str)
-        self.assertGreater(len(out.splitlines()), 10)
 
 
 if __name__ == "__main__":

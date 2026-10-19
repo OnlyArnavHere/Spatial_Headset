@@ -127,8 +127,6 @@ class HandshakeCase(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.store = pairing.PairStore(Path(self._tmp.name))
-        self.clock = FakeClock()
-        self.issuer = pairing.CodeIssuer(clock=self.clock)
         self._servers = []
 
     async def asyncTearDown(self):
@@ -143,7 +141,7 @@ class HandshakeCase(unittest.IsolatedAsyncioTestCase):
         self._servers.append(server)
         return server.sockets[0].getsockname()[1]
 
-    async def start_headset(self, pinned=(), scanned=None, make_answer=None, headset=HEADSET, name="Test Headset",
+    async def start_headset(self, pinned=(), make_answer=None, headset=HEADSET, name="Test Headset",
                             **timeouts):
         results: asyncio.Queue = asyncio.Queue()
 
@@ -152,7 +150,7 @@ class HandshakeCase(unittest.IsolatedAsyncioTestCase):
 
         async def handle(reader, writer):
             try:
-                r = await hs.headset_handshake(reader, writer, headset, name, pinned, scanned,
+                r = await hs.headset_handshake(reader, writer, headset, name, pinned,
                                                make_answer or answer, **timeouts)
             except Exception as e:
                 r = e
@@ -160,7 +158,7 @@ class HandshakeCase(unittest.IsolatedAsyncioTestCase):
 
         return await self.serve(handle), results
 
-    async def run_agent(self, port, issuer="default", make_offer=None, ident=AGENT, **kw):
+    async def run_agent(self, port, make_offer=None, ident=AGENT, **kw):
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         self.sent = RecWriter(writer)
 
@@ -168,32 +166,20 @@ class HandshakeCase(unittest.IsolatedAsyncioTestCase):
             return sdp(FP_OFFER)
 
         try:
-            return await hs.agent_handshake(reader, self.sent, ident, self.store,
-                                            self.issuer if issuer == "default" else issuer, make_offer or offer, **kw)
+            return await hs.agent_handshake(reader, self.sent, ident, self.store, make_offer or offer, **kw)
         except hs.HandshakeError as e:
             return e
 
-    async def session(self, *, pair_code=None, pin_headset=False, pinned_agents=(), mutate=None, with_issuer=False,
-                      **kw):
-        """One agent-to-headset run. Returns (agent result or error, headset result or error).
-
-        pair_code="" pairs with the code the issuer hands out; any other string is what the headset 'typed'."""
+    async def session(self, *, pin_headset=False, pinned_agents=(), mutate=None, **kw):
+        """One agent-to-headset run. Returns (agent result or error, headset result or error)."""
         if pin_headset:
             self.store.add("Test Headset", HEADSET.spki_der)
-        scanned = issuer = None
-        if with_issuer:
-            self.issuer.issue()
-            issuer = self.issuer
-        if pair_code is not None:
-            code = self.issuer.issue()
-            scanned = pairing.PairOffer(AGENT.fingerprint, pair_code or code)
-            issuer = self.issuer
-        port, results = await self.start_headset(pinned=pinned_agents, scanned=scanned)
+        port, results = await self.start_headset(pinned=pinned_agents)
         relay = None
         if mutate:
             relay = Relay(port, mutate)
             port = await relay.start()
-        agent = await self.run_agent(port, issuer=issuer, **kw)
+        agent = await self.run_agent(port, **kw)
         headset = await asyncio.wait_for(results.get(), 5)
         if relay:
             await relay.close()
@@ -334,19 +320,8 @@ class RoundTripTests(HandshakeCase):
         self.assertEqual((headset.mode, headset.offer_sdp, headset.agent_spki),
                          ("paired", sdp(FP_OFFER), AGENT.spki_der))
 
-    async def test_pair_mode_stores_headset(self):
-        agent, headset = await self.session(pair_code="")
-        self.assertEqual(agent.mode, "pair")
-        self.assertEqual((headset.mode, headset.agent_spki), ("pair", AGENT.spki_der))
-        pair = self.store.list()[0]
-        self.assertEqual((pair.name, pair.public_key), ("Test Headset", HEADSET.spki_der))
-        self.assertFalse(self.issuer.active)  # the code was used up
-
-    async def test_agent_sends_nothing_derived_from_the_code(self):
-        code = self.issuer.issue()
-        port, results = await self.start_headset(scanned=pairing.PairOffer(AGENT.fingerprint, code))
-        agent = await self.run_agent(port)
-        await results.get()
+    async def test_agent_frames_carry_only_the_expected_fields(self):
+        agent, headset = await self.session(**PAIRED)
         self.assertIsInstance(agent, hs.AgentResult)
         frames = self.sent.frames()
         self.assertEqual([f["type"] for f in frames], ["hello", "offer", "done"])
@@ -354,8 +329,6 @@ class RoundTripTests(HandshakeCase):
                    "done": {"v", "type", "sig"}}
         for f in frames:
             self.assertEqual(set(f), allowed[f["type"]])
-        for secret in (code.encode(), b64(code.encode()).encode(), code.lower().encode()):
-            self.assertNotIn(secret, self.sent.data)
 
     async def test_unpinned_headset_refused(self):
         agent, headset = await self.session(pinned_agents=[AGENT.spki_der])
@@ -367,47 +340,26 @@ class RoundTripTests(HandshakeCase):
         agent, headset = await self.session(pin_headset=True)
         self.assertRefused(headset, agent, reason="unknown laptop")
 
-    async def test_wrong_fingerprint_scanned_refused(self):
-        port, results = await self.start_headset(scanned=pairing.PairOffer(OTHER.fingerprint, "AAAAAAAA"))
-        self.issuer.issue()
-        agent = await self.run_agent(port)
-        self.assertRefused(await results.get(), agent, reason="unknown laptop")
-
-    async def test_name_taken(self):
-        self.store.add("Test Headset", OTHER.spki_der)
-        agent, headset = await self.session(pair_code="")
-        self.assertRefused(agent, reason="name taken")
-        self.assertEqual([p.public_key for p in self.store.list()], [OTHER.spki_der])
-        self.assertIsInstance(headset, hs.HandshakeError)
-
-    async def test_name_clash_does_not_burn_the_code(self):
-        self.store.add("Test Headset", OTHER.spki_der)
-        agent, headset = await self.session(pair_code="")
-        self.assertRefused(agent, reason="name taken")
-        self.assertTrue(self.issuer.active)
-        self.assertEqual(self.issuer._wrong, 0)
-        self.assertNotIn("offer", [f["type"] for f in self.sent.frames()])  # never got as far as an offer
-
     async def test_on_path_name_rewrite_is_refused_by_signature(self):
-        for label, kw in {"paired": PAIRED, "pair": dict(pair_code="")}.items():
-            with self.subTest(mode=label):
-                self.store = pairing.PairStore(Path(tempfile.mkdtemp(dir=self._tmp.name)))
-                agent, headset = await self.session(**kw, mutate=edit("h2a", "hello", name="Evil Headset"))
-                self.assertRefused(agent, headset, reason="bad signature")
-                if label == "pair":
-                    self.assertEqual(self.store.list(), [])
+        agent, headset = await self.session(**PAIRED, mutate=edit("h2a", "hello", name="Evil Headset"))
+        self.assertRefused(agent, headset, reason="bad signature")
 
     async def test_name_is_normalised(self):
         for given, expected in (("  Desk  ", "Desk"), ("   ", "headset-" + identity.fingerprint(HEADSET.spki_der)[:4])):
             with self.subTest(given=given):
-                self.store = pairing.PairStore(Path(tempfile.mkdtemp(dir=self._tmp.name)))
-                scanned = pairing.PairOffer(AGENT.fingerprint, self.issuer.issue())
-                port, results = await self.start_headset(name=given, scanned=scanned)
+                self.store.add("x", HEADSET.spki_der)
+                port, results = await self.start_headset(pinned=[AGENT.spki_der], name=given)
                 agent = await self.run_agent(port)
                 await results.get()
                 self.assertIsInstance(agent, hs.AgentResult)
                 self.assertEqual(agent.name, expected)
-                self.assertEqual(self.store.list()[0].name, expected)
+
+    async def test_pair_mode_is_unsupported(self):
+        for mode in ("pair", "other", None):
+            with self.subTest(mode=mode):
+                agent, headset = await self.session(**PAIRED, mutate=edit("h2a", "hello", mode=mode))
+                self.assertRefused(agent, reason="unsupported mode")
+                self.assertEqual(self.store.list()[0].public_key, HEADSET.spki_der)
 
     async def test_headset_refuses_to_send_a_bad_name(self):
         port, results = await self.start_headset(pinned=[AGENT.spki_der], name="bad\tname")
@@ -460,7 +412,7 @@ class SignatureTests(HandshakeCase):
 
 
 class TamperTests(HandshakeCase):
-    """Anything changed in flight must break a signature, in either mode."""
+    """Anything changed in flight must break a signature."""
 
     async def test_tamper_each_field(self):
         def nonce(direction):
@@ -477,19 +429,13 @@ class TamperTests(HandshakeCase):
             "answer fingerprint": edit("h2a", "answer", sdp=sdp(FP_OFFER)),
         }
         for name, mutate in cases.items():
-            for mode in ("paired", "pair"):
-                with self.subTest(field=name, mode=mode):
-                    self.store = pairing.PairStore(Path(tempfile.mkdtemp(dir=self._tmp.name)))
-                    if mode == "paired":
-                        agent, headset = await self.session(**PAIRED, mutate=mutate)
-                    else:
-                        agent, headset = await self.session(pair_code="", mutate=mutate)
-                    self.assertIsInstance(agent, hs.HandshakeError)
-                    self.assertIsInstance(headset, hs.HandshakeError)
-                    self.assertTrue((agent.reason == "bad signature" and not agent.remote)
-                                    or (headset.reason == "bad signature" and not headset.remote))
-                    if mode == "pair":
-                        self.assertEqual(self.store.list(), [])
+            with self.subTest(field=name):
+                self.store = pairing.PairStore(Path(tempfile.mkdtemp(dir=self._tmp.name)))
+                agent, headset = await self.session(**PAIRED, mutate=mutate)
+                self.assertIsInstance(agent, hs.HandshakeError)
+                self.assertIsInstance(headset, hs.HandshakeError)
+                self.assertTrue((agent.reason == "bad signature" and not agent.remote)
+                                or (headset.reason == "bad signature" and not headset.remote))
 
     async def test_tamper_spki_a(self):
         # The headset has pinned both laptops, so only the transcript can tell the swap apart.
@@ -500,15 +446,6 @@ class TamperTests(HandshakeCase):
     async def test_tamper_spki_h(self):
         self.store.add("Other", OTHER.spki_der)
         agent, headset = await self.session(**PAIRED, mutate=edit("h2a", "hello", spki=b64(OTHER.spki_der)))
-        self.assertRefused(agent, headset, reason="bad signature")
-
-    async def test_tamper_mode_to_pair(self):
-        agent, headset = await self.session(**PAIRED, with_issuer=True, mutate=edit("h2a", "hello", mode="pair"))
-        self.assertRefused(agent, headset, reason="bad signature")
-
-    async def test_tamper_mode_to_paired(self):
-        self.store.add("Test Headset", HEADSET.spki_der)
-        agent, headset = await self.session(pair_code="", mutate=edit("h2a", "hello", mode="paired"))
         self.assertRefused(agent, headset, reason="bad signature")
 
     async def test_replayed_m2_m4_refused(self):
@@ -536,65 +473,10 @@ class TamperTests(HandshakeCase):
         self.assertTrue(second.auth)
 
 
-class PairingCodeTests(HandshakeCase):
-    async def typed(self, typed):
-        port, results = await self.start_headset(scanned=pairing.PairOffer(AGENT.fingerprint, typed))
-        agent = await self.run_agent(port)
-        return agent, await asyncio.wait_for(results.get(), 5)
-
-    def wrong_for(self, code):
-        return "AAAAAAAA" if code != "AAAAAAAA" else "BBBBBBBB"
-
-    async def test_right_code_after_one_wrong(self):
-        code = self.issuer.issue()
-        wrong, _ = await self.typed(self.wrong_for(code))
-        self.assertRefused(wrong, reason="wrong code")
-        ok, _ = await self.typed(code)
-        self.assertIsInstance(ok, hs.AgentResult)
-        self.assertEqual(len(self.store.list()), 1)
-
-    async def test_five_wrong_codes_burn_it(self):
-        code = self.issuer.issue()
-        for _ in range(5):
-            agent, _ = await self.typed(self.wrong_for(code))
-            self.assertRefused(agent, reason="wrong code")
-        self.assertFalse(self.issuer.active)
-        agent, _ = await self.typed(code)  # even the right code is dead now
-        self.assertRefused(agent, reason="not paired")
-        self.assertEqual(self.store.list(), [])
-
-    async def test_expired_code(self):
-        code = self.issuer.issue()
-        self.clock.t += 301
-        agent, _ = await self.typed(code)
-        self.assertRefused(agent, reason="not paired")
-        self.assertEqual(self.store.list(), [])
-
-    async def test_code_expires_mid_handshake(self):
-        code = self.issuer.issue()
-        port, results = await self.start_headset(scanned=pairing.PairOffer(AGENT.fingerprint, code))
-
-        async def slow_offer():
-            self.clock.t += 301
-            return sdp(FP_OFFER)
-        agent = await self.run_agent(port, make_offer=slow_offer)
-        self.assertRefused(agent, reason="wrong code")
-        self.assertEqual(self.store.list(), [])
-
-    async def test_mac_in_paired_mode_refused(self):
+class NoMacTests(HandshakeCase):
+    async def test_a_mac_field_in_the_answer_is_ignored(self):
         agent, headset = await self.session(**PAIRED, mutate=edit("h2a", "answer", mac=b64(os.urandom(32))))
-        self.assertRefused(agent, reason="unexpected mac")
-
-    async def test_pair_mode_without_mac_refused(self):
-        agent, headset = await self.session(pair_code="", mutate=edit("h2a", "answer", mac=None))
-        self.assertRefused(agent, reason="missing mac")
-        self.assertEqual(self.store.list(), [])
-
-    async def test_headset_sends_no_mac_to_an_unscanned_laptop(self):
-        port, results = await self.start_headset(scanned=pairing.PairOffer(OTHER.fingerprint, "AAAAAAAA"))
-        self.issuer.issue()
-        await self.run_agent(port)
-        self.assertIsInstance(await results.get(), hs.HandshakeError)
+        self.assertIsInstance(agent, hs.AgentResult)  # signed fields are what count; unknown fields are ignored
 
 
 class SdpTests(HandshakeCase):
@@ -777,7 +659,7 @@ class FramingTests(unittest.IsolatedAsyncioTestCase):
         reader, writer = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(hs.HandshakeError) as cm:
-                await hs.agent_handshake(reader, writer, AGENT, pairing.PairStore(Path(tmp)), None, None)
+                await hs.agent_handshake(reader, writer, AGENT, pairing.PairStore(Path(tmp)), None)
         self.assertEqual(cm.exception.reason, "bad frame length")
         server.close()
         await server.wait_closed()
@@ -792,7 +674,7 @@ class LimitTests(HandshakeCase):
 
         async def handle(reader, writer):
             try:
-                r = await hs.serve_headset_connection(reader, writer, gate, HEADSET, "H", [], None, None,
+                r = await hs.serve_headset_connection(reader, writer, gate, HEADSET, "H", [], None,
                                                       read_timeout=5, total_timeout=0.3)
             except Exception as e:
                 r = e
@@ -881,7 +763,7 @@ class LimitTests(HandshakeCase):
 
         async def handle(reader, writer):
             try:
-                outcomes.append(await hs.serve_headset_connection(reader, writer, gate, HEADSET, "H", [], None, None))
+                outcomes.append(await hs.serve_headset_connection(reader, writer, gate, HEADSET, "H", [], None))
             except hs.HandshakeError as e:
                 outcomes.append(e.reason)
         port = await self.serve(handle)
@@ -911,7 +793,7 @@ class LimitTests(HandshakeCase):
         async def attempt():
             async def offer():
                 return sdp()
-            return await hs.agent_connect("127.0.0.1", port, AGENT, self.store, None, offer,
+            return await hs.agent_connect("127.0.0.1", port, AGENT, self.store, offer,
                                           limiter=limiter, blocklist=blocklist)
         with self.assertRaises(hs.HandshakeError) as cm:
             await attempt()
@@ -940,7 +822,7 @@ class LimitTests(HandshakeCase):
     async def test_network_failures_do_not_block(self):
         blocklist = hs.AuthBlocklist(FakeClock())
         with self.assertRaises(hs.HandshakeError) as cm:
-            await hs.agent_connect("127.0.0.1", 1, AGENT, self.store, None, None,
+            await hs.agent_connect("127.0.0.1", 1, AGENT, self.store, None,
                                    limiter=hs.HandshakeLimiter(), blocklist=blocklist, connect_timeout=1)
         self.assertEqual(cm.exception.reason, "can't connect")
         self.assertFalse(blocklist.blocked(("127.0.0.1", 1)))

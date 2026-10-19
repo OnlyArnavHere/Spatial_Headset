@@ -239,6 +239,25 @@ class BonjourTests(unittest.IsolatedAsyncioTestCase):
         await self.advertise(47815)
         self.assertEqual(await self.collect(2, timeout=4.0), [("127.0.0.1", 47815)])
 
+    async def test_pair_mode_services_are_hidden_in_normal_mode(self):
+        await self.advertise(47817)
+        await self.advertise(47818, {"v": "1", "m": "pair"})
+        self.assertEqual(await self.collect(2, timeout=4.0), [("127.0.0.1", 47817)])
+
+    async def test_pairing_mode_yields_only_pair_services(self):
+        await self.advertise(47819)
+        await self.advertise(47820, {"v": "1", "m": "pair"})
+        found = []
+
+        async def run():
+            async for item in discovery.browse(self.browser, pairing=True):
+                found.append(item)
+        try:
+            await asyncio.wait_for(run(), 4.0)
+        except asyncio.TimeoutError:
+            pass
+        self.assertEqual(found, [("127.0.0.1", 47820)])
+
     async def test_duplicates_are_reported_once(self):
         await self.advertise(47816)
         found = await self.collect(2, timeout=3.0)

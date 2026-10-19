@@ -1,7 +1,8 @@
 """Finding the headset: Bonjour browsing, a typed address, and the wired-hotspot address. Nothing scans the network.
 
 The headset advertises `_spatiallauncher._tcp.local.` (handshake.SERVICE_TYPE) under a random instance name with the
-TXT record `v=1`. browse() yields each (address, port) once. Everything found is only a place to connect to: the
+TXT record `v=1`, plus `m=pair` while it shows a pairing code. browse() yields each (address, port) once: normally
+only services without `m=pair`, with pairing=True only those with it. Everything found is only a place to connect to: the
 handshake decides whether the peer is trusted.
 """
 import asyncio
@@ -57,9 +58,10 @@ def wired_candidates() -> list[tuple[str, int]]:
     return [(network.PHONE_ADDRESS, LINK_PORT)] if network.pick_hotspot(interfaces) is not None else []
 
 
-async def browse(zeroconf: AsyncZeroconf | None = None, *, interfaces=None):
+async def browse(zeroconf: AsyncZeroconf | None = None, *, interfaces=None, pairing: bool = False):
     """Async generator of deduplicated (address, port) for every advertised headset. Runs until closed or cancelled;
-    wrap it in asyncio.timeout / wait_for to stop. Pass an AsyncZeroconf to reuse one, else one is created (and closed).
+    wrap it in asyncio.timeout / wait_for to stop. pairing=False yields headsets that are not showing a pairing code
+    (no `m=pair`), pairing=True only those that are. Pass an AsyncZeroconf to reuse one, else one is created (and closed).
 
     Bounded against a flooding network: a name already being resolved is skipped, at most MAX_RESOLVES resolves run
     at once (further announcements are ignored), the result queue holds MAX_PENDING (further results are dropped) and
@@ -77,6 +79,8 @@ async def browse(zeroconf: AsyncZeroconf | None = None, *, interfaces=None):
         if not await info.async_request(azc.zeroconf, RESOLVE_TIMEOUT_MS, question_type=DNSQuestionType.QU):
             return
         if info.properties.get(b"v") != b"1" or not info.port:
+            return
+        if (info.properties.get(b"m") == b"pair") != pairing:
             return
         for address in info.parsed_addresses(IPVersion.All):
             ip = ipaddress.ip_address(address)

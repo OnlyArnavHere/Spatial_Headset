@@ -141,7 +141,14 @@ the `SPATIAL_LAUNCHER_HOME` environment variable). It lives outside the reposito
 key encrypted with Windows DPAPI for your Windows user, so it can't be read by another user or copied to another PC.
 If it is damaged or belongs to another user the agent says so and does not replace it. Paired headsets are kept in
 `pairs.json` in the same folder. `python agent.py --pairs` lists them (name, fingerprint, date added) and
-`python agent.py --revoke NAME` forgets one.
+`python agent.py --revoke NAME` forgets one. If a headset's name changed since a half-finished pairing, run `--revoke <old name>` first.
+
+A new headset is paired with a one-time code. The **headset** shows a 12-character code (`XXXX-XXXX-XXXX`, letters and
+digits without U; `I` and `L` are read as `1`, `O` as `0`) and advertises itself as ready to pair; you type it on the
+laptop with `python agent.py --pair` (coming; the exchange itself is in `pair_protocol.py`). The code never crosses the
+network: both sides prove they know it with HMACs under a PBKDF2-stretched key that is bound to both public keys, then
+you confirm on the headset, and then laptop and headset each pin the other's key. A code works once, lasts 120 seconds and
+is dead after 3 wrong tries. There is no QR code.
 
 ## Risks
 
@@ -181,15 +188,16 @@ Read these before using `--input` or `--keyboard`.
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), PSS signatures and public-key fingerprints |
-| `pairing.py` | One-time pairing codes, the paired-headset store (`pairs.json`), pinning, and the QR / typed pairing offer |
-| `handshake.py` | The signed link handshake (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
-| `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`), `ip[:port]` parsing, the USB-hotspot address |
+| `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |
+| `handshake.py` | The signed link handshake for already-paired headsets (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
+| `pair_protocol.py` | First-time pairing with the code the headset shows (wire protocol v2, documented at the top of the file; the spec for the C# side) |
+| `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`; `m=pair` marks a headset showing a code), `ip[:port]` parsing, the USB-hotspot address |
 | `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs `websockets` |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
 | `selftest_input.py` | Checks a running agent's control server: token, ping, window list, streams per window, one headset, per-window input routing, keys, text and the rate limit (dry run), and with `--kill-switch` the kill switch |
 | `test_keyboard.py` | Unit tests for keyboard input (no agent needed): `python -m unittest test_keyboard` |
 | `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
-| `test_handshake.py`, `test_discovery.py` | Unit tests for the link handshake (both roles over loopback sockets) and discovery (Bonjour on 127.0.0.1; skipped if multicast is unavailable): `python -m unittest test_handshake test_discovery` |
+| `test_handshake.py`, `test_pair_protocol.py`, `test_discovery.py` | Unit tests for the link handshake and the code-based pairing exchange (both roles over loopback sockets, with known-answer vectors) and discovery (Bonjour on 127.0.0.1; skipped if multicast is unavailable): `python -m unittest test_handshake test_pair_protocol test_discovery` |
 
 ## Licenses
 
@@ -201,7 +209,6 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | [FFmpeg](https://ffmpeg.org), essentials build by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) | 9.0.2 | GPLv3 (the build includes x264 and other GPL components) | downloaded by `setup.py`, run as a separate program |
 | [websockets](https://github.com/python-websockets/websockets) | 16.0 | BSD-3-Clause | Python package, installed by `setup.py` |
 | [cryptography](https://github.com/pyca/cryptography) | 46.0.5 | Apache-2.0 OR BSD-3-Clause | Python package (`requirements.txt`): RSA key and signatures |
-| [segno](https://github.com/heuer/segno) | 1.6.6 | BSD-3-Clause | Python package (`requirements.txt`): pairing QR code |
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15.0 | BSD-3-Clause | Python package (`requirements.txt`): WebRTC link to the headset |
 | [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; its wheels bundle LGPL-licensed FFmpeg libraries |
 | [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | 0.151.5 | LGPL-2.1-or-later | Python package (`requirements.txt`): Bonjour discovery. Used as an unmodified, separately installed library |
