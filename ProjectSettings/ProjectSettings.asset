@@ -586,7 +586,8 @@ PlayerSettings:
   cameraUsageDescription: Spatial Launcher shows the room around you through the
     camera and follows your hands to control its windows.
   locationUsageDescription: 
-  microphoneUsageDescription: The microphone records sound with your HoloKit videos.
+  microphoneUsageDescription: Spatial Launcher listens while you hold Talk on its
+    keyboard, to type what you say.
   bluetoothUsageDescription: 
   macOSTargetOSVersion: 12.0
   switchNMETAOverride: 
