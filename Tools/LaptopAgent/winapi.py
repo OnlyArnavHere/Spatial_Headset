@@ -424,3 +424,44 @@ def watch_kill_switch(on_pressed) -> bool:
     threading.Thread(target=run, name="kill-switch", daemon=True).start()
     registered.wait(2.0)
     return result["ok"]
+
+
+# --- DPAPI (per-user encryption at rest) -----------------------------------------------------
+
+DPAPI_ENTROPY = b"SpatialLauncher.agent.identity.v1"
+_CRYPTPROTECT_UI_FORBIDDEN = 0x1
+
+
+class _DATA_BLOB(ctypes.Structure):
+    _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(func_name: str, data: bytes, entropy: bytes) -> bytes:
+    if sys.platform != "win32":
+        raise OSError("DPAPI is only available on Windows")
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    func = getattr(crypt32, func_name)
+    func.restype = wt.BOOL
+    buffers = [ctypes.create_string_buffer(data, len(data)), ctypes.create_string_buffer(entropy, len(entropy))]
+    blobs = [_DATA_BLOB(len(b.raw), ctypes.cast(b, ctypes.POINTER(ctypes.c_char))) for b in buffers]
+    out = _DATA_BLOB()
+    # Arguments: in, description, entropy, reserved, prompt, flags, out.
+    ok = func(ctypes.byref(blobs[0]), None, ctypes.byref(blobs[1]), None, None, _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(out))
+    if not ok:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.LocalFree.argtypes = [ctypes.c_void_p]
+        k32.LocalFree(ctypes.cast(out.pbData, ctypes.c_void_p))
+
+
+def dpapi_protect(data: bytes, entropy: bytes = DPAPI_ENTROPY) -> bytes:
+    """Encrypts data so only this Windows user can decrypt it (CryptProtectData, user scope)."""
+    return _dpapi("CryptProtectData", data, entropy)
+
+
+def dpapi_unprotect(blob: bytes, entropy: bytes = DPAPI_ENTROPY) -> bytes:
+    """Reverses dpapi_protect; raises OSError if the blob is corrupt, another user's, or the entropy differs."""
+    return _dpapi("CryptUnprotectData", blob, entropy)

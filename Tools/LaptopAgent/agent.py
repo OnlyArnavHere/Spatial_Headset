@@ -4,6 +4,8 @@
   python agent.py                                 let the headset pick what to stream (Laptop icon), view only
   python agent.py --input                         ...and let it move and click the mouse in the streamed windows
   python agent.py --input --keyboard              ...and type into them (Ctrl+Alt+Shift+Q stops all input)
+  python agent.py --pairs                         list paired headsets (name, fingerprint, date), then exit
+  python agent.py --revoke NAME                   forget a paired headset, then exit
   python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
   python agent.py --cast-only                     view only, plus play/pause, seek, next/previous and volume (Cast)
   python agent.py --wired                         print the USB Personal Hotspot address and check the firewall for it
@@ -21,7 +23,9 @@ import sys
 import time
 from pathlib import Path
 
+import identity
 import network
+import pairing
 import winapi
 from input_server import InputServer
 from streams import StreamManager, Target, monitor_target, window_target
@@ -64,6 +68,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-picker", action="store_true",
                    help="with --window or --monitor: offer only that target, not the window list")
     p.add_argument("--list", action="store_true", help="list monitors and windows, then exit")
+    p.add_argument("--pairs", action="store_true", help="list paired headsets, then exit")
+    p.add_argument("--revoke", metavar="NAME", help="forget the paired headset called NAME, then exit")
     p.add_argument("--max-width", type=int, default=1920, help="scale each stream down to at most this width (default 1920)")
     p.add_argument("--max-height", type=int, default=1080, help="scale each stream down to at most this height (default 1080)")
     p.add_argument("--fps", type=int, default=30, help="frame rate (default 30)")
@@ -287,6 +293,30 @@ async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, server: 
         task.cancel()
 
 
+def pairs_command(args: argparse.Namespace) -> int:
+    try:
+        return _pairs_command(args)
+    except (ValueError, OSError) as e:
+        print(f"error: {' '.join(str(e).split())}", file=sys.stderr)
+        return 1
+
+
+def _pairs_command(args: argparse.Namespace) -> int:
+    store = pairing.PairStore(identity.default_home())
+    if args.revoke is not None:
+        if store.revoke(args.revoke):
+            print(f"Revoked {args.revoke}.")
+            return 0
+        print(f"no pair named {args.revoke}")
+        return 1
+    pairs = store.list()
+    if not pairs:
+        print("no paired headsets")
+    for p in pairs:
+        print(f"{p.name}  {identity.format_fp(p.fingerprint)}  {p.added}")
+    return 0
+
+
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -297,6 +327,8 @@ def main() -> None:
     if args.list:
         list_targets()
         return
+    if args.pairs or args.revoke is not None:
+        sys.exit(pairs_command(args))
     if args.cast_only and (args.input or args.keyboard):
         raise SystemExit("--cast-only is view-only plus media controls; it can't be combined with --input or --keyboard.")
     if args.dry_run_input and not (args.input or args.cast_only):

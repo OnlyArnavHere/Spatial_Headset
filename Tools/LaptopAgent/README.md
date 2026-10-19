@@ -134,6 +134,15 @@ network). On a Public network profile Windows blocks them, which is the safe def
   pointer, left/right click and scroll within the streamed window or monitor, and (with `--keyboard`) type into the
   streamed window. No file access, no commands.
 
+## Pairing identity
+
+The agent has one RSA-2048 identity key, created on first use in `%LOCALAPPDATA%\SpatialLauncher\agent\` (override with
+the `SPATIAL_LAUNCHER_HOME` environment variable). It lives outside the repository. `identity.key` holds the private
+key encrypted with Windows DPAPI for your Windows user, so it can't be read by another user or copied to another PC.
+If it is damaged or belongs to another user the agent says so and does not replace it. Paired headsets are kept in
+`pairs.json` in the same folder. `python agent.py --pairs` lists them (name, fingerprint, date added) and
+`python agent.py --revoke NAME` forgets one.
+
 ## Risks
 
 Read these before using `--input` or `--keyboard`.
@@ -171,10 +180,13 @@ Read these before using `--input` or `--keyboard`.
 | `input_server.py` | WebSocket control and input server (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the job object that ends child processes |
+| `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), PSS signatures and public-key fingerprints |
+| `pairing.py` | One-time pairing codes, the paired-headset store (`pairs.json`), pinning, and the QR / typed pairing offer |
 | `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs `websockets` |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
 | `selftest_input.py` | Checks a running agent's control server: token, ping, window list, streams per window, one headset, per-window input routing, keys, text and the rate limit (dry run), and with `--kill-switch` the kill switch |
 | `test_keyboard.py` | Unit tests for keyboard input (no agent needed): `python -m unittest test_keyboard` |
+| `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
 
 ## Licenses
 
@@ -185,6 +197,8 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | [MediaMTX](https://github.com/bluenviron/mediamtx) | v1.21.2 | MIT | downloaded by `setup.py`, run as a separate program |
 | [FFmpeg](https://ffmpeg.org), essentials build by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) | 9.0.2 | GPLv3 (the build includes x264 and other GPL components) | downloaded by `setup.py`, run as a separate program |
 | [websockets](https://github.com/python-websockets/websockets) | 16.0 | BSD-3-Clause | Python package, installed by `setup.py` |
+| [cryptography](https://github.com/pyca/cryptography) | 46.0.5 | Apache-2.0 OR BSD-3-Clause | Python package (`requirements.txt`): RSA key and signatures |
+| [segno](https://github.com/heuer/segno) | 1.6.6 | BSD-3-Clause | Python package (`requirements.txt`): pairing QR code |
 
 FFmpeg's GPL applies to FFmpeg itself. The agent only starts it as a separate process and doesn't link to it, and
 nothing from FFmpeg goes into the Unity project. If you redistribute `bin/` (for example in a zip for a friend),
