@@ -4,12 +4,15 @@ The headset advertises `_spatiallauncher._tcp.local.` (handshake.SERVICE_TYPE) u
 TXT record `v=1`, plus `m=pair` while it shows a pairing code. browse() yields each (address, port) once: normally
 only services without `m=pair`, with pairing=True only those with it. Everything found is only a place to connect to: the
 handshake decides whether the peer is trusted.
+
+Questions are QM (multicast reply), not QU: on Windows many sockets share UDP 5353, so a unicast reply reaches only one
+of them and an already-advertising headset would never be found.
 """
 import asyncio
 import ipaddress
 import secrets
 
-from zeroconf import DNSQuestionType, IPVersion, ServiceStateChange
+from zeroconf import IPVersion, ServiceStateChange
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
 import network
@@ -76,7 +79,7 @@ async def browse(zeroconf: AsyncZeroconf | None = None, *, interfaces=None, pair
 
     async def resolve(name: str) -> None:
         info = AsyncServiceInfo(SERVICE_TYPE, name)
-        if not await info.async_request(azc.zeroconf, RESOLVE_TIMEOUT_MS, question_type=DNSQuestionType.QU):
+        if not await info.async_request(azc.zeroconf, RESOLVE_TIMEOUT_MS):
             return
         if info.properties.get(b"v") != b"1" or not info.port:
             return
@@ -105,8 +108,7 @@ async def browse(zeroconf: AsyncZeroconf | None = None, *, interfaces=None, pair
         tasks.add(task)
         task.add_done_callback(lambda t, n=name: finished(n, t))
 
-    browser = AsyncServiceBrowser(azc.zeroconf, SERVICE_TYPE, handlers=[on_change],
-                                  question_type=DNSQuestionType.QU)
+    browser = AsyncServiceBrowser(azc.zeroconf, SERVICE_TYPE, handlers=[on_change])
     try:
         while True:
             item = await found.get()

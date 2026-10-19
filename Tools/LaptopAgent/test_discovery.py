@@ -79,9 +79,11 @@ class FakeBrowser:
     """Stands in for AsyncServiceBrowser: remembers the handler so a test can fire announcements."""
     handlers = None
     cancelled = False
+    kwargs: dict = {}
 
     def __init__(self, zc, service_type, handlers=None, **kw):
         FakeBrowser.handlers = handlers
+        FakeBrowser.kwargs = kw
         FakeBrowser.cancelled = False
 
     async def async_cancel(self):
@@ -94,13 +96,15 @@ class FakeInfo:
     cancelled = 0
     addresses = ["10.0.0.1"]
     hang = True
+    request_kwargs: dict = {}
 
     def __init__(self, service_type, name):
         FakeInfo.created.append(name)
         self.properties = {b"v": b"1"}
         self.port = 47810
 
-    async def async_request(self, zc, timeout, question_type=None):
+    async def async_request(self, zc, timeout, **kw):
+        FakeInfo.request_kwargs = kw
         if FakeInfo.hang:
             try:
                 await asyncio.sleep(60)
@@ -135,6 +139,15 @@ class BoundsTests(unittest.IsolatedAsyncioTestCase):
 
     def announce(self, name):
         FakeBrowser.handlers[0](None, handshake.SERVICE_TYPE, name, discovery.ServiceStateChange.Added)
+
+    async def test_questions_are_not_unicast_reply(self):
+        FakeInfo.hang = False
+        gen, first = await self.start()
+        self.announce("SL-cccc." + handshake.SERVICE_TYPE)
+        self.assertEqual(await asyncio.wait_for(first, 2), ("10.0.0.1", 47810))
+        for kw in (FakeBrowser.kwargs, FakeInfo.request_kwargs):
+            self.assertIsNone(kw.get("question_type"))
+        await gen.aclose()
 
     async def test_names_being_resolved_are_skipped(self):
         gen, first = await self.start()
@@ -227,6 +240,11 @@ class BonjourTests(unittest.IsolatedAsyncioTestCase):
     async def test_finds_a_service(self):
         await self.advertise(47811)
         self.assertEqual(await self.collect(1), [("127.0.0.1", 47811)])
+
+    async def test_service_registered_before_browsing_is_found_by_query(self):
+        await self.advertise(47821)
+        await asyncio.sleep(2.5)  # past the startup announcements: only the browser's question can find it now
+        self.assertEqual(await self.collect(1, timeout=10.0), [("127.0.0.1", 47821)])
 
     async def test_two_random_instance_names_are_both_found(self):
         a = await self.advertise(47812)
