@@ -2,6 +2,9 @@ using System;
 using System.IO;
 using System.Text;
 using UnityEngine;
+#if SPATIAL_LAUNCHER_WEBRTC
+using SpatialLauncher.SpatialWindows;
+#endif
 
 namespace SpatialLauncher.LaptopLink
 {
@@ -17,6 +20,10 @@ namespace SpatialLauncher.LaptopLink
         /// <summary>Null when the identity could not be set up (see <see cref="Problem"/>).</summary>
         public LinkHost Host { get; private set; }
         public string Problem { get; private set; }
+#if SPATIAL_LAUNCHER_WEBRTC
+        /// <summary>Answers the laptop's offers (WebRTC); the picker tells it which laptop to expect.</summary>
+        public LinkAnswerer Answerer { get; private set; }
+#endif
 
         public static string StoreDirectory { get { return Path.Combine(Application.persistentDataPath, "LaptopLink"); } }
 
@@ -30,7 +37,13 @@ namespace SpatialLauncher.LaptopLink
                 var queue = GetComponent<MainThreadQueue>();
                 if (queue == null) queue = gameObject.AddComponent<MainThreadQueue>();
                 string name = DeviceNames.Safe(SystemInfo.deviceName, fingerprint);
-                Host = new LinkHost(StoreDirectory, identity, queue, CreateBonjour(), new ConsentPairConfirmer(queue), name, pbkdf2: CreatePbkdf2());
+                ILinkAnswerer answerer = null;
+#if SPATIAL_LAUNCHER_WEBRTC
+                Answerer = new LinkAnswerer(queue, this, () => Host.Listener.Acquire());
+                answerer = Answerer;
+#endif
+                Host = new LinkHost(StoreDirectory, identity, queue, CreateBonjour(), new ConsentPairConfirmer(queue), name,
+                    pbkdf2: CreatePbkdf2(), answerer: answerer);
             }
             catch (Exception e)
             {
@@ -46,6 +59,9 @@ namespace SpatialLauncher.LaptopLink
 
         void OnDestroy()
         {
+#if SPATIAL_LAUNCHER_WEBRTC
+            Answerer?.Shutdown();
+#endif
             Host?.Dispose();
             Host = null;
             if (Current == this) Current = null;

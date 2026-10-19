@@ -66,11 +66,12 @@ namespace SpatialLauncher.LaptopLink
             if (!RsaPkcs1.Verify(spkiA, sigA, tA)) throw new LinkException("bad signature", auth: true);
             clock.Extend(AuthedTimeout); // the laptop is authenticated: ICE gathering and M5 may take until 30 s
 
+            var linkOffer = new LinkOffer(offerSdp, fpO, laptop.Name, spkiA, address);
             bool asked = false;
             try
             {
                 asked = true;
-                LinkAnswer given = await answerer.AnswerAsync(new LinkOffer(offerSdp, fpO, laptop.Name, spkiA, address), tok).ConfigureAwait(false);
+                LinkAnswer given = await answerer.AnswerAsync(linkOffer, tok).ConfigureAwait(false);
                 if (given == null || given.Sdp == null) throw new LinkException("no answer");
                 string answerSdp = LinkMessages.CheckSdp(given.Sdp);
                 string fpA = SdpFingerprint.Extract(answerSdp);
@@ -84,23 +85,23 @@ namespace SpatialLauncher.LaptopLink
                     throw new LinkException("bad signature", auth: true);
 
                 asked = false; // from here the answerer owns the outcome
-                answerer.Commit(new LinkAnswer(answerSdp, fpA));
+                answerer.Commit(linkOffer, new LinkAnswer(answerSdp, fpA));
                 return new LinkResult(LinkKind.Handshake, true, null, laptop.Name, address);
             }
             catch (Exception e)
             {
-                if (asked) AbortQuietly(answerer, clock, e);
+                if (asked) AbortQuietly(answerer, linkOffer, clock, e);
                 throw;
             }
         }
 
-        static void AbortQuietly(ILinkAnswerer answerer, ExchangeClock clock, Exception e)
+        static void AbortQuietly(ILinkAnswerer answerer, LinkOffer offer, ExchangeClock clock, Exception e)
         {
             string reason;
             if (e is LinkException le) reason = le.Reason;
             else if (e is OperationCanceledException) reason = clock.TimedOut ? "handshake timeout" : "cancelled";
             else reason = "internal error";
-            try { answerer.Abort(reason); }
+            try { answerer.Abort(offer, reason); }
             catch (Exception) { }
         }
     }

@@ -40,23 +40,23 @@ namespace SpatialLauncher.LaptopLink
     /// <summary>
     /// What the headset does with a verified offer. All three methods are called from worker threads and must marshal to
     /// the main thread themselves. AnswerAsync runs only after the offer's signature verified. After AnswerAsync was
-    /// called, exactly one of Commit (the laptop's M5 verified; the answer carries the SDP that was sent) or Abort(reason)
+    /// called, exactly one of Commit(offer, answer) (the laptop's M5 verified; the answer carries the SDP that was sent) or Abort(offer, reason)
     /// follows, also when AnswerAsync itself failed or was cancelled.
     /// </summary>
     public interface ILinkAnswerer
     {
         /// <summary>Returns null (or an answer without an SDP) to refuse with "no answer".</summary>
         Task<LinkAnswer> AnswerAsync(LinkOffer offer, CancellationToken ct);
-        void Commit(LinkAnswer answer);
-        void Abort(string reason);
+        void Commit(LinkOffer offer, LinkAnswer answer);
+        void Abort(LinkOffer offer, string reason);
     }
 
     /// <summary>The default: every verified offer is refused with "no answer".</summary>
     public sealed class RefusingAnswerer : ILinkAnswerer
     {
         public Task<LinkAnswer> AnswerAsync(LinkOffer offer, CancellationToken ct) { return Task.FromResult<LinkAnswer>(null); }
-        public void Commit(LinkAnswer answer) { }
-        public void Abort(string reason) { }
+        public void Commit(LinkOffer offer, LinkAnswer answer) { }
+        public void Abort(LinkOffer offer, string reason) { }
     }
 
     /// <summary>Asks the user whether to pair with a laptop (the UI comes with 5b). Called from a worker thread.</summary>

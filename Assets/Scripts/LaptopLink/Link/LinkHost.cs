@@ -37,7 +37,8 @@ namespace SpatialLauncher.LaptopLink
         public bool Pairing { get { return pairLease != null; } }
 
         public LinkHost(string directory, ILinkIdentity identity, MainThreadQueue queue, IBonjourAdvertiser advertiser,
-            IPairConfirmer confirmer, string deviceName, int port = LinkListener.LinkPort, IPbkdf2 pbkdf2 = null)
+            IPairConfirmer confirmer, string deviceName, int port = LinkListener.LinkPort, IPbkdf2 pbkdf2 = null,
+            ILinkAnswerer answerer = null)
         {
             Identity = identity;
             Queue = queue;
@@ -45,7 +46,7 @@ namespace SpatialLauncher.LaptopLink
             bonjour = advertiser ?? new NullBonjour();
             Pairs = new PairStore(directory);
             Codes = new PairCodeAuthority();
-            Handler = new LinkConnectionHandler(identity, Pairs, Codes, pbkdf2, confirmer, null, new HeadsetGate(), queue, () => DeviceName);
+            Handler = new LinkConnectionHandler(identity, Pairs, Codes, pbkdf2, confirmer, answerer, new HeadsetGate(), queue, () => DeviceName);
             Handler.Finished += r => ConnectionFinished?.Invoke(r);
             Listener = new LinkListener((client, ct) => Handler.HandleAsync(client, ct), port);
             Codes.CodeEnded += OnCodeEnded;
