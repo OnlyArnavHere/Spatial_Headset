@@ -225,9 +225,10 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReape
         rect = target.rect()
         if rect is None or rect.width < 16 or rect.height < 16:
             raise LookupError("minimized")
+        rect = hostos.visible_rect(rect)
         width, height = output_size(rect.width, rect.height, args.max_width, args.max_height)
         command = [ffmpeg, "-hide_banner", "-loglevel", "info" if args.verbose else "warning"]
-        command += hostos.capture_input_args(target.selector, args.fps, width, height, pix_fmt)
+        command += hostos.capture_input_args(target.selector, args.fps, width, height, pix_fmt, ffmpeg=ffmpeg)
         command += hostos.encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
         command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{rtsp_port}/{path}"]
         log.debug("ffmpeg: %s", subprocess.list2cmdline(command))

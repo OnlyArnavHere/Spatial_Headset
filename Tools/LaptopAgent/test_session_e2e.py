@@ -11,6 +11,7 @@ import contextlib
 import json
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -76,10 +77,10 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
     encoder_choice = "x264"
 
     async def asyncSetUp(self):
-        for exe in ("ffmpeg", "mediamtx"):
-            if not (BIN / f"{exe}{hostos.exe_suffix}").exists():
-                self.skipTest(f"bin/{exe}{hostos.exe_suffix} is missing (run setup.py)")
-        self.ffmpeg = agent.tool("ffmpeg")
+        try:  # bin/ first, then PATH (Homebrew on a Mac)
+            self.ffmpeg, mediamtx = agent.tool("ffmpeg"), agent.tool("mediamtx")
+        except SystemExit:
+            self.skipTest("ffmpeg or mediamtx is missing (run setup.py)")
         try:
             self.encoder = agent.probe_encoder(self.ffmpeg, self.encoder_choice)
         except SystemExit:
@@ -92,7 +93,7 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
 
         self.rtsp_port = free_port()
         config = agent.write_mediamtx_config(self.rtsp_port, self.tmp)
-        self.start_process([agent.tool("mediamtx"), str(config)], "mediamtx")
+        self.start_process([mediamtx, str(config)], "mediamtx")
         await until(lambda: self.port_open(self.rtsp_port), 10, "MediaMTX to listen")
 
         self.packs = self.encodes = 0
@@ -277,6 +278,11 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
 
 class NvencLinkTests(LinkTests):
     encoder_choice = "nvenc"
+
+
+if sys.platform == "darwin":
+    class VideoToolboxLinkTests(LinkTests):
+        encoder_choice = "videotoolbox"
 
 
 class InputLinkTests(LinkTests):

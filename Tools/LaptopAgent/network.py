@@ -170,10 +170,30 @@ def _powershell(script: str, timeout: float = 60.0) -> object:
     return json.loads(result.stdout)
 
 
+def iphone_usb_devices(hardware_ports: str) -> set[str]:
+    """The device names (en5, ...) that `networksetup -listallhardwareports` reports as "iPhone USB"."""
+    devices, port = set(), ""
+    for line in hardware_ports.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Hardware Port":
+            port = value.strip()
+        elif key.strip() == "Device" and port.lower() == "iphone usb" and value.strip():
+            devices.add(value.strip())
+    return devices
+
+
 def _list_interfaces_ifaddr() -> list[Interface]:
-    """Non-Windows: every IPv4 address with its adapter's name (there is no firewall profile to report)."""
+    """Non-Windows: every IPv4 address with its adapter's name (there is no firewall profile to report). On macOS the
+    iPhone's USB adapter is called "iPhone USB" in the description, which is what the USB hints look for."""
     import ifaddr
-    return [Interface(adapter.nice_name or adapter.name, ip.ip, adapter.name, "")
+    usb: set[str] = set()
+    if sys.platform == "darwin":
+        try:
+            usb = iphone_usb_devices(subprocess.run(["networksetup", "-listallhardwareports"], capture_output=True,
+                                                    text=True, timeout=10).stdout)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return [Interface(adapter.nice_name or adapter.name, ip.ip, "iPhone USB" if adapter.name in usb else adapter.name, "")
             for adapter in ifaddr.get_adapters() for ip in adapter.ips if ip.is_IPv4]
 
 

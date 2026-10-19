@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 import winapi as _w
+from ._ffmpeg import common_args
 
 KILL_SWITCH = "Ctrl+Alt+Shift+Q"  # same as winapi.KILL_SWITCH
 exe_suffix = ".exe"
@@ -118,6 +119,11 @@ def open_prompt(text: str, caption: str, timeout_ms: int) -> _Prompt:
     return _Prompt(text, caption, timeout_ms)
 
 
+def visible_rect(rect):
+    """The part of the window that is captured; on Windows the capture is the whole client area."""
+    return rect
+
+
 def window_selector(handle: int) -> str:
     return f"hwnd={handle}"
 
@@ -156,7 +162,7 @@ class ChildReaper:
         return process
 
 
-def capture_input_args(selector: str, fps: int, width: int, height: int, pix_fmt: str) -> list[str]:
+def capture_input_args(selector: str, fps: int, width: int, height: int, pix_fmt: str, ffmpeg: str = "ffmpeg") -> list[str]:
     """ffmpeg arguments that capture the target (Windows Graphics Capture) and scale it into the encoder's format."""
     capture = (f"gfxcapture={selector}:max_framerate={fps}:capture_cursor=1,"
                f"hwdownload,format=bgra,scale={width}:{height}:flags=bilinear,format={pix_fmt}[v]")
@@ -167,9 +173,7 @@ def encoder_args(name: str, codec: str, fps: int, bitrate: int) -> list[str]:
     """Low-latency settings: constant bitrate, a small buffer, no B-frames (WebRTC can't use them),
     a keyframe every second so a reconnecting headset gets a picture quickly, and the baseline profile.
     Keyframes go by time, not frame count: a static window delivers only a couple of frames a second."""
-    b, buf, gop = str(bitrate), str(bitrate // 2), str(fps)
-    common = ["-b:v", b, "-maxrate", b, "-bufsize", buf, "-g", gop, "-bf", "0",
-              "-force_key_frames", "expr:gte(t,n_forced*1)"]
+    common = common_args(fps, bitrate)
     if name == "nvenc":
         return ["-c:v", codec, "-preset", "p1", "-tune", "ull", "-rc", "cbr", "-zerolatency", "1",
                 "-profile:v", "baseline", "-forced-idr", "1"] + common

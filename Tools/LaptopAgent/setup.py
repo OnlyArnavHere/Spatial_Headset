@@ -68,8 +68,20 @@ def extract(package: dict, archive: Path) -> None:
             print(f"  installed bin/{target}")
 
 
+def mac_tools() -> None:
+    """macOS: nothing is downloaded; ffmpeg and MediaMTX come from Homebrew."""
+    import shutil
+    missing = [name for name in ("ffmpeg", "mediamtx") if not shutil.which(name)]
+    if missing:
+        raise SystemExit(f"Missing: {', '.join(missing)}. Install them with Homebrew, then run setup.py again:"
+                         "\n  brew install ffmpeg mediamtx")
+    print("ffmpeg and mediamtx found on PATH (Homebrew)")
+
+
 def main() -> None:
-    for package in PACKAGES:
+    if sys.platform == "darwin":
+        mac_tools()
+    for package in ([] if sys.platform == "darwin" else PACKAGES):
         print(package["name"])
         extract(package, download(package))
     print("Python dependencies")
