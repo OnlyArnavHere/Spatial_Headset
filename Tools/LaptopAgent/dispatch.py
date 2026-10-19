@@ -12,7 +12,8 @@ Control state, per session (agent -> headset messages are on the control channel
   agent -> headset  {"type":"control-granted","keyboard":bool}
                     {"type":"control-denied","reason":"cast only"|"input off"|"stopped"|"no consent"|"busy"|"denied"|"timeout"}
                     {"type":"control-revoked","reason":"kill switch"|...}
-The approver (async, info -> bool, 30 s) decides a request on this laptop; the default grants when --input is set.
+The approver (async, info -> bool; raises TimeoutError for "timeout") decides a request on this laptop: approval.py asks
+with a Yes/No box (30 s, default No), the default grants when --input is set. After a deny, requests get "busy" for 10 s.
 
 Input messages (JSON, at most 1 KiB, on input-k; they only ever reach slot k's window):
   {"type": "move"|"down"|"up", "x": 0..1, "y": 0..1, "button": "left"|"right"}
@@ -51,7 +52,10 @@ CAST_ALLOWED = ("media",)
 INPUT_TYPES = ("move", "down", "up", "scroll", "key", "text", "media")
 CONSENT = "full control"
 MAX_INPUT_MESSAGE = 1024
-APPROVAL_TIMEOUT_S = 30.0
+# The laptop box times out at 30 s on its own; this only guards an approver that never answers.
+APPROVAL_BACKSTOP_S = 35.0
+# After a deny or a timeout the headset can't ask again (no prompt) for this long.
+REASK_COOLDOWN_S = 10.0
 # A held button with no message for this long is released: the link may be dead before it is noticed.
 IDLE_RELEASE_S = 3.0
 THROTTLE_NOTICE_INTERVAL_S = 1.0
@@ -113,6 +117,7 @@ class InputDispatcher:
         # Messages dropped, by kind ("key", "move", "media:power", "oversize"...).
         self.dropped: dict = {}
         self._in_flight = False
+        self._ask_again_at = -math.inf
 
     # --- State ---------------------------------------------------------------------------------------------------
 
@@ -138,14 +143,14 @@ class InputDispatcher:
         if self.state is ControlState.GRANTED:
             self.send_control({"type": "control-granted", "keyboard": self.keyboard_enabled})
             return
-        if self._in_flight:
+        if self._in_flight or self.clock() < self._ask_again_at:
             return self._deny("busy")
         self._in_flight = True
         self.state = ControlState.REQUESTED
         reason = "denied"
         approved = False
         try:
-            approved = bool(await asyncio.wait_for(self.approver(dict(self.headset)), APPROVAL_TIMEOUT_S))
+            approved = bool(await asyncio.wait_for(self.approver(dict(self.headset)), APPROVAL_BACKSTOP_S))
         except asyncio.TimeoutError:
             reason = "timeout"
         except asyncio.CancelledError:
@@ -160,10 +165,11 @@ class InputDispatcher:
             return  # released or revoked while the question was open
         if approved:
             self.state = ControlState.GRANTED
-            log.info("Control granted to %s", self.headset.get("name", "the headset"))
+            log.info("CONTROL GRANTED to %s", self.headset.get("name", "the headset"))
             self.send_control({"type": "control-granted", "keyboard": self.keyboard_enabled})
         else:
             self.state = ControlState.VIEW_ONLY
+            self._ask_again_at = self.clock() + REASK_COOLDOWN_S
             self._deny(reason)
 
     def _deny(self, reason: str) -> None:

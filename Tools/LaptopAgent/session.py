@@ -521,6 +521,9 @@ class LinkRunner:
                             keyboard_enabled=keyboard_enabled, cast_only=cast_only, dry_run=dry_run,
                             approver=approver)
         self.revoked = False  # the kill switch was pressed: it holds for the rest of the run
+        self.stopped = False  # ...and so does this: no dialling, no new workers
+        self._shutdown_task: asyncio.Task | None = None
+        self._loop_tasks: list[asyncio.Task] = []
         self.pinned = list(pinned or [])
         self.discover = discover
         self._browse = browse
@@ -542,8 +545,9 @@ class LinkRunner:
         try:
             for host, port in self.pinned:
                 self._add_target(host, port, BACKOFF_MAX_S)  # given by hand: retried forever
-            if self.discover:
-                tasks = [asyncio.ensure_future(self._browse_loop()), asyncio.ensure_future(self._wired_loop())]
+            if self.discover and not self.stopped:
+                tasks = self._loop_tasks = [asyncio.ensure_future(self._browse_loop()),
+                                            asyncio.ensure_future(self._wired_loop())]
             await asyncio.Event().wait()
         finally:
             for task in tasks + [w[0] for w in self._workers.values()]:
@@ -553,14 +557,39 @@ class LinkRunner:
                 await self.active.close()
 
     def kill_switch(self) -> None:
-        """Ctrl+Alt+Shift+Q: no more input or media for the rest of the run, in this session and in every later one."""
-        self.revoked = True
+        """Ctrl+Alt+Shift+Q (on the loop): ends every session, stops the video and all dialling for the rest of the run."""
+        if self.stopped:
+            return
+        self.stopped = self.revoked = True
         if self.active is not None:
             self.active.dispatcher.revoke("kill switch")
+        log.warning("KILL SWITCH: closing every headset session, stopping video and dialling")
+        self._shutdown_task = asyncio.ensure_future(self._shutdown())
+
+    async def _shutdown(self) -> None:
+        workers = [w[0] for w in self._workers.values()]
+        tasks = workers + self._loop_tasks
+        current = asyncio.current_task()
+        for task in tasks:
+            if task is not current:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._workers.clear()
+        self._discovered.clear()
+        try:
+            if self.active is not None:
+                await self.active.close()
+        except Exception:
+            log.debug("Closing the session failed", exc_info=True)
+        self.streams.stop_all()
+        print("KILL SWITCH: all headset sessions closed, video stopped, no reconnecting. Restart the agent to reconnect.",
+              flush=True)
 
     # --- Finding headsets ----------------------------------------------------------------------------------------
 
     def _add_target(self, host: str, port: int, cap: float, drop_after: int = 0) -> bool:
+        if self.stopped:
+            return False
         key = (host, port)
         if key in self._workers:
             return False
@@ -569,6 +598,8 @@ class LinkRunner:
         return True
 
     def _found(self, host: str, port: int, cap: float, source: str, drop_after: int = 0) -> None:
+        if self.stopped:
+            return
         if (host, port) not in self._workers and len(self._discovered) >= MAX_DISCOVERED:
             return
         if self._add_target(host, port, cap, drop_after):
@@ -601,8 +632,10 @@ class LinkRunner:
         delay = BACKOFF_START_S
         last_failure = None
         failures = 0
-        while True:
+        while not self.stopped:
             await self._idle.wait()
+            if self.stopped:
+                return
             outcome, reason = await self._attempt(key)
             if outcome == "failed":
                 if reason != last_failure:

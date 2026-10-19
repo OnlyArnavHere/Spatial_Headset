@@ -426,6 +426,70 @@ def watch_kill_switch(on_pressed) -> bool:
     return result["ok"]
 
 
+# --- Yes/No prompt ---------------------------------------------------------------------------
+
+_MB_YESNO, _MB_ICONWARNING, _MB_DEFBUTTON2, _MB_TOPMOST = 0x4, 0x30, 0x100, 0x40000
+_IDYES, _IDNO, _MB_TIMEDOUT = 6, 7, 32000
+_WM_COMMAND = 0x0111
+_DIALOG_CLASS = "#32770"
+_ENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+user32.PostMessageW.restype = wt.BOOL
+user32.EnumThreadWindows.argtypes = [wt.DWORD, _ENUMPROC, wt.LPARAM]
+user32.EnumThreadWindows.restype = wt.BOOL
+user32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.restype = ctypes.c_int
+user32.MessageBoxW.argtypes = [wt.HWND, wt.LPCWSTR, wt.LPCWSTR, wt.UINT]
+user32.MessageBoxW.restype = ctypes.c_int
+_FLAGS = _MB_YESNO | _MB_ICONWARNING | _MB_DEFBUTTON2 | _MB_TOPMOST  # no MB_SETFOREGROUND: the box doesn't take focus itself
+
+
+def ask_yes_no(text: str, caption: str, timeout_ms: int) -> str:
+    """A top-most Yes/No box (default No) that blocks the calling thread: "yes", "no" or "timeout".
+    Doesn't take focus by itself; if Windows activates it, "y" answers Yes and Enter/Space choose the default, No. Call it on a thread of its own."""
+    import threading
+    try:
+        func = user32.MessageBoxTimeoutW
+    except AttributeError:
+        func = None
+    if func is not None:
+        func.argtypes = [wt.HWND, wt.LPCWSTR, wt.LPCWSTR, wt.UINT, wt.WORD, wt.DWORD]
+        func.restype = ctypes.c_int
+        result = func(None, text, caption, _FLAGS, 0, int(timeout_ms))
+        return "yes" if result == _IDYES else "timeout" if result == _MB_TIMEDOUT else "no"
+    # No timeout export: close the box ourselves after the time is up.
+    thread_id, timed_out, done = threading.get_native_id(), [False], threading.Event()
+
+    def expire() -> None:
+        if not done.wait(timeout_ms / 1000.0):
+            timed_out[0] = True
+            while not done.wait(0.05) and not dismiss_prompt(thread_id):
+                pass
+
+    threading.Thread(target=expire, name="prompt-timeout", daemon=True).start()
+    try:
+        result = user32.MessageBoxW(None, text, caption, _FLAGS)
+    finally:
+        done.set()
+    return "yes" if result == _IDYES else "timeout" if timed_out[0] else "no"
+
+
+def dismiss_prompt(thread_id: int) -> bool:
+    """Answers No on a message box owned by that thread (a Yes/No box ignores WM_CLOSE). True if one was found."""
+    found = []
+
+    def visit(hwnd, _) -> bool:
+        name = ctypes.create_unicode_buffer(16)
+        if user32.GetClassNameW(hwnd, name, 16) and name.value == _DIALOG_CLASS:
+            user32.PostMessageW(hwnd, _WM_COMMAND, _IDNO, 0)
+            found.append(hwnd)
+        return True
+
+    user32.EnumThreadWindows(thread_id, _ENUMPROC(visit), 0)
+    return bool(found)
+
+
 # --- DPAPI (per-user encryption at rest) -----------------------------------------------------
 
 DPAPI_ENTROPY = b"SpatialLauncher.agent.identity.v1"

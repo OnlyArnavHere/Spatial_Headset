@@ -352,6 +352,20 @@ class InputLinkTests(LinkTests):
         headset.send({"type": "stop"})
         await until(lambda: runner.end_reasons == ["headset stopped"], 10, "the session to end")
 
+    async def test_kill_switch_ends_the_session_and_nothing_redials(self):
+        self.enterContext(mock.patch.object(session, "BACKOFF_START_S", 0.2))
+        runner = await self.start_runner(input_enabled=True, keyboard_enabled=True)
+        headset = await self.welcomed(runner)
+        await headset.wait_for("welcome", 10)
+        await self.opened_window(headset)
+        attempts, handshakes = runner.attempt_count, self.headset.handshakes
+        runner.kill_switch()
+        await runner._shutdown_task
+        await until(lambda: headset.pc.connectionState in ("closed", "failed"), 10, "the headset to see the session end")
+        self.assertIsNone(runner.active)
+        await asyncio.sleep(1)  # five backoff periods
+        self.assertEqual((runner.attempt_count, self.headset.handshakes), (attempts, handshakes))
+
     async def test_cast_only_media_arrives_and_keys_do_not(self):
         approver = mock.AsyncMock()
         runner = await self.start_runner(cast_only=True, approver=approver)

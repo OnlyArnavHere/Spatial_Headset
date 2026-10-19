@@ -260,7 +260,7 @@ class ControlTests(Base, unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(60)
 
         d = self.make(granted=False, approver=never)
-        with mock.patch.object(dispatch, "APPROVAL_TIMEOUT_S", 0.05):
+        with mock.patch.object(dispatch, "APPROVAL_BACKSTOP_S", 0.05):
             await d.request_control({"consent": dispatch.CONSENT})
         self.assertEqual(self.control, [{"type": "control-denied", "reason": "timeout"}])
         self.assertIs(d.state, ControlState.VIEW_ONLY)

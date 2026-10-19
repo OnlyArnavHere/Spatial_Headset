@@ -84,9 +84,19 @@ keyboard is also forwarded while a stream window (or the keyboard) is in front.
 The agent brings the streamed window to the front before typing and drops the key if it can't, so keys never land in
 another window. For the whole desktop, keys go to whatever window is in front on the laptop.
 
-**Kill switch:** press **Ctrl+Alt+Shift+Q** on the laptop to stop all mouse, keyboard and media input at once. Held keys
-and buttons are released, the headset is told ("control-revoked"), and video keeps streaming. Input stays off until you
-restart the agent.
+**Control needs three things:** the agent started with `--input`, the headset's own consent gate ("full control"), and a
+**Yes on this laptop**. When a headset asks, a top-most Yes/No box appears on the laptop: `Headset "<name>" (<fingerprint>)
+wants to control this laptop's mouse[ and keyboard]. Allow?` The default button is No, and 30 s without an answer is a
+No (the headset sees "timeout"). The box doesn't take focus by itself, so typing elsewhere shouldn't answer it; if Windows does activate it, typing "y" answers Yes, while Enter and Space choose the default, No. The
+headset's name is shown as plain, shortened text. Only one box is open at a time. After a No or a timeout the headset
+gets "busy" for 10 s without a new box. Closing the session or pressing the kill switch closes the box.
+
+**Cast-only media needs no prompt:** with `--cast-only` the headset may play/pause, seek, skip and change the volume,
+and nothing else; no control is ever granted.
+
+**Kill switch:** press **Ctrl+Alt+Shift+Q** on the laptop (it is always registered). It ends every headset session
+(held keys and buttons are released, the peer connection is closed), stops all video, ffmpeg and dialling, and closes an
+open prompt. The agent then sits idle until you restart it.
 
 ### Measuring delay
 
@@ -117,8 +127,8 @@ cafés and hotels. There is no `--webrtc-port`, `--ice-udp-port` or `--input-por
   channels of the one WebRTC session the signed handshake set up with a paired headset (pinned keys), so it is
   encrypted and only that headset can send it. There is no pairing token, no WebSocket and no port to scan.
 - **View only until granted:** every session starts view only. The headset asks for control with the consent its own
-  gate approved (`control-request`, `"consent":"full control"`); the laptop's approver then decides (today `--input`
-  itself is the consent, a later release asks on the laptop). Until it is granted, all mouse, key and text messages
+  gate approved (`control-request`, `"consent":"full control"`); the laptop's approver then decides (a Yes/No box on the
+  laptop; without one only `--input` would be the consent). Until it is granted, all mouse, key and text messages
   are dropped. The headset can hand control back (`control-release`) or end the session (`stop`).
 - **Cast-only rules:** with `--cast-only` the only accepted input is a media action (play/pause, next, previous, volume
   up/down, mute, seek back/forward), each one press and release of one whitelisted key with no modifier, and no grant
@@ -135,7 +145,7 @@ cafés and hotels. There is no `--webrtc-port`, `--ice-udp-port` or `--input-por
 - **Size and rate limits:** an input message is at most 1 KiB (bigger ones are dropped), each window's channel may send
   about 240 messages a second, and about 30 key presses or characters a second (bursts of 60); the rest are dropped
   and the headset is told. Releasing a held key or button is never dropped, and at most 6 keys can be held at once.
-- **Kill switch:** Ctrl+Alt+Shift+Q on the laptop revokes control and stops media for the rest of the run (see Typing).
+- **Kill switch:** Ctrl+Alt+Shift+Q on the laptop ends every session, stops video and dialling, and keeps the agent idle until restarted (see Typing).
 - **One headset:** only one paired headset is linked at a time; it may open several windows, each with its own input
   channel. Others are ignored while it's connected.
 - **Clicks go to the window they're meant for:** each channel's input goes only to the window on its slot. Before a
@@ -196,7 +206,8 @@ Read these before using `--input` or `--keyboard`.
 | `streams.py` | What can be streamed (desktop, windows), each stream's path, starting and stopping captures |
 | `dispatch.py` | The input dispatcher: per-window input channels, the control state machine, cast-only rules, rate limits (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
-| `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the job object that ends child processes |
+| `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
+| `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), PSS signatures and public-key fingerprints |
 | `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |
 | `handshake.py` | The signed link handshake for already-paired headsets (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |

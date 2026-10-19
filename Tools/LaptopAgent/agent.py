@@ -3,7 +3,7 @@
   python agent.py --list                          show monitors and windows
   python agent.py                                 let the headset pick what to stream (Laptop icon), view only
   python agent.py --input                         ...and let it move and click the mouse in the streamed windows
-  python agent.py --input --keyboard              ...and type into them (Ctrl+Alt+Shift+Q stops all input)
+  python agent.py --input --keyboard              ...and type into them (each grant is asked on this laptop; Ctrl+Alt+Shift+Q ends everything)
   python agent.py --pair                          pair a new headset: type the code it shows (Laptop > Pair new laptop), then exit
   python agent.py --pair --headset 192.168.1.5    ...at this address instead of finding it over Bonjour
   python agent.py --headset 192.168.1.5           dial this paired headset directly instead of finding it over Bonjour
@@ -26,6 +26,7 @@ import threading
 import time
 from pathlib import Path
 
+import approval
 import discovery
 import identity
 import network
@@ -264,21 +265,19 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: winapi.KillOnExit
     return launch
 
 
-def watch_kill_switch(runner: LinkRunner, enabled: bool) -> None:
-    """Ctrl+Alt+Shift+Q revokes control and stops media for the rest of the run (video keeps streaming)."""
-    if not enabled:
-        return
+def watch_kill_switch(runner: LinkRunner) -> None:
+    """Ctrl+Alt+Shift+Q ends every session and stops video and dialling for the rest of the run. The hotkey thread hops
+    onto the event loop before touching anything."""
     loop = asyncio.get_running_loop()
     if winapi.watch_kill_switch(lambda: loop.call_soon_threadsafe(runner.kill_switch)):
-        log.info("Kill switch: press %s on this laptop to stop all input at once", winapi.KILL_SWITCH)
+        log.info("Kill switch: press %s on this laptop to end every session and stop the video", winapi.KILL_SWITCH)
     else:
         log.warning("Kill switch %s is taken by another program; stop the agent with Ctrl+C instead",
                     winapi.KILL_SWITCH)
 
 
-async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, runner: LinkRunner,
-                    kill_switch: bool = False) -> None:
-    watch_kill_switch(runner, kill_switch)
+async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, runner: LinkRunner) -> None:
+    watch_kill_switch(runner)
     tasks = [asyncio.create_task(runner.run())]
     try:
         while True:
@@ -532,13 +531,13 @@ def main() -> None:
             raise SystemExit(f"Can't capture {pinned.description}: it has no usable size (minimized?).")
     runner = LinkRunner(ident, store, streams, RTSP_PORT, max_windows=args.max_windows,
                         input_enabled=args.input, keyboard_enabled=args.keyboard, cast_only=args.cast_only,
-                        dry_run=args.dry_run_input, pinned=args.headset, discover=not args.headset)
+                        dry_run=args.dry_run_input, pinned=args.headset,
+                        approver=approval.LaptopApprover(keyboard=args.keyboard) if args.input and not args.cast_only else None, discover=not args.headset)
 
     keyboard = "off (start with --input --keyboard to allow it)"
     if args.keyboard:
         keyboard = ("ON - " + ("DRY RUN, logging only" if args.dry_run_input else "the paired headset can type into streamed windows"))
-    kill_switch = f"{winapi.KILL_SWITCH} stops all mouse and keyboard input for the rest of the run" if args.input \
-        else f"{winapi.KILL_SWITCH} stops the media controls for the rest of the run" if args.cast_only else "-"
+    kill_switch = f"{winapi.KILL_SWITCH} ends every headset session and stops the video; restart the agent to reconnect"
     cast = ("ON - view only; the headset may play/pause, seek, skip and change volume. Every other key, mouse,"
             "\n                    typing and scroll event is dropped" + (" (DRY RUN, logging only)" if args.dry_run_input else "")) \
         if args.cast_only else "off (start with --cast-only for a view-only Cast window)"
@@ -558,7 +557,7 @@ def main() -> None:
 
  Headset link:      {link}
                     up to {args.max_windows} windows at once; this laptop is {identity.format_fp(ident.fingerprint)}
- Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse') if args.input else 'off (start with --input to allow it)'}
+ Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse, once you click Yes on this laptop') if args.input else 'off (start with --input to allow it)'}
  Keyboard input:    {keyboard}
  Cast only:         {cast}
  Kill switch:       {kill_switch}{wired_lines}
@@ -568,7 +567,7 @@ def main() -> None:
 """, flush=True)
 
     try:
-        asyncio.run(supervise(mediamtx, streams, runner, args.input or args.cast_only), loop_factory=LOOP_FACTORY)
+        asyncio.run(supervise(mediamtx, streams, runner), loop_factory=LOOP_FACTORY)
     except KeyboardInterrupt:
         pass
     finally:
