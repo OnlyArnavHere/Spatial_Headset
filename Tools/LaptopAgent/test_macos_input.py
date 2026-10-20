@@ -161,11 +161,11 @@ class CleanupTests(unittest.TestCase):
 
 @unittest.skipUnless(ON_MAC, "needs macOS")
 class MacOnlyTests(unittest.TestCase):
-    def test_preflight_has_both_rows(self):
+    def test_preflight_has_the_three_rows(self):
         from hostos import macos
         rows = macos.preflight()
-        self.assertEqual([r[0] for r in rows], ["Screen Recording permission", "Accessibility permission"])
-        self.assertTrue(all("Privacy & Security" in r[2] for r in rows))
+        self.assertEqual([r.name for r in rows], ["Screen Recording", "Accessibility", "Input Monitoring"])
+        self.assertTrue(all("Privacy & Security" in r.settings_path for r in rows))
 
     def test_window_at_the_centre_of_the_front_window(self):
         from hostos import macos

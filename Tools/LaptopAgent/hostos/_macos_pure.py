@@ -1,8 +1,10 @@
 """The macOS backend's logic that needs no pyobjc: it imports (and is tested) on every OS.
 
-Device-list parsing, crop maths, ffmpeg argument builders, and the CGWindow-dict conversions. The dicts use the
-string keys Quartz documents (kCGWindowNumber and so on), so no Quartz constant is needed here.
+Device-list parsing, crop maths, ffmpeg argument builders, the CGWindow-dict conversions, the approval dialog's
+osascript command and output parser, the kill-chord matcher and the permission rows. The dicts use the string keys
+Quartz documents (kCGWindowNumber and so on), so no Quartz constant is needed here.
 """
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -131,3 +133,81 @@ def group_kwargs(version: tuple | None = None) -> dict:
     """Popen arguments that give a child a process group (and session) of its own, so the reaper can kill the group."""
     version = tuple(version or sys.version_info)
     return {"process_group": 0} if version[:2] >= (3, 11) else {"start_new_session": True}
+
+
+# --- Approval dialog (osascript) -----------------------------------------------------------------
+
+# The text, title and timeout travel as argv items, never inside the script, so no text can change what runs.
+# No `tell application`: that would ask for the Automation permission.
+SCRIPT = ('on run argv\n'
+          'display dialog (item 1 of argv) with title (item 2 of argv) buttons {"No", "Yes"} default button "No" '
+          'cancel button "No" with icon caution giving up after (item 3 of argv as integer)\n'
+          'end run')
+
+
+def osascript_argv(text: str, caption: str, timeout_s: int) -> list[str]:
+    return ["osascript", "-e", SCRIPT, "--", text, caption, str(timeout_s)]
+
+
+def timeout_seconds(timeout_ms: int) -> int:
+    return max(1, math.ceil(timeout_ms / 1000))
+
+
+def parse_dialog(returncode: int, stdout: str, stderr: str) -> str:
+    """"yes", "no" or "timeout". Anything unexpected (a kill, empty output, an error) is "no"."""
+    if returncode == 0:
+        out = stdout or ""
+        if "gave up:true" in out:
+            return "timeout"
+        if "button returned:Yes" in out:
+            return "yes"
+    return "no"  # includes the Cancel button, which osascript reports as error (-128) with code 1
+
+
+# --- Kill chord (Ctrl+Option+Shift+Q) ------------------------------------------------------------
+
+KILL_KEYCODE = 12  # kVK_ANSI_Q
+FLAG_CONTROL, FLAG_OPTION, FLAG_SHIFT_KEY, FLAG_COMMAND_KEY = 0x40000, 0x80000, 0x20000, 0x100000
+TAP_DISABLED_BY_TIMEOUT, TAP_DISABLED_BY_USER_INPUT = 0xFFFFFFFE, 0xFFFFFFFF
+
+
+def is_kill_chord(flags: int, keycode: int, autorepeat: bool = False) -> bool:
+    """Control, Option and Shift held and Command not (the headset's Ctrl becomes Command, so it can't match)."""
+    if autorepeat or keycode != KILL_KEYCODE:
+        return False
+    needed = FLAG_CONTROL | FLAG_OPTION | FLAG_SHIFT_KEY
+    return flags & needed == needed and not flags & FLAG_COMMAND_KEY
+
+
+# --- Permission rows -----------------------------------------------------------------------------
+
+SCREEN, ACCESSIBILITY, LISTEN = "Screen Recording", "Accessibility", "Input Monitoring"
+_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_"
+
+
+@dataclass(frozen=True)
+class Row:
+    name: str
+    ok: bool
+    settings_path: str
+    url: str
+    blocks: str  # what doesn't work without it
+
+    @property
+    def text(self) -> str:
+        return (f"{self.name} permission is missing: {self.blocks}.\n"
+                f"  Allow it in {self.settings_path}. It belongs to the app that started Python (Terminal, iTerm, "
+                f"VS Code ...), so quit and reopen that app after granting it.\n"
+                f"  Shortcut: open \"{self.url}\"")
+
+
+def permission_rows(screen: bool, ax: bool, listen: bool) -> list[Row]:
+    base = "System Settings > Privacy & Security > "
+    return [
+        Row(SCREEN, screen, base + "Screen & System Audio Recording (Screen Recording on macOS 13-14)",
+            _PANE + "ScreenCapture", "windows and screens can't be captured or listed by name"),
+        Row(ACCESSIBILITY, ax, base + "Accessibility", _PANE + "Accessibility",
+            "the headset can't click, type or raise windows"),
+        Row(LISTEN, listen, base + "Input Monitoring", _PANE + "ListenEvent",
+            "the kill-switch hotkey can't be heard (Ctrl+C in this terminal still stops the agent)"),
+    ]

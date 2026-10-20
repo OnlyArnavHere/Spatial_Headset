@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import agent
 import fake_headset
 import handshake
+import _test_keychain  # noqa: F401  (a throwaway Keychain entry on macOS)
 import identity
 import pairing
 import session

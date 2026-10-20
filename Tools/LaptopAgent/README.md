@@ -119,8 +119,8 @@ headset pointed.
 
 On a Mac the agent lists screens and windows and streams them with ffmpeg's `avfoundation` input (cropped to the window)
 and VideoToolbox, with libx264 as the fallback. Mouse, keyboard, text and media keys are posted as Quartz events
-(`hostos/_macos_input.py` holds the key table). The approval prompt, the kill hotkey and the identity key store are not
-done on macOS yet.
+(`hostos/_macos_input.py` holds the key table). The approval prompt is an osascript box, the kill hotkey is
+Ctrl+Option+Shift+Q (heard by a listen-only event tap) and the identity key is wrapped with a key in the login Keychain.
 
 ```
 brew install ffmpeg mediamtx
@@ -134,6 +134,10 @@ restart it:
 - **Screen & System Audio Recording** for capture.
 - **Accessibility** for input: clicks, keys, text and bringing the streamed window to the front. Without it macOS
   silently drops the events.
+- **Input Monitoring** for the kill-switch hotkey. Without it the agent only warns; Ctrl+C in the terminal still stops it.
+
+At start the agent checks these and prints the System Settings path and a shortcut (`open "x-apple.systempreferences:..."`)
+for each missing one. A missing Screen Recording (or Accessibility with `--input` or `--cast-only`) stops it.
 
 Ctrl on the headset keyboard acts as Command and Alt as Option; the Mac Control key can't be sent. Only the visible part
 of a window that hangs off the screen is streamed, and clicks map onto that part.
@@ -204,6 +208,9 @@ network: both sides prove they know it with HMACs under a PBKDF2-stretched key t
 you confirm on the headset, and then laptop and headset each pin the other's key. A code works once, lasts 120 seconds and
 is dead after 3 wrong tries. There is no QR code.
 
+On a Mac the same files live in the agent's home folder under `~/Library/Application Support` (or `SPATIAL_LAUNCHER_HOME`),
+and `identity.key` is encrypted with a random 32-byte key kept in your login Keychain (service `SpatialLauncher.agent.identity.v1`), so it can't be used on another Mac or user account. A missing or changed Keychain key is reported, never replaced silently.
+
 ## Risks
 
 Read these before using `--input` or `--keyboard`.
@@ -237,8 +244,9 @@ Read these before using `--input` or `--keyboard`.
 | `dispatch.py` | The input dispatcher: per-window input channels, the control state machine, cast-only rules, rate limits (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
-| `hostos/` | The OS layer every other module calls (`hostos.key(...)` etc.): `windows.py` wraps `winapi.py`; the macOS and Linux backends are stubs for now |
+| `hostos/` | The OS layer every other module calls (`hostos.key(...)` etc.): `windows.py` wraps `winapi.py`; `macos.py` is the macOS backend; Linux is a stub for now |
 | `hostos/macos.py`, `hostos/_macos_pure.py`, `hostos/_macos_input.py`, `hostos/_reaper.py` | macOS capture and input: Quartz screens and windows, the ffmpeg avfoundation arguments and crop maths (pure, tested everywhere), the VK-to-kVK table, click counting and wheel maths (pure, too), the kqueue watcher that ends child processes |
+| `hostos/_macos_secrets.py`, `_test_keychain.py` | The macOS identity wrap key (AES-GCM under a Keychain entry, through `keyring`); the test helper that points tests at a throwaway Keychain entry |
 | `winapi.py` | The Windows backend's calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), RSASSA-PKCS1-v1_5 (SHA-256) signatures and public-key fingerprints |
 | `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |
@@ -268,6 +276,9 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15.0 | BSD-3-Clause | Python package (`requirements.txt`): WebRTC link to the headset |
 | [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; its wheels bundle LGPL-licensed FFmpeg libraries |
 | [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | 0.151.5 | LGPL-2.1-or-later | Python package (`requirements.txt`): Bonjour discovery. Used as an unmodified, separately installed library |
+| [keyring](https://github.com/jaraco/keyring) | 25.7.0 | MIT | Python package (`requirements.txt`, macOS only): the Keychain wrap key |
+| jaraco.classes, jaraco.functools, jaraco.context, more-itertools | | MIT | keyring dependencies (macOS only) |
+| importlib_metadata, zipp, backports.tarfile | | Apache-2.0, MIT, MIT | keyring dependencies (macOS only, Python < 3.12) |
 | aioice 0.10.2, pylibsrtp 1.0.0 | | BSD-3-Clause | aiortc dependencies |
 | google-crc32c 1.9.0, pyOpenSSL 26.2.0 | | Apache-2.0 | aiortc dependencies (pyOpenSSL is pinned so `cryptography` stays at 46.0.5) |
 | ifaddr 0.2.0, pyee 15.0.0 | | MIT | aiortc / zeroconf dependencies |

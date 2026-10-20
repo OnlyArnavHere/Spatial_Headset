@@ -130,17 +130,19 @@ class InterfaceTests(unittest.TestCase):
             for name in FUNCTIONS + CONSTANTS:
                 self.assertTrue(hasattr(backend, name), f"hostos.{module}.{name}")
 
-    def test_stub_backends_say_what_is_missing(self):
-        for module in ("macos", "linux_x11"):
-            backend = importlib.import_module(f"hostos.{module}")
-            os_name = "macOS" if module == "macos" else "Linux"
-            with self.assertRaisesRegex(NotImplementedError, f"{os_name} support lands in a later commit"):
-                backend.open_prompt("x")  # still a stub on every backend
-            if module == "linux_x11":  # the macOS one starts a real watcher process now
-                with self.assertRaises(NotImplementedError):
-                    backend.ChildReaper()
-            if module == "linux_x11":
-                self.assertEqual(backend.preflight(), [])
+    def test_linux_backend_says_what_is_missing(self):
+        backend = importlib.import_module("hostos.linux_x11")
+        with self.assertRaisesRegex(NotImplementedError, "Linux support lands in a later commit"):
+            backend.open_prompt("x")
+        with self.assertRaises(NotImplementedError):
+            backend.ChildReaper()
+        self.assertEqual(backend.preflight(), [])
+
+    def test_macos_backend_has_no_stubs_left(self):
+        backend = importlib.import_module("hostos.macos")
+        for name in FUNCTIONS:
+            self.assertNotEqual(getattr(backend, name).__name__, "unsupported", name)
+        self.assertEqual(backend.KILL_SWITCH, "Ctrl+Option+Shift+Q")
 
 
 if __name__ == "__main__":

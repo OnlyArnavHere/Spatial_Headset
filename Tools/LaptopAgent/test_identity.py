@@ -9,6 +9,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 
+import _test_keychain  # noqa: F401  (a throwaway Keychain entry on macOS)
 import identity
 import winapi
 

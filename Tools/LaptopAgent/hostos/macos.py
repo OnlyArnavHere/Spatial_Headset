@@ -1,8 +1,9 @@
 """macOS backend: screens and windows through Quartz (pyobjc, imported lazily), captured by ffmpeg avfoundation.
 
-Capture, encoding and input (Quartz CGEvents posted at the HID tap) live here; prompts, the kill switch and secrets
-are still stubs (they raise NotImplementedError). Everything that needs no pyobjc is in _macos_pure.py and
-_macos_input.py so it can be tested on any OS.
+Capture, encoding and input (Quartz CGEvents posted at the HID tap) live here, with the approval box (osascript),
+the kill-switch hotkey (a listen-only event tap), the permission preflight and the Keychain-backed secrets. Everything
+that needs no pyobjc is in _macos_pure.py, _macos_input.py and _macos_secrets.py so it can be tested on any OS; pyobjc
+and keyring are imported inside the functions that use them.
 """
 import atexit
 import asyncio
@@ -11,18 +12,18 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from . import _macos_input as inp
 from . import _macos_pure as pure
-from ._stub import fill
+from . import _macos_secrets as secrets
 from .types import Monitor, Rect, Window
-
-fill(globals(), "macOS support lands in a later commit")
 
 log = logging.getLogger("hostos")
 exe_suffix = ""
+KILL_SWITCH = "Ctrl+Option+Shift+Q"
 WATCHER_CHECK_S = 0.2
 
 ENCODERS = [
@@ -130,12 +131,11 @@ def _trusted() -> bool:
     return bool(AXIsProcessTrusted())
 
 
-def preflight() -> list[tuple[str, bool, str]]:
-    where = ("System Settings > Privacy & Security > %s: allow the app you start the agent from (Terminal, iTerm, "
-             "VS Code ...), then restart that app")
-    return [("Screen Recording permission", bool(_quartz().CGPreflightScreenCaptureAccess()),
-             where % "Screen & System Audio Recording"),
-            ("Accessibility permission", _trusted(), where % "Accessibility")]
+def preflight() -> list[pure.Row]:
+    """Screen Recording, Accessibility and Input Monitoring, each with whether it is granted."""
+    q = _quartz()
+    return pure.permission_rows(bool(q.CGPreflightScreenCaptureAccess()), _trusted(),
+                                bool(q.CGPreflightListenEventAccess()))
 
 
 # --- Input: CGEvents posted at the HID tap, in global points with a top-left origin (what window_rect reports) ---
@@ -410,3 +410,139 @@ class ChildReaper:
             process.wait()
             raise OSError("child cleanup watcher is not running") from e
         return process
+
+
+# --- Approval box -------------------------------------------------------------------------------
+
+_live_prompts: set = set()  # osascript processes that are showing a box right now
+_prompt_atexit = False
+
+
+def _kill_live_prompts() -> None:
+    for process in list(_live_prompts):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+class _Prompt:
+    """A Yes/No box shown by osascript. wait() blocks the calling thread until it is answered, dismissed or times out;
+    dismiss() may be called from any thread, before or after wait() starts: a dismissal that comes first stops the box
+    from ever opening."""
+
+    def __init__(self, text: str, caption: str, timeout_ms: int) -> None:
+        self._timeout_s = pure.timeout_seconds(timeout_ms)
+        self._argv = pure.osascript_argv(text, caption, self._timeout_s)
+        self._lock = threading.Lock()
+        self._proc = None
+        self._cancelled = False
+
+    def wait(self) -> str:
+        global _prompt_atexit
+        with self._lock:
+            if self._cancelled:
+                return "no"
+            process = subprocess.Popen(self._argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+            self._proc = process
+            _live_prompts.add(process)
+            if not _prompt_atexit:
+                _prompt_atexit = True
+                atexit.register(_kill_live_prompts)
+        try:
+            out, err = process.communicate(timeout=self._timeout_s + 5)
+        except subprocess.TimeoutExpired:  # osascript hung past its own give-up time
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.communicate(timeout=5)
+            except Exception:
+                pass
+            return "timeout"
+        finally:
+            _live_prompts.discard(process)
+        return pure.parse_dialog(process.returncode, out, err)
+
+    def dismiss(self) -> bool:
+        with self._lock:
+            self._cancelled = True
+            process = self._proc
+            if process is None:
+                return True  # wait() hasn't started and now never opens a box
+            if process.poll() is not None:
+                return False
+            try:
+                process.kill()
+            except OSError:
+                return False
+            return True
+
+
+def open_prompt(text: str, caption: str, timeout_ms: int) -> _Prompt:
+    return _Prompt(text, caption, timeout_ms)
+
+
+# --- Kill switch: Ctrl+Option+Shift+Q, heard by a listen-only event tap (needs Input Monitoring) --------
+
+_tap = _tap_callback = _tap_source = None  # kept alive for the life of the process
+
+
+def watch_kill_switch(on_pressed) -> bool:
+    """Starts a thread that calls on_pressed (on that thread, like the Windows hotkey) each time the chord is pressed,
+    whichever app has focus. Returns False if the tap can't be created (Input Monitoring not granted)."""
+    global _tap, _tap_callback, _tap_source
+    q = _quartz()
+
+    def callback(proxy, event_type, event, refcon):
+        try:
+            if event_type in (pure.TAP_DISABLED_BY_TIMEOUT, pure.TAP_DISABLED_BY_USER_INPUT):
+                q.CGEventTapEnable(_tap, True)  # the system switches slow or interrupted taps off
+            elif event_type == q.kCGEventKeyDown:
+                if pure.is_kill_chord(q.CGEventGetFlags(event),
+                                      q.CGEventGetIntegerValueField(event, q.kCGKeyboardEventKeycode),
+                                      bool(q.CGEventGetIntegerValueField(event, q.kCGKeyboardEventAutorepeat))):
+                    on_pressed()
+        except Exception:  # never let an exception escape into the run loop
+            log.exception("kill switch callback failed")
+        return event
+
+    tap = q.CGEventTapCreate(q.kCGSessionEventTap, q.kCGHeadInsertEventTap, q.kCGEventTapOptionListenOnly,
+                             1 << q.kCGEventKeyDown, callback, None)
+    if tap is None:
+        return False
+    source = q.CFMachPortCreateRunLoopSource(None, tap, 0)
+    _tap, _tap_callback, _tap_source = tap, callback, source
+
+    def run() -> None:
+        q.CFRunLoopAddSource(q.CFRunLoopGetCurrent(), source, q.kCFRunLoopCommonModes)
+        q.CGEventTapEnable(tap, True)
+        q.CFRunLoopRun()
+
+    threading.Thread(target=run, name="kill-switch", daemon=True).start()
+    return True
+
+
+# --- Secrets: identity.key is encrypted under a random key kept in the login Keychain ---------------
+
+def _keyring():
+    try:
+        import keyring
+        import keyring.errors  # noqa: F401  (load_key looks for keyring.errors.KeyringError)
+    except ImportError as e:
+        raise OSError("the keyring package is missing; run: pip install -r requirements.txt") from e
+    return keyring
+
+
+def protect(data: bytes) -> bytes:
+    return secrets.protect(_keyring(), data)
+
+
+def unprotect(blob: bytes) -> bytes:
+    return secrets.unprotect(_keyring(), blob)
+
+
+def default_home() -> Path:
+    return Path.home() / "Library" / "Application Support" / "SpatialLauncher" / "agent"

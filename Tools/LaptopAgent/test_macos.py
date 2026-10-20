@@ -1,9 +1,12 @@
 """Tests for the macOS backend. The pure ones run everywhere (no pyobjc); the ones that touch the real system run on
 a Mac only."""
+import contextlib
+import io
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -277,6 +280,294 @@ class RealMacTests(unittest.TestCase):
             time.sleep(0.1)
         os.kill(child_pid, signal.SIGKILL)
         self.fail("the child outlived its parent")
+
+
+EVIL = ['"; do shell script "rm -rf ~" --"', '" & quit', "line one\nline two\r\n", "héllo 世界 \U0001F600", "-e", ""]
+
+
+class OsascriptTests(unittest.TestCase):
+    def test_text_travels_verbatim_after_the_double_dash_and_never_in_the_script(self):
+        for text in EVIL:
+            argv = pure.osascript_argv(text, "Spatial Launcher", 30)
+            self.assertEqual(argv, ["osascript", "-e", pure.SCRIPT, "--", text, "Spatial Launcher", "30"])
+            if text:
+                self.assertNotIn(text, pure.SCRIPT)
+        self.assertEqual(pure.osascript_argv("x", 'cap"tion', 5)[5], 'cap"tion')
+
+    def test_script_shape(self):
+        for part in ("on run argv", "item 1 of argv", "item 2 of argv", "item 3 of argv as integer",
+                     'buttons {"No", "Yes"}', 'default button "No"', 'cancel button "No"', "with icon caution",
+                     "giving up after"):
+            self.assertIn(part, pure.SCRIPT)
+        self.assertNotIn("tell application", pure.SCRIPT)
+
+    def test_timeout_rounds_up_from_milliseconds(self):
+        self.assertEqual([pure.timeout_seconds(ms) for ms in (30000, 1, 1000, 1001, 0)], [30, 1, 1, 2, 1])
+
+    def test_approval_asks_for_30_seconds(self):
+        import approval
+        self.assertEqual(pure.timeout_seconds(approval.PROMPT_TIMEOUT_MS), 30)
+
+    def test_parse_dialog(self):
+        cases = [
+            ((0, "button returned:Yes, gave up:false\n", ""), "yes"),
+            ((0, "button returned:, gave up:true\n", ""), "timeout"),
+            ((0, "button returned:No, gave up:false\n", ""), "no"),
+            ((1, "", "execution error: User canceled. (-128)\n"), "no"),
+            ((-9, "", ""), "no"),
+            ((0, "", ""), "no"),
+            ((1, "button returned:Yes, gave up:false", "boom"), "no"),
+            ((2, "", "syntax error"), "no"),
+        ]
+        for args, want in cases:
+            self.assertEqual(pure.parse_dialog(*args), want, args)
+
+
+class FakeBox:
+    def __init__(self, output="button returned:Yes, gave up:false\n", hold=False):
+        self.output, self.hold, self.returncode = output, hold, None
+        self.killed = threading.Event()
+        self.started = threading.Event()
+
+    def communicate(self, timeout=None):
+        self.started.set()
+        if self.hold:
+            self.killed.wait(5)
+        if self.killed.is_set():
+            self.returncode = -9
+            return "", ""
+        self.returncode = 0
+        return self.output, ""
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed.set()
+
+
+class PromptTests(unittest.TestCase):
+    def prompt(self, process):
+        from hostos import macos
+        patcher = mock.patch.object(macos.subprocess, "Popen", return_value=process)
+        self.popen = patcher.start()
+        self.addCleanup(patcher.stop)
+        return macos.open_prompt("text", "caption", 30000)
+
+    def test_answers(self):
+        for output, want in (("button returned:Yes, gave up:false", "yes"), ("button returned:, gave up:true", "timeout")):
+            self.assertEqual(self.prompt(FakeBox(output)).wait(), want)
+
+    def test_a_hung_osascript_times_out_after_timeout_plus_five(self):
+        from hostos import macos
+
+        class Hung:
+            returncode = None
+            def __init__(self): self.calls, self.killed = [], False
+            def communicate(self, timeout=None):
+                self.calls.append(timeout)
+                if not self.killed:
+                    raise macos.subprocess.TimeoutExpired("osascript", timeout)
+                return "", ""
+            def poll(self): return self.returncode
+            def kill(self): self.killed = True
+
+        hung = Hung()
+        self.assertEqual(self.prompt(hung).wait(), "timeout")
+        self.assertEqual(hung.calls[0], 35)
+        self.assertTrue(hung.killed)
+
+    def test_popen_gets_the_argv_and_no_shell(self):
+        self.prompt(FakeBox()).wait()
+        self.assertEqual(self.popen.call_args.args[0], pure.osascript_argv("text", "caption", 30))
+        self.assertFalse(self.popen.call_args.kwargs.get("shell"))
+
+    def test_dismiss_before_wait_prevents_the_box(self):
+        prompt = self.prompt(FakeBox())
+        self.assertTrue(prompt.dismiss())
+        self.assertEqual(prompt.wait(), "no")
+        self.popen.assert_not_called()
+
+    def test_dismiss_during_wait_kills_the_box(self):
+        process = FakeBox(hold=True)
+        prompt = self.prompt(process)
+        result = []
+        thread = threading.Thread(target=lambda: result.append(prompt.wait()))
+        thread.start()
+        self.assertTrue(process.started.wait(5))
+        self.assertTrue(prompt.dismiss())
+        thread.join(5)
+        self.assertEqual(result, ["no"])
+        self.assertTrue(process.killed.is_set())
+
+    def test_dismiss_after_the_answer_does_nothing(self):
+        process = FakeBox()
+        prompt = self.prompt(process)
+        self.assertEqual(prompt.wait(), "yes")
+        self.assertFalse(prompt.dismiss())
+        self.assertFalse(process.killed.is_set())
+
+    def test_a_hammering_dismisser_never_loses_the_race(self):
+        from hostos import macos
+        for _ in range(50):
+            process = FakeBox(hold=True)
+            with mock.patch.object(macos.subprocess, "Popen", return_value=process):
+                prompt = macos.open_prompt("t", "c", 1000)
+                result = []
+                waiter = threading.Thread(target=lambda: result.append(prompt.wait()))
+                waiter.start()
+                while waiter.is_alive() and not prompt.dismiss():
+                    pass
+                waiter.join(5)
+            self.assertFalse(waiter.is_alive())
+            self.assertEqual(result, ["no"])
+
+    def test_live_boxes_are_killed_at_exit(self):
+        from hostos import macos
+        process = FakeBox()
+        macos._live_prompts.add(process)
+        try:
+            macos._kill_live_prompts()
+        finally:
+            macos._live_prompts.discard(process)
+        self.assertTrue(process.killed.is_set())
+
+
+class KillChordTests(unittest.TestCase):
+    CTRL, OPT, SHIFT, CMD = 0x40000, 0x80000, 0x20000, 0x100000
+
+    def test_truth_table(self):
+        full = self.CTRL | self.OPT | self.SHIFT
+        for flags, code, repeat, want in [
+            (full, 12, False, True),
+            (full | 0x10000, 12, False, True),             # caps lock does not matter
+            (full, 12, True, False),                       # autorepeat
+            (full, 13, False, False),                      # not Q
+            (full | self.CMD, 12, False, False),
+            (self.CMD | self.OPT | self.SHIFT, 12, False, False),  # Cmd+Option+Shift+Q (log out) is not ours
+            (self.OPT | self.SHIFT, 12, False, False),
+            (self.CTRL | self.SHIFT, 12, False, False),
+            (self.CTRL | self.OPT, 12, False, False),
+            (0, 12, False, False),
+        ]:
+            self.assertEqual(pure.is_kill_chord(flags, code, repeat), want, (hex(flags), code, repeat))
+
+    def test_the_headset_can_never_produce_the_chord(self):
+        import itertools
+        from hostos import _macos_input as inp
+        ctrl, alt, shift = 0x11, 0x12, 0x10
+        self.assertEqual(inp.MODIFIER_FLAGS[ctrl], self.CMD)  # Ctrl is Command
+        for held in itertools.chain.from_iterable(itertools.combinations((ctrl, alt, shift), n) for n in range(4)):
+            modifiers = inp.Modifiers()
+            for vk in held:
+                modifiers.update(vk, True)
+            self.assertFalse(modifiers.mask & self.CTRL, held)
+            self.assertFalse(pure.is_kill_chord(modifiers.mask, 12), held)
+
+    def test_tap_disabled_codes(self):
+        self.assertEqual((pure.TAP_DISABLED_BY_TIMEOUT, pure.TAP_DISABLED_BY_USER_INPUT), (0xFFFFFFFE, 0xFFFFFFFF))
+
+
+class PermissionRowTests(unittest.TestCase):
+    def test_rows_urls_and_text(self):
+        rows = pure.permission_rows(True, False, True)
+        self.assertEqual([(r.name, r.ok) for r in rows],
+                         [("Screen Recording", True), ("Accessibility", False), ("Input Monitoring", True)])
+        self.assertEqual([r.url for r in rows], [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"])
+        self.assertIn("Screen & System Audio Recording", rows[0].settings_path)
+        self.assertIn("Screen Recording on macOS 13-14", rows[0].settings_path)
+        self.assertTrue(rows[1].settings_path.endswith("Privacy & Security > Accessibility"))
+        self.assertTrue(rows[2].settings_path.endswith("Privacy & Security > Input Monitoring"))
+        for row in rows:
+            self.assertIn("app that started Python", row.text)
+            self.assertIn("quit and reopen that app", row.text)
+            self.assertIn(row.url, row.text)
+            self.assertIn(row.name, row.text)
+
+
+def parsed(*argv):
+    import agent
+    with mock.patch.object(sys, "argv", ["agent.py", *argv]):
+        return agent.parse_args()
+
+
+class CheckPermissionsTests(unittest.TestCase):
+    def run_check(self, argv, screen=True, ax=True, listen=True):
+        import agent
+        err = io.StringIO()
+        refused = False
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()) as out:
+            try:
+                agent.check_permissions(parsed(*argv), pure.permission_rows(screen, ax, listen))
+            except SystemExit:
+                refused = True
+        self.assertEqual(out.getvalue(), "")
+        return refused, err.getvalue()
+
+    def test_windows_has_no_rows_and_prints_nothing(self):
+        import agent
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()) as out:
+            agent.check_permissions(parsed("--input"), [])
+        self.assertEqual(err.getvalue() + out.getvalue(), "")
+
+    def test_all_granted_prints_nothing(self):
+        for argv in ([], ["--input"], ["--cast-only"], ["--list"]):
+            self.assertEqual(self.run_check(argv), (False, ""), argv)
+
+    def test_screen_recording_refuses_unless_only_listing_or_pairing(self):
+        for argv in ([], ["--input"], ["--cast-only"], ["--window", "x"]):
+            refused, text = self.run_check(argv, screen=False)
+            self.assertTrue(refused, argv)
+            self.assertIn("error: Screen Recording", text)
+        for argv in (["--list"], ["--pairs"], ["--pair"], ["--revoke", "A"]):
+            refused, text = self.run_check(argv, screen=False)
+            self.assertFalse(refused, argv)
+            self.assertIn("warning: Screen Recording", text)
+
+    def test_accessibility_refuses_only_input_and_cast_only(self):
+        for argv in (["--input"], ["--input", "--keyboard"], ["--cast-only"]):
+            refused, text = self.run_check(argv, ax=False)
+            self.assertTrue(refused, argv)
+            self.assertIn("error: Accessibility", text)
+        for argv in ([], ["--list"], ["--pair"], ["--window", "x"]):
+            self.assertEqual(self.run_check(argv, ax=False), (False, ""), argv)
+
+    def test_input_monitoring_only_warns(self):
+        for argv in ([], ["--input"], ["--cast-only"], ["--list"]):
+            refused, text = self.run_check(argv, listen=False)
+            self.assertFalse(refused, argv)
+            self.assertIn("warning: Input Monitoring", text)
+            self.assertNotIn("Screen Recording", text)
+
+    def test_only_the_missing_rows_print(self):
+        refused, text = self.run_check(["--input"], screen=False, ax=False)
+        self.assertTrue(refused)
+        self.assertIn("Screen Recording", text)
+        self.assertIn("Accessibility", text)
+        self.assertNotIn("Input Monitoring", text)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "needs macOS")
+class MacOnlyApprovalTests(unittest.TestCase):
+    def test_tap_creation_returns_a_bool(self):
+        import hostos.macos as backend
+        self.assertIsInstance(backend.watch_kill_switch(lambda: None), bool)
+
+    @unittest.skipUnless(os.environ.get("SL_UI_TESTS") == "1", "set SL_UI_TESTS=1 to show a real dialog")
+    def test_real_dialog_can_be_dismissed(self):
+        import hostos.macos as backend
+        prompt = backend.open_prompt("Test box, dismissed by the test", "Spatial Launcher test", 30000)
+        result = []
+        thread = threading.Thread(target=lambda: result.append(prompt.wait()))
+        thread.start()
+        time.sleep(1.5)
+        self.assertTrue(prompt.dismiss())
+        thread.join(10)
+        self.assertEqual(result, ["no"])
 
 
 if __name__ == "__main__":

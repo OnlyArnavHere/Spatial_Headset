@@ -238,6 +238,25 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReape
     return launch
 
 
+def check_permissions(args: argparse.Namespace, rows: list) -> None:
+    """Tells the user which OS permissions are missing (macOS; Windows has none, so rows is empty and nothing prints).
+    Missing Screen Recording stops the agent unless it only lists or pairs; missing Accessibility stops --input and
+    --cast-only; missing Input Monitoring only costs the kill-switch hotkey, so it warns."""
+    lists_only = args.list or args.pairs or args.pair or args.revoke is not None
+    needs_input = args.input or args.cast_only
+    refused = False
+    for row in rows:
+        if row.ok:
+            continue
+        if row.name == "Accessibility" and not needs_input:
+            continue  # nothing in this run injects input or raises windows
+        refuse = (row.name == "Screen Recording" and not lists_only) or (row.name == "Accessibility")
+        refused = refused or refuse
+        print(("error: " if refuse else "warning: ") + row.text, file=sys.stderr)
+    if refused:
+        raise SystemExit("Grant the permission above, restart the app you run this from, and start the agent again.")
+
+
 def watch_kill_switch(runner: LinkRunner) -> None:
     """Ctrl+Alt+Shift+Q ends every session and stops video and dialling for the rest of the run. The hotkey thread hops
     onto the event loop before touching anything."""
@@ -245,7 +264,8 @@ def watch_kill_switch(runner: LinkRunner) -> None:
     if hostos.watch_kill_switch(lambda: loop.call_soon_threadsafe(runner.kill_switch)):
         log.info("Kill switch: press %s on this laptop to end every session and stop the video", hostos.KILL_SWITCH)
     else:
-        log.warning("Kill switch %s is taken by another program; stop the agent with Ctrl+C instead",
+        log.warning("Kill switch %s is unavailable (taken by another program, or Input Monitoring is not granted on "
+                    "macOS); stop the agent with Ctrl+C instead",
                     hostos.KILL_SWITCH)
 
 
@@ -468,6 +488,7 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     hostos.make_dpi_aware()
+    check_permissions(args, hostos.preflight())
 
     if args.list:
         list_targets()

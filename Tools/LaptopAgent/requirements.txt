@@ -12,3 +12,11 @@ pyobjc-core==11.1; sys_platform == "darwin"  # MIT (macOS screens and windows)
 pyobjc-framework-Quartz==11.1; sys_platform == "darwin"  # MIT
 pyobjc-framework-Cocoa==11.1; sys_platform == "darwin"  # MIT
 pyobjc-framework-ApplicationServices==11.1; sys_platform == "darwin"  # MIT (AXIsProcessTrusted, AXUIElement*)
+keyring==25.7.0; sys_platform == "darwin"  # MIT (Keychain wrap key)
+jaraco.classes==3.4.0; sys_platform == "darwin"  # MIT (keyring)
+jaraco.functools==4.4.0; sys_platform == "darwin"  # MIT (keyring)
+jaraco.context==6.0.2; sys_platform == "darwin"  # MIT (keyring)
+more-itertools==10.8.0; sys_platform == "darwin"  # MIT (jaraco.classes, jaraco.functools)
+importlib_metadata==8.7.1; (sys_platform == "darwin") and python_version < "3.12"  # Apache-2.0 (keyring)
+zipp==3.23.0; (sys_platform == "darwin") and python_version < "3.12"  # MIT (importlib_metadata)
+backports.tarfile==1.2.0; (sys_platform == "darwin") and python_version < "3.12"  # MIT (jaraco.context)
