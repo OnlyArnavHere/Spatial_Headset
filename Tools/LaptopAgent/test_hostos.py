@@ -135,7 +135,7 @@ class InterfaceTests(unittest.TestCase):
             backend = importlib.import_module(f"hostos.{module}")
             os_name = "macOS" if module == "macos" else "Linux"
             with self.assertRaisesRegex(NotImplementedError, f"{os_name} support lands in a later commit"):
-                backend.type_text("x")  # still a stub on every backend
+                backend.open_prompt("x")  # still a stub on every backend
             if module == "linux_x11":  # the macOS one starts a real watcher process now
                 with self.assertRaises(NotImplementedError):
                     backend.ChildReaper()

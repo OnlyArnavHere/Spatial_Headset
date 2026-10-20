@@ -112,6 +112,13 @@ class RoutingTests(Base):
             self.send(d, 0, down())
         self.assertEqual(len(self.rec.of("mouse_button")), 0)
 
+    def test_a_clamped_visible_rect_maps_the_point_inside_the_visible_part(self):
+        d = self.make()
+        clamp = lambda rect: hostos.Rect(rect.left, rect.top, rect.left + 200, rect.bottom)  # half off the screen
+        with mock.patch.object(hostos, "visible_rect", clamp):
+            self.send(d, 0, down(1.0, 1.0), down(0.5, 0.0))
+        self.assertEqual([c[1:3] for c in self.rec.of("mouse_button")], [(299, 599), (200, 100)])
+
     def test_dry_run_acks_go_back_on_the_slots_own_channel(self):
         d = self.make(dry_run=True)
         self.send(d, 1, key("A", True), key("A", False), {"type": "text", "text": "Hi"}, down())

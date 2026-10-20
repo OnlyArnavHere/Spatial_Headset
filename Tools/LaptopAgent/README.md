@@ -115,11 +115,12 @@ compare:
 `clock.py` also marks and prints where it is clicked, which is handy for checking that injected clicks land where the
 headset pointed.
 
-### macOS (capture only so far)
+### macOS (capture and mouse/keyboard input)
 
 On a Mac the agent lists screens and windows and streams them with ffmpeg's `avfoundation` input (cropped to the window)
-and VideoToolbox, with libx264 as the fallback. Mouse, keyboard, the approval prompt, the kill hotkey and the identity key
-store are not done on macOS yet, so `--input` does not work there.
+and VideoToolbox, with libx264 as the fallback. Mouse, keyboard, text and media keys are posted as Quartz events
+(`hostos/_macos_input.py` holds the key table). The approval prompt, the kill hotkey and the identity key store are not
+done on macOS yet.
 
 ```
 brew install ffmpeg mediamtx
@@ -127,8 +128,18 @@ python3 setup.py          # downloads nothing here; checks Homebrew's tools and 
 python3 agent.py --list
 ```
 
-Allow the app you run the agent from (Terminal, iTerm) under System Settings > Privacy & Security > Screen & System
-Audio Recording, then restart it. Child processes (ffmpeg, MediaMTX) are cleaned up by a small watcher process
+Allow the app you run the agent from (Terminal, iTerm, VS Code) under System Settings > Privacy & Security, then
+restart it:
+
+- **Screen & System Audio Recording** for capture.
+- **Accessibility** for input: clicks, keys, text and bringing the streamed window to the front. Without it macOS
+  silently drops the events.
+
+Ctrl on the headset keyboard acts as Command and Alt as Option; the Mac Control key can't be sent. Only the visible part
+of a window that hangs off the screen is streamed, and clicks map onto that part.
+If the agent crashes while a key is held, macOS can keep Cmd logically down; pressing Cmd once clears it.
+
+Child processes (ffmpeg, MediaMTX) are cleaned up by a small watcher process
 (`hostos/_reaper.py`) when the agent exits, however it exits. One gap: a child started in the instant before the
 agent is killed with `kill -9` can survive; stop it by hand if `--list` or a restart finds one still running.
 
@@ -227,7 +238,7 @@ Read these before using `--input` or `--keyboard`.
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
 | `hostos/` | The OS layer every other module calls (`hostos.key(...)` etc.): `windows.py` wraps `winapi.py`; the macOS and Linux backends are stubs for now |
-| `hostos/macos.py`, `hostos/_macos_pure.py`, `hostos/_reaper.py` | macOS capture: Quartz screens and windows, the ffmpeg avfoundation arguments and crop maths (pure, tested everywhere), the kqueue watcher that ends child processes |
+| `hostos/macos.py`, `hostos/_macos_pure.py`, `hostos/_macos_input.py`, `hostos/_reaper.py` | macOS capture and input: Quartz screens and windows, the ffmpeg avfoundation arguments and crop maths (pure, tested everywhere), the VK-to-kVK table, click counting and wheel maths (pure, too), the kqueue watcher that ends child processes |
 | `winapi.py` | The Windows backend's calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), RSASSA-PKCS1-v1_5 (SHA-256) signatures and public-key fingerprints |
 | `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |

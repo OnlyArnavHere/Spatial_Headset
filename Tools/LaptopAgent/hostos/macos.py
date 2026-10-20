@@ -1,14 +1,20 @@
 """macOS backend: screens and windows through Quartz (pyobjc, imported lazily), captured by ffmpeg avfoundation.
 
-Capture and encoding live here; input, prompts, the kill switch and secrets are still stubs (they raise
-NotImplementedError). Everything that needs no pyobjc is in _macos_pure.py so it can be tested on any OS.
+Capture, encoding and input (Quartz CGEvents posted at the HID tap) live here; prompts, the kill switch and secrets
+are still stubs (they raise NotImplementedError). Everything that needs no pyobjc is in _macos_pure.py and
+_macos_input.py so it can be tested on any OS.
 """
+import atexit
+import asyncio
 import logging
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+from . import _macos_input as inp
 from . import _macos_pure as pure
 from ._stub import fill
 from .types import Monitor, Rect, Window
@@ -78,7 +84,14 @@ def request_repaint(handle: int) -> None:
     pass  # avfoundation delivers frames continuously; nothing to poke
 
 
+_display_cache = inp.TtlCache(1.0, time.monotonic)  # every mouse move asks for the visible rect
+
+
 def _displays() -> list[pure.Display]:
+    return _display_cache.get(_query_displays)
+
+
+def _query_displays() -> list[pure.Display]:
     q = _quartz()
     err, ids, count = q.CGGetActiveDisplayList(16, None, None)
     if err != 0:
@@ -112,10 +125,207 @@ def monitor_selector(handle: int) -> str:
     return f"display={handle}"
 
 
+def _trusted() -> bool:
+    from ApplicationServices import AXIsProcessTrusted
+    return bool(AXIsProcessTrusted())
+
+
 def preflight() -> list[tuple[str, bool, str]]:
+    where = ("System Settings > Privacy & Security > %s: allow the app you start the agent from (Terminal, iTerm, "
+             "VS Code ...), then restart that app")
     return [("Screen Recording permission", bool(_quartz().CGPreflightScreenCaptureAccess()),
-             "System Settings > Privacy & Security > Screen & System Audio Recording: allow the app you start the "
-             "agent from (Terminal, iTerm, ...), then restart that app")]
+             where % "Screen & System Audio Recording"),
+            ("Accessibility permission", _trusted(), where % "Accessibility")]
+
+
+# --- Input: CGEvents posted at the HID tap, in global points with a top-left origin (what window_rect reports) ---
+
+_modifiers = inp.Modifiers()
+_buttons = inp.ButtonState()
+_clicks = inp.ClickCounter()
+_wheel = inp.WheelAccumulator()
+
+
+_last_point = (0, 0)
+_cleanup_installed = False
+
+
+def _release_everything() -> None:
+    """Lets go of held modifiers and buttons, so a crashed agent doesn't leave Cmd or a button logically down."""
+    for kind, what in inp.release_list(_modifiers.held, _buttons.held):
+        try:
+            if kind == "key":
+                key(what, False)
+            else:
+                mouse_button(_last_point[0], _last_point[1], what, False)
+        except Exception:  # best effort while exiting
+            log.debug("release at exit failed", exc_info=True)
+
+
+def _on_sigterm(signum, frame) -> None:
+    _release_everything()
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _install_cleanup() -> None:
+    global _cleanup_installed
+    if _cleanup_installed:
+        return
+    _cleanup_installed = True
+    atexit.register(_release_everything)
+    try:
+        if signal.getsignal(signal.SIGTERM) == signal.SIG_DFL:  # never override a handler someone else installed
+            signal.signal(signal.SIGTERM, _on_sigterm)
+    except ValueError:  # not the main thread
+        pass
+
+
+def _post(event) -> None:
+    _install_cleanup()
+    q = _quartz()
+    q.CGEventSetFlags(event, _modifiers.mask)
+    q.CGEventPost(q.kCGHIDEventTap, event)
+
+
+def _mouse_event(kind: int, x: int, y: int, button: str):
+    q = _quartz()
+    return q.CGEventCreateMouseEvent(None, kind, (float(x), float(y)),
+                                     q.kCGMouseButtonRight if button == "right" else q.kCGMouseButtonLeft)
+
+
+def mouse_move(x, y):
+    global _last_point
+    _last_point = (x, y)
+    kind = _buttons.move_event()
+    _post(_mouse_event(kind, x, y, "right" if kind == inp.RIGHT_DRAGGED else "left"))
+
+
+def mouse_button(x, y, button, down):
+    global _last_point
+    from AppKit import NSEvent
+    q = _quartz()
+    _last_point = (x, y)
+    if down:
+        count = _clicks.press(button, x, y, time.monotonic(), float(NSEvent.doubleClickInterval()))
+    else:
+        count = _clicks.release()
+    _buttons.set(button, down)
+    event = _mouse_event(inp.button_event(button, down), x, y, button)
+    q.CGEventSetIntegerValueField(event, q.kCGMouseEventClickState, count)
+    _post(event)
+
+
+def mouse_wheel(x, y, notches):
+    q = _quartz()
+    lines = _wheel.lines(notches)
+    if lines == 0:
+        return
+    mouse_move(x, y)  # a warp would suppress local events for 0.25 s and skip the drag state
+    event = q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitLine, 1, lines)
+    q.CGEventSetLocation(event, (float(x), float(y)))
+    _post(event)
+
+
+def key(vk, down, extended=False):
+    q = _quartz()
+    nx = inp.MEDIA_VK_TO_NX.get(vk)
+    if nx is not None:
+        from AppKit import NSEvent
+        data1 = inp.media_data1(nx, down)
+        event = NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            14, (0, 0), inp.media_flags(down), 0, 0, None, 8, data1, -1)
+        q.CGEventPost(q.kCGHIDEventTap, event.CGEvent())
+        return
+    kvk = inp.kvk_for(vk)
+    _modifiers.update(vk, down)
+    _post(q.CGEventCreateKeyboardEvent(None, kvk, bool(down)))
+
+
+def type_text(text):
+    q = _quartz()
+    for chunk in inp.unicode_chunks(text):
+        units = inp.utf16_length(chunk)
+        for down in (True, False):
+            event = q.CGEventCreateKeyboardEvent(None, 0, down)
+            q.CGEventKeyboardSetUnicodeString(event, units, chunk)
+            q.CGEventSetFlags(event, 0)
+            q.CGEventPost(q.kCGHIDEventTap, event)
+
+
+# --- Windows: stacking order, activation and focus -----------------------------------------------
+
+def window_at(x, y):
+    return inp.window_at(x, y, _onscreen())
+
+
+def foreground_window():
+    from AppKit import NSWorkspace
+    app = NSWorkspace.sharedWorkspace().frontmostApplication()
+    return inp.frontmost_window(int(app.processIdentifier()), _onscreen()) if app else 0
+
+
+def raise_window(handle):
+    from AppKit import NSRunningApplication
+    import ApplicationServices as ax
+    info = inp.info_of(handle, _all())
+    if info is None:
+        return
+    pid, name, bounds = int(info["kCGWindowOwnerPID"]), info.get("kCGWindowName"), info.get("kCGWindowBounds") or {}
+    app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    if app is not None:
+        if hasattr(app, "activate"):  # macOS 14+
+            app.activate()
+        else:
+            from AppKit import NSApplicationActivateIgnoringOtherApps
+            app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+    root = ax.AXUIElementCreateApplication(pid)
+
+    def attribute(element, attr):
+        err, value = ax.AXUIElementCopyAttributeValue(element, attr, None)
+        return value if err == 0 else None
+
+    def unpack(value, kind):
+        if value is None:
+            return None
+        ok, result = ax.AXValueGetValue(value, kind, None)
+        return result if ok else None
+
+    candidates = []
+    for window in attribute(root, ax.kAXWindowsAttribute) or []:
+        position = unpack(attribute(window, ax.kAXPositionAttribute), ax.kAXValueCGPointType)
+        size = unpack(attribute(window, ax.kAXSizeAttribute), ax.kAXValueCGSizeType)
+        if position is not None and size is not None:
+            candidates.append((window, attribute(window, ax.kAXTitleAttribute), (position.x, position.y),
+                               (size.width, size.height)))
+    window = inp.pick_ax_window(candidates, name, bounds)
+    if window is not None:
+        ax.AXUIElementPerformAction(window, ax.kAXRaiseAction)
+        ax.AXUIElementSetAttributeValue(window, ax.kAXMainAttribute, True)
+
+
+FOCUS_WAIT_S = 0.2
+
+
+def _on_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+def focus_window(handle):
+    raise_window(handle)
+    if _on_event_loop():  # the data-channel handlers call this on the asyncio thread: never sleep there
+        return foreground_window() == handle
+    deadline = time.monotonic() + FOCUS_WAIT_S
+    while True:
+        if foreground_window() == handle:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
 
 
 # --- Capture and encoding ----------------------------------------------------------------------

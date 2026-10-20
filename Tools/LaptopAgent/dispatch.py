@@ -419,7 +419,13 @@ class InputDispatcher:
         if not target.usable():
             return None  # window closed or minimized: drop input rather than click whatever is behind it
         rect = target.rect()
-        if rect is None or rect.width <= 0 or rect.height <= 0:
+        if rect is None:
+            return None
+        try:
+            rect = hostos.visible_rect(rect)  # macOS streams only the part of the window that is on its display
+        except LookupError:
+            return None
+        if rect.width <= 0 or rect.height <= 0:
             return None
         try:
             nx, ny = float(message["x"]), float(message["y"])

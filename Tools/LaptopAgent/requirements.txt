@@ -11,3 +11,4 @@ pyOpenSSL==26.2.0  # Apache-2.0 (aiortc; keeps cryptography at 46.0.5)
 pyobjc-core==11.1; sys_platform == "darwin"  # MIT (macOS screens and windows)
 pyobjc-framework-Quartz==11.1; sys_platform == "darwin"  # MIT
 pyobjc-framework-Cocoa==11.1; sys_platform == "darwin"  # MIT
+pyobjc-framework-ApplicationServices==11.1; sys_platform == "darwin"  # MIT (AXIsProcessTrusted, AXUIElement*)
