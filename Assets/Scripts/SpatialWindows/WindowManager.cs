@@ -25,6 +25,8 @@ namespace SpatialLauncher.SpatialWindows
         [Header("Rendering")]
         [Tooltip("Base material for window quads. Defaults to URP Unlit.")]
         [SerializeField] Material windowMaterial;
+        [Tooltip("Glass material for window bodies (Assets/Materials/SpatialGlass.mat). Without it windows get a plain dark body.")]
+        [SerializeField] Material glassMaterial;
 
         [Header("Spawning")]
         [SerializeField] float spawnDistance = 1.5f;
@@ -66,6 +68,7 @@ namespace SpatialLauncher.SpatialWindows
         public SpatialWindow FocusedWindow => windows.Count > 0 ? windows[windows.Count - 1] : null;
         /// <summary>Base material for window quads; content can reuse it for its own quads.</summary>
         public Material WindowMaterial => windowMaterial;
+        public Material GlassMaterial => glassMaterial;
         public Vector2 MinSize => minSize;
         public Vector2 MaxSize => maxSize;
 
@@ -231,7 +234,7 @@ namespace SpatialLauncher.SpatialWindows
             var window = go.AddComponent<SpatialWindow>();
             var aspect = size.HasValue ? AspectPreset.Free : defaultAspect;
             window.Initialize(title, AspectPresets.Fit(size ?? defaultSize, aspect, minSize, maxSize), windowMaterial, h,
-                billboardByDefault, worldLockedByDefault);
+                billboardByDefault, worldLockedByDefault, glassMaterial);
             window.SetAspectPreset(aspect);
             window.SetCurve(defaultCurve);
             window.AspectRequested += SetAspect;

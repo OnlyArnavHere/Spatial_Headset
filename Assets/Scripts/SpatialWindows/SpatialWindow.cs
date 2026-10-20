@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -29,12 +30,34 @@ namespace SpatialLauncher.SpatialWindows
         const float DecorationDepth = 0.002f;
         const float ContentDepth = 0.003f;
 
-        // Each part gets a distinct colour so it stays recognisable over any content.
-        static readonly Color BodyColor = new Color(0.10f, 0.10f, 0.12f);         // near-black frame
-        static readonly Color TitleColor = new Color(0.32f, 0.34f, 0.40f);        // slate, unfocused
-        static readonly Color TitleFocusedColor = new Color(0.16f, 0.36f, 0.95f); // bright blue, focused
-        static readonly Color CloseColor = new Color(0.90f, 0.22f, 0.22f);        // red
-        static readonly Color HandleColor = new Color(1.00f, 0.75f, 0.15f);       // amber
+        // The shadow quad sits this far behind the body, so it sorts behind it.
+        const float ShadowDepth = 0.002f;
+        // Render queue of the shadow: before the glass (Transparent-50 = 2950) and every other transparent thing.
+        const int ShadowQueue = 2940;
+        // The title text sits this far in from the left and down from the top of the glass.
+        static readonly float TitleInset = UITheme.PtToMetres(24f);
+        // Height of the glass slab above the body: the gap and the title row.
+        const float SlabExtra = TitleBarGap + TitleBarHeight;
+        // A focused window's rim is this much stronger (same factor as the hover rim in the design spec).
+        const float FocusRimBoost = 1.5f;
+
+        static readonly Color BodyColor = new Color(0.10f, 0.10f, 0.12f);  // only if no glass material is assigned
+        static readonly Color CloseColor = UITheme.Destructive;
+        static readonly Color HandleColor = UITheme.Accent;
+
+        static readonly int TintId = Shader.PropertyToID("_Tint");
+        static readonly int FallbackId = Shader.PropertyToID("_Fallback");
+        static readonly int RimTopId = Shader.PropertyToID("_RimTop");
+        static readonly int RimBottomId = Shader.PropertyToID("_RimBottom");
+        static readonly int RimWidthId = Shader.PropertyToID("_RimWidth");
+        static readonly int ShadowColorId = Shader.PropertyToID("_ShadowColor");
+        static readonly int ShadowBlurId = Shader.PropertyToID("_ShadowBlur");
+        static readonly int ShadowOffsetId = Shader.PropertyToID("_ShadowOffset");
+        static readonly int RadiusId = Shader.PropertyToID("_Radius");
+        static readonly int SizeId = Shader.PropertyToID("_Size");
+        static readonly int QuadId = Shader.PropertyToID("_Quad");
+        static readonly int SolidId = Shader.PropertyToID("_Solid");
+        static readonly int ShadowOnlyId = Shader.PropertyToID("_ShadowOnly");
 
         [SerializeField] bool billboard = true;
         [Tooltip("Only rotate around the vertical axis when billboarding, so windows stay upright.")]
@@ -97,9 +120,11 @@ namespace SpatialLauncher.SpatialWindows
 
         Transform head;
         Transform visualRoot;
-        Transform body, titleBar, closeButton, resizeHandle;
+        Transform body, slab, shadow, titleBar, closeButton, resizeHandle;
         TextMeshPro titleText;
-        Material titleMaterial;
+        MeshRenderer bodyRenderer, slabRenderer, shadowRenderer;
+        MaterialPropertyBlock glassBlock;
+        bool solid;
         readonly List<Material> materials = new List<Material>();
 
         // Focus presentation: how far the visuals sit towards the viewer, and their scale.
@@ -111,31 +136,46 @@ namespace SpatialLauncher.SpatialWindows
         Quaternion headLocalRotation;
 
         public void Initialize(string title, Vector2 size, Material baseMaterial, Transform headTransform,
-            bool useBillboard, bool useWorldLock)
+            bool useBillboard, bool useWorldLock, Material glassMaterial = null)
         {
             Title = title;
             head = headTransform;
             billboard = useBillboard;
             name = $"Window - {title}";
 
-            Build(baseMaterial);
+            Build(baseMaterial, glassMaterial);
             SetSize(size, keepTopLeft: false);
             FaceHead();
             WorldLocked = useWorldLock;
         }
 
-        void Build(Material baseMaterial)
+        void Build(Material baseMaterial, Material glassMaterial)
         {
             visualRoot = new GameObject("Visual").transform;
             visualRoot.SetParent(transform, false);
 
-            body = CreateQuad("Body", visualRoot, MakeMaterial(baseMaterial, BodyColor), WindowPartType.Content);
-            titleMaterial = MakeMaterial(baseMaterial, TitleColor);
-            titleBar = CreateQuad("TitleBar", visualRoot, titleMaterial, WindowPartType.TitleBar);
+            bool glass = glassMaterial != null;
+            body = CreateQuad("Body", visualRoot, glass ? glassMaterial : MakeMaterial(baseMaterial, BodyColor), WindowPartType.Content);
+            if (glass)
+            {
+                glassBlock = new MaterialPropertyBlock();
+                // One glass slab covers the title row and the body; the body keeps its collider and material but isn't drawn.
+                bodyRenderer = body.GetComponent<MeshRenderer>();
+                bodyRenderer.enabled = false;
+                slab = CreateVisualQuad("Glass", glassMaterial, out slabRenderer);
+                var shadowMaterial = new Material(glassMaterial) { name = "SpatialGlass Shadow", renderQueue = ShadowQueue };
+                shadowMaterial.SetFloat("_ZWrite", 0f);
+                materials.Add(shadowMaterial);
+                shadow = CreateVisualQuad("Shadow", shadowMaterial, out shadowRenderer);
+            }
+            // The title band is only a hit area now: the title is drawn as text on the glass.
+            titleBar = CreateQuad("TitleBar", visualRoot, baseMaterial, WindowPartType.TitleBar);
+            titleBar.GetComponent<MeshRenderer>().enabled = false;
             closeButton = CreateQuad("CloseButton", visualRoot, MakeMaterial(baseMaterial, CloseColor), WindowPartType.CloseButton);
             resizeHandle = CreateQuad("ResizeHandle", visualRoot, MakeMaterial(baseMaterial, HandleColor), WindowPartType.ResizeHandle);
 
-            titleText = CreateText("TitleText", visualRoot, Title, 0.3f, TextAlignmentOptions.MidlineLeft);
+            titleText = CreateText("TitleText", visualRoot, Title, 0.3f, TextAlignmentOptions.TopLeft);
+            ThemeApplier.Apply(titleText, TextRole.Title);
             var closeGlyph = CreateText("CloseGlyph", closeButton, "X", 0.3f, TextAlignmentOptions.Center);
             // The close button quad is scaled; undo it so the glyph keeps its size.
             closeGlyph.transform.localScale = new Vector3(1f / CloseButtonSize, 1f / CloseButtonSize, 1f);
@@ -171,6 +211,72 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         internal void RequestAspect(AspectPreset preset) => AspectRequested?.Invoke(this, preset);
+
+        // A drawn-only quad (no collider) for the glass slab or its shadow.
+        Transform CreateVisualQuad(string quadName, Material material, out MeshRenderer renderer)
+        {
+            var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            quad.name = quadName;
+            quad.transform.SetParent(visualRoot, false);
+            DestroyImmediate(quad.GetComponent<MeshCollider>());
+            renderer = quad.GetComponent<MeshRenderer>();
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            return quad.transform;
+        }
+
+        /// <summary>Metres the shadow quad extends past the body on every side.</summary>
+        public static float ShadowMargin =>
+            UITheme.PtToMetres(UITheme.ShadowBlur) + Mathf.Abs(UITheme.PtToMetres(UITheme.ShadowOffsetY));
+
+        public bool IsSolid => solid;
+
+        /// <summary>
+        /// Makes the window a solid dark panel instead of glass (the consent window, where clarity beats style):
+        /// opaque <c>glass.fallback</c> colour with a 2 pt rim at alpha 0.5, and no shadow.
+        /// </summary>
+        public void SetSolid(bool value)
+        {
+            solid = value;
+            UpdateGlass();
+        }
+
+        // Pushes the theme values and the current size to the body and shadow renderers.
+        void UpdateGlass()
+        {
+            if (glassBlock == null || slab == null) return;
+            float boost = IsFocused ? FocusRimBoost : 1f;
+            var rimTop = solid ? new Color(1f, 1f, 1f, 0.5f) : UITheme.RimTop;
+            var rimBottom = solid ? rimTop : UITheme.RimBottom;
+            rimTop.a = Mathf.Min(1f, rimTop.a * boost);
+            rimBottom.a = Mathf.Min(1f, rimBottom.a * boost);
+            float margin = ShadowMargin;
+            var size = new Vector4(Size.x, Size.y + SlabExtra, 0f, 0f);
+
+            glassBlock.Clear();
+            glassBlock.SetColor(TintId, UITheme.GlassTint);
+            glassBlock.SetColor(FallbackId, UITheme.GlassFallback);
+            glassBlock.SetColor(RimTopId, rimTop);
+            glassBlock.SetColor(RimBottomId, rimBottom);
+            glassBlock.SetFloat(RimWidthId, solid ? UITheme.PtToMetres(2f) : 0f);
+            glassBlock.SetColor(ShadowColorId, UITheme.Shadow);
+            glassBlock.SetFloat(ShadowBlurId, UITheme.PtToMetres(UITheme.ShadowBlur));
+            glassBlock.SetVector(ShadowOffsetId, new Vector4(0f, UITheme.PtToMetres(UITheme.ShadowOffsetY), 0f, 0f));
+            glassBlock.SetFloat(RadiusId, UITheme.PtToMetres(UITheme.WindowRadius));
+            glassBlock.SetVector(SizeId, size);
+            glassBlock.SetFloat(SolidId, solid ? 1f : 0f);
+
+            glassBlock.SetVector(QuadId, size);
+            glassBlock.SetFloat(ShadowOnlyId, 0f);
+            bodyRenderer.SetPropertyBlock(glassBlock);
+            slabRenderer.SetPropertyBlock(glassBlock);
+
+            glassBlock.SetVector(QuadId, new Vector4(size.x + 2f * margin, size.y + 2f * margin, 0f, 0f));
+            glassBlock.SetFloat(ShadowOnlyId, 1f);
+            shadowRenderer.SetPropertyBlock(glassBlock);
+            shadowRenderer.enabled = !solid;
+        }
 
         Transform CreateQuad(string quadName, Transform parent, Material material, WindowPartType partType)
         {
@@ -231,6 +337,15 @@ namespace SpatialLauncher.SpatialWindows
 
             body.localPosition = Vector3.zero;
             body.localScale = new Vector3(w, h, 1f);
+            if (slab != null)
+            {
+                float margin = ShadowMargin, slabHeight = h + SlabExtra, slabY = SlabExtra * 0.5f;
+                slab.localPosition = new Vector3(0f, slabY, 0f);
+                slab.localScale = new Vector3(w, slabHeight, 1f);
+                shadow.localPosition = new Vector3(0f, slabY, ShadowDepth);
+                shadow.localScale = new Vector3(w + 2f * margin, slabHeight + 2f * margin, 1f);
+                UpdateGlass();
+            }
 
             float titleY = h * 0.5f + TitleBarGap + TitleBarHeight * 0.5f;
             titleBar.localPosition = new Vector3(0f, titleY, 0f);
@@ -240,9 +355,11 @@ namespace SpatialLauncher.SpatialWindows
             closeButton.localScale = new Vector3(CloseButtonSize, CloseButtonSize, 1f);
 
             // Room for the options and close buttons on the right.
-            float textWidth = Mathf.Max(0.01f, w - CloseButtonSize * 2f - Margin * 4f);
-            titleText.rectTransform.sizeDelta = new Vector2(textWidth, TitleBarHeight);
-            titleText.transform.localPosition = new Vector3(-w * 0.5f + Margin + textWidth * 0.5f, titleY, -DecorationDepth);
+            float textWidth = Mathf.Max(0.01f, w - TitleInset - CloseButtonSize * 2f - Margin * 4f);
+            float textHeight = TitleBarHeight * 0.5f;
+            titleText.rectTransform.sizeDelta = new Vector2(textWidth, textHeight);
+            titleText.transform.localPosition = new Vector3(-w * 0.5f + TitleInset + textWidth * 0.5f,
+                h * 0.5f + SlabExtra - TitleInset - textHeight * 0.5f, -DecorationDepth);
 
             resizeHandle.localPosition = new Vector3(w * 0.5f - ResizeHandleSize * 0.5f, -h * 0.5f + ResizeHandleSize * 0.5f, -DecorationDepth);
             resizeHandle.localScale = new Vector3(ResizeHandleSize, ResizeHandleSize, 1f);
@@ -270,7 +387,7 @@ namespace SpatialLauncher.SpatialWindows
         public void SetFocused(bool focused)
         {
             IsFocused = focused;
-            titleMaterial.color = focused ? TitleFocusedColor : TitleColor;
+            UpdateGlass();
         }
 
         /// <summary>
@@ -351,7 +468,11 @@ namespace SpatialLauncher.SpatialWindows
         {
             curvedWindows.Remove(this);
             foreach (var material in materials)
-                Destroy(material);
+            {
+                // Edit-mode tests and the gallery destroy windows outside Play mode, where Destroy is not allowed.
+                if (Application.isPlaying) Destroy(material);
+                else DestroyImmediate(material);
+            }
             materials.Clear();
         }
     }

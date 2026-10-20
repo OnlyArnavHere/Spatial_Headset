@@ -12,6 +12,8 @@ namespace SpatialLauncher.SpatialWindows.Theme
     /// </summary>
     public static class ThemeApplier
     {
+        /// <summary>TextMeshPro draws world-space text at a tenth of its font size, so sizes in metres are multiplied by this.</summary>
+        public const float TmpWorldScale = 10f;
         public const string FontFolder = "Fonts/";
         public const string RegularName = "Inter-Regular SDF";
         public const string MediumName = "Inter-Medium SDF";
@@ -41,7 +43,7 @@ namespace SpatialLauncher.SpatialWindows.Theme
             if (text == null) return;
             var font = FontFor(role);
             if (font != null) text.font = font;
-            text.fontSize = UITheme.PtToMetres(UITheme.SizePt(role), distance);
+            text.fontSize = UITheme.PtToMetres(UITheme.SizePt(role), distance) * TmpWorldScale;
             text.color = UITheme.ColorFor(role);
             text.lineSpacing = (UITheme.LineHeight - 1.2f) * 100f;
         }

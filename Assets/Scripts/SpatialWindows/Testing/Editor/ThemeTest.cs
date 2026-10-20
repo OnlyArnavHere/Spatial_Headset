@@ -57,10 +57,10 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             {
                 var text = go.AddComponent<TextMeshPro>();
                 ThemeApplier.Apply(text, TextRole.Title, 2f);
-                Check(Mathf.Approximately(text.fontSize, 0.044f) && text.color == UITheme.TextPrimary,
+                Check(Mathf.Approximately(text.fontSize, 0.044f * ThemeApplier.TmpWorldScale) && text.color == UITheme.TextPrimary,
                     $"Title at 2 m is 0.044 m and primary colour ({text.fontSize})");
                 ThemeApplier.Apply(text, TextRole.Secondary);
-                Check(Mathf.Approximately(text.fontSize, 0.015f) && text.color == UITheme.TextSecondary, "Secondary is body size in the secondary colour");
+                Check(Mathf.Approximately(text.fontSize, 0.015f * ThemeApplier.TmpWorldScale) && text.color == UITheme.TextSecondary, "Secondary is body size in the secondary colour");
                 var font = ThemeApplier.FontFor(TextRole.Body);
                 if (font != null)
                 {

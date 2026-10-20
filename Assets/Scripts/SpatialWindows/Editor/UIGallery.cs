@@ -24,6 +24,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
     {
         const int Width = 1280, Height = 800;
         const string WindowMaterialPath = "Assets/Materials/SpatialWindow.mat";
+        const string GlassMaterialPath = "Assets/Materials/SpatialGlass.mat";
         const string MenuRoot = "Tools/Spatial Windows/";
         const float FocusedDepth = 0.15f;
         const float UnfocusedScale = 0.85f;
@@ -393,6 +394,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             {
                 var manager = NewObject("WindowManager").AddComponent<WindowManager>();
                 SetField(manager, "windowMaterial", WindowMaterial);
+                SetField(manager, "glassMaterial", AssetDatabase.LoadAssetAtPath<Material>(GlassMaterialPath));
                 SetField(manager, "head", head);
                 return manager;
             }

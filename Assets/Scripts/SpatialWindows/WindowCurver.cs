@@ -291,7 +291,11 @@ namespace SpatialLauncher.SpatialWindows
         void OnDestroy()
         {
             foreach (var bent in quads.Values)
-                if (bent.Mesh != null) Destroy(bent.Mesh);
+                if (bent.Mesh != null)
+                {
+                    if (Application.isPlaying) Destroy(bent.Mesh);
+                    else DestroyImmediate(bent.Mesh);
+                }
             quads.Clear();
             foreach (var pair in labels)
                 if (pair.Key != null) pair.Key.OnPreRenderText -= pair.Value.Hook;

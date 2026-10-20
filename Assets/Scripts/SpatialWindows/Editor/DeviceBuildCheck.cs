@@ -294,6 +294,9 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     var so = new SerializedObject(managers[0]);
                     var material = so.FindProperty("windowMaterial").objectReferenceValue as Material;
                     Expect(material != null, "WindowManager has its window material assigned (no Shader.Find fallback at runtime)");
+                    var glass = so.FindProperty("glassMaterial").objectReferenceValue as Material;
+                    Expect(glass != null && glass.shader != null && glass.shader.name == "SpatialLauncher/SpatialGlass",
+                        "WindowManager has the SpatialGlass material assigned (window bodies are drawn with it)");
                     var head = so.FindProperty("head").objectReferenceValue as Transform;
                     Expect(head != null && head.GetComponent<Camera>() != null && head.GetComponent<UnityEngine.InputSystem.XR.TrackedPoseDriver>() != null,
                         $"WindowManager.head is the tracked AR camera ({(head != null ? head.name : "unset")}); Camera.main is null in HoloKit Stereo");

@@ -29,6 +29,8 @@ namespace SpatialLauncher.SpatialWindows
             Attach(window, baseMaterial);
             gate = consentGate;
             panel = CreateQuad("Panel", transform, CreateMaterial(PanelColor));
+            // The window itself is the solid panel; this quad only stays as a hit area.
+            panel.GetComponent<MeshRenderer>().enabled = false;
             question = CreateLabel("Question", transform, gate.Question, 0.24f, TextAlignmentOptions.TopLeft);
             question.textWrappingMode = TextWrappingModes.Normal;
             question.overflowMode = TextOverflowModes.Truncate;
