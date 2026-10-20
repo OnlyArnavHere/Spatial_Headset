@@ -1,9 +1,12 @@
-"""The few libX11 calls the Linux backend needs, through ctypes (libX11 is MIT licensed; nothing loads at import).
+"""The few libX11 and libXtst calls the Linux backend needs, through ctypes (both are MIT licensed; nothing loads at
+import).
 
-Each connect() opens its own display connection, so calls from any thread are safe without XInitThreads.
+XInitThreads is called before any other Xlib call, and each connect() opens its own display connection, so one
+connection is only ever used by one thread at a time.
 """
 import ctypes
 import ctypes.util
+import threading
 
 from .types import Rect
 
@@ -11,8 +14,16 @@ CLIENT_MESSAGE = 33
 SUBSTRUCTURE_MASK = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
 ANY_PROPERTY_TYPE = 0
 
+KEY_PRESS = 2
+GRAB_MODE_ASYNC = 1
+
 _lib = None
+_xtst = None
 _handler = None
+_load_lock = threading.Lock()
+BAD_ACCESS, X_GRAB_KEY = 10, 33
+_grab_lock = threading.RLock()
+_grab = {"display": None, "refused": False}  # set while grab_key runs: which display, and whether it was refused
 
 
 class _ClientMessage(ctypes.Structure):
@@ -21,11 +32,34 @@ class _ClientMessage(ctypes.Structure):
                 ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
 
 
+class _ErrorEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("display", ctypes.c_void_p), ("resourceid", ctypes.c_ulong),
+                ("serial", ctypes.c_ulong), ("error_code", ctypes.c_ubyte), ("request_code", ctypes.c_ubyte),
+                ("minor_code", ctypes.c_ubyte)]
+
+
 class _Event(ctypes.Union):
     _fields_ = [("type", ctypes.c_int), ("client", _ClientMessage), ("pad", ctypes.c_long * 24)]
 
 
+def _on_error(display, event) -> int:
+    """The X error handler: it only notes a refused key grab (BadAccess on XGrabKey) on the display being grabbed; every
+    other error, from any connection, is ignored (a window can vanish between two calls)."""
+    with _grab_lock:
+        if (_grab["display"] is not None and display == _grab["display"] and event.error_code == BAD_ACCESS
+                and event.request_code == X_GRAB_KEY):
+            _grab["refused"] = True
+    return 0
+
+
 def _load():
+    if _lib is not None:
+        return _lib
+    with _load_lock:
+        return _load_locked()
+
+
+def _load_locked():
     global _lib, _handler
     if _lib is not None:
         return _lib
@@ -33,6 +67,7 @@ def _load():
     if not name:
         raise OSError("libX11 is not installed")
     lib = ctypes.CDLL(name)
+    lib.XInitThreads()
     c = ctypes
     sigs = {
         "XOpenDisplay": (c.c_void_p, [c.c_char_p]), "XCloseDisplay": (c.c_int, [c.c_void_p]),
@@ -48,15 +83,41 @@ def _load():
         "XTranslateCoordinates": (c.c_int, [c.c_void_p, c.c_ulong, c.c_ulong, c.c_int, c.c_int, c.POINTER(c.c_int),
                                             c.POINTER(c.c_int), c.POINTER(c.c_ulong)]),
         "XSendEvent": (c.c_int, [c.c_void_p, c.c_ulong, c.c_int, c.c_long, c.POINTER(_Event)]),
+        "XKeysymToKeycode": (c.c_ubyte, [c.c_void_p, c.c_ulong]),
+        "XkbKeycodeToKeysym": (c.c_ulong, [c.c_void_p, c.c_uint, c.c_uint, c.c_uint]),
+        "XGrabKey": (c.c_int, [c.c_void_p, c.c_int, c.c_uint, c.c_ulong, c.c_int, c.c_int, c.c_int]),
+        "XSync": (c.c_int, [c.c_void_p, c.c_int]), "XNextEvent": (c.c_int, [c.c_void_p, c.POINTER(_Event)]),
     }
     for fn, (res, args) in sigs.items():
         getattr(lib, fn).restype, getattr(lib, fn).argtypes = res, args
-    # The default error handler exits the process; a window can vanish between two calls, so ignore X errors.
-    _handler = c.CFUNCTYPE(c.c_int, c.c_void_p, c.c_void_p)(lambda display, event: 0)
+    # The default error handler exits the process, so replace it; a window can vanish between two calls
+    handler = c.CFUNCTYPE(c.c_int, c.c_void_p, c.POINTER(_ErrorEvent))(
+        lambda display, event: _on_error(display, event.contents))
     lib.XSetErrorHandler.argtypes = [c.c_void_p]
-    lib.XSetErrorHandler(_handler)
-    _lib = lib
+    lib.XSetErrorHandler(handler)
+    _handler = handler  # kept alive for the life of the process
+    _lib = lib  # last, so no thread sees a half-initialised library
     return lib
+
+
+def _load_xtst():
+    global _xtst
+    if _xtst is None:
+        name = ctypes.util.find_library("Xtst")
+        if not name:
+            raise OSError("libXtst is not installed")
+        lib, c = ctypes.CDLL(name), ctypes
+        sigs = {"XTestFakeKeyEvent": [c.c_void_p, c.c_uint, c.c_int, c.c_ulong],
+                "XTestFakeButtonEvent": [c.c_void_p, c.c_uint, c.c_int, c.c_ulong],
+                "XTestFakeMotionEvent": [c.c_void_p, c.c_int, c.c_int, c.c_int, c.c_ulong]}
+        for fn, args in sigs.items():
+            getattr(lib, fn).restype, getattr(lib, fn).argtypes = c.c_int, args
+        _xtst = lib
+    return _xtst
+
+
+def has_xtest() -> bool:
+    return ctypes.util.find_library("Xtst") is not None
 
 
 class Connection:
@@ -129,6 +190,49 @@ class Connection:
             event.client.data[i] = value
         self._x.XSendEvent(self._display, self.root, 0, SUBSTRUCTURE_MASK, ctypes.byref(event))
         self._x.XFlush(self._display)
+
+    # --- XTest input -----------------------------------------------------------------------------
+
+    def keysym_to_keycode(self, keysym: int) -> int:
+        """The keycode that produces the keysym at some shift level; 0 if the keymap has none."""
+        return int(self._x.XKeysymToKeycode(self._display, keysym))
+
+    def keysym_at(self, keycode: int, level: int) -> int:
+        return int(self._x.XkbKeycodeToKeysym(self._display, keycode, 0, level))
+
+    def fake_key(self, keycode: int, down: bool) -> None:
+        _load_xtst().XTestFakeKeyEvent(self._display, keycode, int(down), 0)
+        self._x.XFlush(self._display)
+
+    def fake_button(self, button: int, down: bool) -> None:
+        _load_xtst().XTestFakeButtonEvent(self._display, button, int(down), 0)
+        self._x.XFlush(self._display)
+
+    def fake_motion(self, x: int, y: int) -> None:
+        _load_xtst().XTestFakeMotionEvent(self._display, -1, x, y, 0)  # -1: the current screen
+        self._x.XFlush(self._display)
+
+    # --- Passive key grab on the root window ----------------------------------------------------
+
+    def grab_key(self, keycode: int, masks: list[int]) -> bool:
+        """Grabs the key with each modifier mask on the root window; False if the server refused (BadAccess)."""
+        with _grab_lock:
+            _grab.update(display=self._display, refused=False)
+            try:
+                for mask in masks:
+                    self._x.XGrabKey(self._display, keycode, mask, self.root, 0, GRAB_MODE_ASYNC, GRAB_MODE_ASYNC)
+                self._x.XSync(self._display, 0)
+                return not _grab["refused"]
+            finally:
+                _grab.update(display=None, refused=False)
+
+    def next_key_press(self) -> None:
+        """Blocks until a KeyPress arrives (only grabbed keys are delivered to this connection)."""
+        event = _Event()
+        while True:
+            self._x.XNextEvent(self._display, ctypes.byref(event))
+            if event.type == KEY_PRESS:
+                return
 
 
 def connect(display: str | None = None) -> Connection:

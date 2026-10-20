@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -202,8 +203,10 @@ class SessionRowTests(unittest.TestCase):
 
     def test_rows(self):
         ok = pure.permission_rows({"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"}, True)
-        self.assertEqual([(r.name, r.ok) for r in ok], [("X11 session", True), ("ffmpeg x11grab", True), ("Input", False)])
-        self.assertEqual(len(pure.permission_rows({"DISPLAY": ":0"}, None)), 2)
+        self.assertEqual([(r.name, r.ok) for r in ok], [("X11 session", True), ("ffmpeg x11grab", True)])
+        self.assertEqual(len(pure.permission_rows({"DISPLAY": ":0"}, None, True, True)), 1)
+        rows = pure.permission_rows({"DISPLAY": ":0"}, None, False, False)
+        self.assertEqual([(r.name, r.ok) for r in rows], [("X11 session", True), ("Input", False), ("Approval prompt", False)])
         wayland = pure.session_row({"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"})
         self.assertFalse(wayland.ok)
         self.assertIn("xdg-desktop-portal ScreenCast and RemoteDesktop", wayland.text)
@@ -216,7 +219,12 @@ class SessionRowTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}), \
                 mock.patch.object(backend, "_ffmpeg_has_x11grab", side_effect=AssertionError):
             rows = backend.preflight()
-        self.assertEqual([(r.name, r.ok) for r in rows], [("X11 session", False), ("Input", False)])
+        self.assertEqual([(r.name, r.ok) for r in rows], [("X11 session", False)])
+
+    def test_preflight_rows_for_missing_libxtst_and_dialog(self):
+        with mock.patch.dict(os.environ, {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"}),                 mock.patch.object(backend, "_ffmpeg_has_x11grab", return_value=True),                 mock.patch.object(backend._xlib, "has_xtest", return_value=False),                 mock.patch.object(backend, "_dialog_program", return_value=None):
+            rows = backend.preflight()
+        self.assertEqual([r.name for r in rows], ["X11 session", "ffmpeg x11grab", "Input", "Approval prompt"])
 
 
 def parsed(*argv):
@@ -251,13 +259,24 @@ class CheckPermissionsTests(unittest.TestCase):
         self.assertTrue(err.startswith("warning:"))
 
     def test_input_row_stops_only_input_runs(self):
-        env = {"DISPLAY": ":0"}
+        import agent
+        rows = pure.permission_rows({"DISPLAY": ":0"}, None, xtest=False)
         for argv in (["--input"], ["--cast-only"]):
-            refused, err = self.run_check(argv, env)
-            self.assertIsNotNone(refused, argv)
-            self.assertIn("Input is not implemented on Linux", err)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+                agent.check_permissions(parsed(*argv), rows)
+            self.assertIn("libXtst is missing", err.getvalue())
         for argv in ([], ["--list"], ["--pairs"]):
-            self.assertEqual(self.run_check(argv, env), (None, ""), argv)
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                agent.check_permissions(parsed(*argv), rows)
+            self.assertEqual(err.getvalue(), "", argv)
+
+    def test_missing_dialog_only_warns(self):
+        import agent
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            agent.check_permissions(parsed("--input"), pure.permission_rows({"DISPLAY": ":0"}, None, True, False))
+        self.assertTrue(err.getvalue().startswith("warning: No approval dialog"), err.getvalue())
 
     def test_x11_session_prints_nothing(self):
         self.assertEqual(self.run_check([], {"DISPLAY": ":0"}), (None, ""))
@@ -278,13 +297,262 @@ class ReaperTests(unittest.TestCase):
         self.assertNotIn("preexec_fn", Path(backend.__file__).read_text())
         self.assertNotIn("PDEATHSIG", Path(backend.__file__).read_text() + Path(_reaper.__file__).read_text())
 
-    def test_kill_switch_is_unavailable_not_an_error(self):
-        self.assertIs(backend.watch_kill_switch(lambda: None), False)
 
-    def test_unimplemented_parts_are_still_stubs(self):
-        for name in ("mouse_move", "key", "open_prompt"):
-            with self.assertRaises(NotImplementedError):
-                getattr(backend, name)(1)
+class KeyTableTests(unittest.TestCase):
+    def test_vk_to_keysym(self):
+        table = {0x41: 0x61, 0x5A: 0x7A, 0x30: 0x30, 0x39: 0x39, 0x70: 0xFFBE, 0x7B: 0xFFC9, 0x0D: 0xFF0D, 0x1B: 0xFF1B,
+                 0x09: 0xFF09, 0x08: 0xFF08, 0x20: 0x20, 0x25: 0xFF51, 0x28: 0xFF54, 0x2E: 0xFFFF, 0x24: 0xFF50,
+                 0x10: 0xFFE1, 0x11: 0xFFE3, 0x12: 0xFFE9, 0xAD: 0x1008FF12, 0xB3: 0x1008FF14, 0xAF: 0x1008FF13}
+        for vk, keysym in table.items():
+            self.assertEqual(pure.keysym_for(vk), keysym, hex(vk))
+        for vk in (0xFF, 0x00):
+            with self.assertRaises(ValueError):
+                pure.keysym_for(vk)
+
+    def test_characters_and_shift_levels(self):
+        self.assertEqual(pure.char_keysym("a"), 0x61)
+        self.assertEqual(pure.char_keysym("\n"), 0xFF0D)
+        self.assertEqual(pure.char_keysym("é"), 0xE9)
+        self.assertEqual(pure.char_keysym("€"), 0x010020AC)
+        self.assertIsNone(pure.char_keysym("\x07"))
+        self.assertIs(pure.shift_level(0x61, 0x61, 0x41), False)
+        self.assertIs(pure.shift_level(0x41, 0x61, 0x41), True)
+        self.assertIsNone(pure.shift_level(0x7A, 0x61, 0x41))
+
+    def test_buttons_and_wheel(self):
+        self.assertEqual([pure.button_number(n) for n in ("left", "middle", "right")], [1, 2, 3])
+        with self.assertRaises(ValueError):
+            pure.button_number("back")
+        wheel = pure.WheelAccumulator()
+        self.assertEqual(wheel.buttons(2), [4, 4])
+        self.assertEqual(wheel.buttons(-1), [5])
+        self.assertEqual(wheel.buttons(0.6), [])
+        self.assertEqual(wheel.buttons(0.6), [4])  # the carried 0.6 + 0.6 makes one click
+        self.assertEqual(pure.WheelAccumulator().buttons(-2, horizontal=True), [6, 6])
+        self.assertEqual(pure.WheelAccumulator().buttons(1, horizontal=True), [7])
+
+
+class InputX:
+    """A stand-in for _xlib.Connection that records the calls."""
+
+    def __init__(self, keymap=None):
+        self.calls = []
+        self.keymap = keymap or {0x61: (38, 0x61, 0x41), 0x41: (38, 0x61, 0x41), 0xFFE1: (50, 0xFFE1, 0xFFE1)}
+
+    def keysym_to_keycode(self, keysym):
+        return self.keymap.get(keysym, (0,))[0]
+
+    def keysym_at(self, keycode, level):
+        return next(v[1 + level] for v in self.keymap.values() if v[0] == keycode)
+
+    def fake_key(self, keycode, down):
+        self.calls.append(("key", keycode, down))
+
+    def fake_button(self, button, down):
+        self.calls.append(("button", button, down))
+
+    def fake_motion(self, x, y):
+        self.calls.append(("move", x, y))
+
+
+class InputTests(unittest.TestCase):
+    def setUp(self):
+        self.x = InputX()
+        patches = [mock.patch.object(backend, "_input_x", self.x), mock.patch.object(backend, "_held_keys", set()),
+                   mock.patch.object(backend, "_held_buttons", set()),
+                   mock.patch.object(backend, "_wheel", pure.WheelAccumulator())]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_mouse(self):
+        backend.mouse_move(10.9, 20)
+        backend.mouse_button(5, 6, "right", True)
+        self.assertEqual(backend._held_buttons, {3})
+        backend.mouse_button(5, 6, "right", False)
+        backend.mouse_wheel(1, 2, -2)
+        self.assertEqual(self.x.calls, [("move", 10, 20), ("move", 5, 6), ("button", 3, True), ("move", 5, 6),
+                                        ("button", 3, False), ("move", 1, 2), ("button", 5, True), ("button", 5, False),
+                                        ("button", 5, True), ("button", 5, False)])
+        self.assertEqual(backend._held_buttons, set())
+
+    def test_key_press_release_and_unmapped_key(self):
+        backend.key(0x41, True)
+        self.assertEqual(backend._held_keys, {38})
+        backend.key(0x41, False)
+        self.assertEqual((self.x.calls, backend._held_keys), ([("key", 38, True), ("key", 38, False)], set()))
+        with self.assertRaises(ValueError):
+            backend.key(0x42, True)  # 'b' is not in the fake keymap
+        with self.assertRaises(ValueError):
+            backend.key(0xFF, True)
+
+    def test_type_text_uses_shift_and_skips_unknown_characters(self):
+        with self.assertLogs("hostos", "WARNING") as logs:
+            backend.type_text("aA中")
+        self.assertEqual(self.x.calls, [("key", 38, True), ("key", 38, False), ("key", 50, True), ("key", 38, True),
+                                        ("key", 38, False), ("key", 50, False)])
+        self.assertEqual(len(logs.records), 1)
+
+
+class KillSwitchTests(unittest.TestCase):
+    def test_masks_cover_every_lock_state(self):
+        masks = pure.kill_masks()
+        self.assertEqual(sorted(masks), [13, 15, 29, 31])  # Shift|Control|Mod1, plus CapsLock (2) and NumLock (16)
+        self.assertEqual(len(set(masks)), 4)
+        self.assertEqual(pure.KILL_KEYSYM, ord("q"))
+        self.assertEqual(backend.KILL_SWITCH, "Ctrl+Alt+Shift+Q")
+
+    def test_no_display_returns_false(self):
+        with mock.patch.object(backend, "_connect", side_effect=OSError("no display")), \
+                self.assertLogs("hostos", "ERROR"):
+            self.assertIs(backend.watch_kill_switch(lambda: None), False)
+
+    def test_refused_grab_returns_false_and_a_granted_one_listens(self):
+        class Conn(InputX):
+            def __init__(self, granted):
+                super().__init__()
+                self.granted, self.presses = granted, 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def keysym_to_keycode(self, keysym):
+                return 24
+
+            def grab_key(self, keycode, masks):
+                self.masks = masks
+                return self.granted
+
+            def next_key_press(self):
+                if self.presses == 0:
+                    threading.Event().wait()  # blocks like XNextEvent; the thread is a daemon
+                self.presses -= 1
+
+        pressed = threading.Event()
+        with mock.patch.object(backend, "_connect", return_value=Conn(False)):
+            self.assertIs(backend.watch_kill_switch(pressed.set), False)
+        self.assertFalse(pressed.is_set())
+        with mock.patch.object(backend, "_connect", return_value=Conn(True)):
+            self.assertIs(backend.watch_kill_switch(pressed.set), True)
+        self.assertTrue(pressed.wait(5))
+
+
+class XlibTests(unittest.TestCase):
+    def error(self, display, code=10, request=33):
+        from types import SimpleNamespace
+        return SimpleNamespace(error_code=code, request_code=request)
+
+    def test_only_a_refused_grab_on_the_grabbing_display_counts(self):
+        from hostos import _xlib
+        with mock.patch.dict(_xlib._grab, {"display": 100, "refused": False}):
+            for display, code, request in ((100, 3, 33), (100, 10, 12), (200, 10, 33)):  # BadWindow, other request, other display
+                _xlib._on_error(display, self.error(display, code, request))
+                self.assertFalse(_xlib._grab["refused"], (display, code, request))
+            self.assertEqual(_xlib._on_error(100, self.error(100)), 0)
+            self.assertTrue(_xlib._grab["refused"])
+        with mock.patch.dict(_xlib._grab, {"display": None, "refused": False}):
+            _xlib._on_error(100, self.error(100))  # no grab in progress: ignored
+            self.assertFalse(_xlib._grab["refused"])
+        self.assertFalse(hasattr(_xlib, "errors"))
+
+    def test_concurrent_loads_initialise_once(self):
+        from hostos import _xlib
+        calls = []
+
+        class FakeLib:
+            def __getattr__(self, name):
+                if name == "XInitThreads":
+                    return lambda: (calls.append("init"), time.sleep(0.05))
+                if name == "XSetErrorHandler":
+                    return lambda handler: calls.append("handler")
+                return mock.MagicMock()
+
+        fake = FakeLib()
+        results = []
+        with mock.patch.object(_xlib, "_lib", None), mock.patch.object(_xlib, "_handler", None),                 mock.patch.object(_xlib.ctypes.util, "find_library", return_value="X11"),                 mock.patch.object(_xlib.ctypes, "CDLL", return_value=fake):
+            threads = [threading.Thread(target=lambda: results.append(_xlib._load())) for _ in range(6)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(calls, ["init", "handler"])
+            self.assertEqual(results, [fake] * 6)
+            self.assertIsNotNone(_xlib._handler)
+
+
+class PromptTests(unittest.TestCase):
+    def test_zenity_argv_has_text_and_title_as_single_items(self):
+        argv = pure.zenity_argv("Allow $(rm -rf ~)?; `x`", "--title=evil", 30)
+        self.assertEqual(argv[:4], ["zenity", "--question", "--no-markup", "--default-cancel"])
+        self.assertIn("--timeout=30", argv)
+        self.assertIn("--text=Allow $(rm -rf ~)?; `x`", argv)
+        self.assertIn("--title=--title=evil", argv)
+        self.assertEqual(argv.count("--text=Allow $(rm -rf ~)?; `x`"), 1)
+
+    def test_tk_argv_runs_the_script_isolated(self):
+        self.assertEqual(pure.tk_argv("d.py", "t", "c", 7), [sys.executable, "-I", "d.py", "t", "c", "7"])
+        self.assertTrue(backend._DIALOG.exists())
+
+    def test_exit_codes_and_timeouts(self):
+        self.assertEqual([pure.answer_for(c) for c in (0, 1, 5, 2, -9, 255, None)],
+                         ["yes", "no", "timeout", "no", "no", "no", "no"])
+        self.assertEqual([pure.timeout_seconds(ms) for ms in (30000, 29001, 1, 0)], [30, 30, 1, 1])
+
+    def run_prompt(self, program, returncode):
+        process = mock.Mock(returncode=returncode)
+        process.wait.return_value = returncode
+        with mock.patch.object(backend, "_dialog_program", return_value=program), \
+                mock.patch.object(backend.subprocess, "Popen", return_value=process) as popen:
+            answer = backend.open_prompt("Allow?", "Spatial Launcher", 30000).wait()
+        return answer, popen, process
+
+    def test_zenity_answers(self):
+        for code, expected in ((0, "yes"), (1, "no"), (5, "timeout"), (3, "no")):
+            answer, popen, process = self.run_prompt("zenity", code)
+            self.assertEqual(answer, expected)
+            self.assertEqual(popen.call_args.args[0][0], "zenity")
+            self.assertNotIn("shell", popen.call_args.kwargs)
+            process.wait.assert_called_once_with(35)
+
+    def test_tkinter_fallback_runs_the_dialog_script(self):
+        answer, popen, _ = self.run_prompt("tkinter", 0)
+        self.assertEqual(answer, "yes")
+        self.assertEqual(popen.call_args.args[0][:3], [sys.executable, "-I", str(backend._DIALOG)])
+
+    def test_neither_dialog_denies_with_a_warning(self):
+        with self.assertLogs("hostos", "WARNING"):
+            answer, popen, _ = self.run_prompt(None, 0)
+        self.assertEqual(answer, "no")
+        popen.assert_not_called()
+
+    def test_a_hung_dialog_is_killed_and_times_out(self):
+        process = mock.Mock(returncode=None)
+        process.wait.side_effect = [subprocess.TimeoutExpired("zenity", 35), None]
+        with mock.patch.object(backend, "_dialog_program", return_value="zenity"), \
+                mock.patch.object(backend.subprocess, "Popen", return_value=process):
+            self.assertEqual(backend.open_prompt("a", "b", 30000).wait(), "timeout")
+        process.kill.assert_called_once()
+
+    def test_dismiss_before_and_during_wait(self):
+        prompt = backend.open_prompt("a", "b", 30000)
+        self.assertTrue(prompt.dismiss())
+        with mock.patch.object(backend.subprocess, "Popen", side_effect=AssertionError):
+            self.assertEqual(prompt.wait(), "no")
+        process = mock.Mock()
+        process.poll.return_value = None
+        prompt = backend.open_prompt("a", "b", 30000)
+        prompt._proc = process
+        self.assertTrue(prompt.dismiss())
+        process.kill.assert_called_once()
+
+    def test_every_hostos_name_is_implemented(self):
+        from hostos import types
+        for name in types.FUNCTIONS + types.CONSTANTS:
+            self.assertTrue(hasattr(backend, name), name)
+        self.assertNotIn("NotImplementedError", Path(backend.__file__).read_text())
 
 
 @unittest.skipUnless(LINUX, "needs Linux")

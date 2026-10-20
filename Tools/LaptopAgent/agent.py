@@ -259,7 +259,7 @@ def check_permissions(args: argparse.Namespace, rows: list) -> None:
         refuse = refuse or (row.name == "X11 session" and not pairing_only) or (
             row.name == "ffmpeg x11grab" and not lists_only)
         refused = refused or refuse
-        linux = linux or row.name in ("X11 session", "ffmpeg x11grab", "Input")
+        linux = linux or row.name in ("X11 session", "ffmpeg x11grab", "Input", "Approval prompt")
         print(("error: " if refuse else "warning: ") + row.text, file=sys.stderr)
     if refused:
         raise SystemExit("Fix the problem above and start the agent again." if linux else
@@ -274,7 +274,7 @@ def watch_kill_switch(runner: LinkRunner) -> None:
         log.info("Kill switch: press %s on this laptop to end every session and stop the video", hostos.KILL_SWITCH)
     else:
         log.warning("Kill switch %s is unavailable (taken by another program, or Input Monitoring is not granted on "
-                    "macOS, or not implemented yet on Linux); stop the agent with Ctrl+C instead",
+                    "macOS, or there is no X display or another program holds the key on Linux); stop the agent with Ctrl+C instead",
                     hostos.KILL_SWITCH)
 
 

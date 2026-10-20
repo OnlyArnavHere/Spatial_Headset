@@ -1,9 +1,12 @@
 """The Linux (X11) backend's logic that needs no ctypes or X server: it imports (and is tested) on every OS.
 
 xrandr output parsing, crop maths, ffmpeg x11grab and libx264 arguments, window-property decoding, the
-_NET_ACTIVE_WINDOW client message, the identity-key file check and the session rows for the preflight.
+_NET_ACTIVE_WINDOW client message, the identity-key file check, the session rows for the preflight, the Windows
+VK to keysym table, wheel and text maths, the kill-hotkey grab masks and the approval-dialog commands.
 """
+import math
 import re
+import sys
 from dataclasses import dataclass
 
 from ._ffmpeg import common_args
@@ -94,7 +97,7 @@ def key_file_problem(mode: int, uid: int, my_uid: int) -> str | None:
 
 # --- Session rows --------------------------------------------------------------------------------
 
-SESSION, X11GRAB, INPUT = "X11 session", "ffmpeg x11grab", "Input"
+SESSION, X11GRAB, INPUT, PROMPT = "X11 session", "ffmpeg x11grab", "Input", "Approval prompt"
 
 
 @dataclass(frozen=True)
@@ -120,12 +123,127 @@ def session_row(env) -> Row:
     return Row(SESSION, True, "")
 
 
-def permission_rows(env, x11grab: bool | None) -> list[Row]:
-    """The X11 session row, and an x11grab row when ffmpeg was probed (None means it wasn't or couldn't be)."""
+def permission_rows(env, x11grab: bool | None, xtest: bool | None = None, prompt: bool | None = None) -> list[Row]:
+    """The X11 session row, plus a row for each probe that ran and failed: x11grab, libXtst (input) and a dialog
+    program for the approval prompt. None means the probe wasn't run (or couldn't be)."""
     rows = [session_row(env)]
     if x11grab is not None:
         rows.append(Row(X11GRAB, x11grab, "ffmpeg x11grab support is missing: this ffmpeg build can't capture an X11 "
                         "screen.\n  Install a build with x11grab (for example your distribution's ffmpeg package)."))
-    rows.append(Row(INPUT, False, "Input is not implemented on Linux yet: the headset can't click, type or raise windows "
-                    "(view-only streaming works without --input)."))
+    if xtest is False:
+        rows.append(Row(INPUT, False, "libXtst is missing, so the headset can't click, type or raise windows.\n  Install "
+                        "it (for example libxtst6); view-only streaming works without --input."))
+    if prompt is False:
+        rows.append(Row(PROMPT, False, "No approval dialog is available: install zenity (or python3-tk). Without one "
+                        "every approval request is denied, so no headset can connect."))
     return rows
+
+
+# --- Keys: Windows virtual-key code -> X keysym ------------------------------------------------
+
+_OEM = {0xBA: 0x3B, 0xBB: 0x3D, 0xBC: 0x2C, 0xBD: 0x2D, 0xBE: 0x2E, 0xBF: 0x2F, 0xC0: 0x60,
+        0xDB: 0x5B, 0xDC: 0x5C, 0xDD: 0x5D, 0xDE: 0x27}  # ; = , - . / ` [ \ ] '
+
+VK_TO_KEYSYM: dict[int, int] = {
+    **{vk: vk + 0x20 for vk in range(0x41, 0x5B)},  # A-Z -> a-z
+    **{vk: vk for vk in range(0x30, 0x3A)},  # 0-9
+    **{0x70 + n: 0xFFBE + n for n in range(12)},  # F1-F12
+    **_OEM,
+    0x0D: 0xFF0D, 0x1B: 0xFF1B, 0x09: 0xFF09, 0x08: 0xFF08, 0x20: 0x20, 0x14: 0xFFE5,
+    0x10: 0xFFE1, 0x11: 0xFFE3, 0x12: 0xFFE9,  # Shift, Ctrl, Alt (left ones)
+    0xA0: 0xFFE1, 0xA1: 0xFFE2, 0xA2: 0xFFE3, 0xA3: 0xFFE4, 0xA4: 0xFFE9, 0xA5: 0xFFEA,
+    0x5B: 0xFFEB, 0x5C: 0xFFEC,  # Windows keys -> Super
+    0x25: 0xFF51, 0x26: 0xFF52, 0x27: 0xFF53, 0x28: 0xFF54,
+    0x2D: 0xFF63, 0x2E: 0xFFFF, 0x24: 0xFF50, 0x23: 0xFF57, 0x21: 0xFF55, 0x22: 0xFF56,
+    0xAD: 0x1008FF12, 0xAE: 0x1008FF11, 0xAF: 0x1008FF13,  # XF86AudioMute, LowerVolume, RaiseVolume
+    0xB0: 0x1008FF17, 0xB1: 0x1008FF16, 0xB2: 0x1008FF15, 0xB3: 0x1008FF14,  # Next, Prev, Stop, Play
+}
+SHIFT_KEYSYM = 0xFFE1
+
+
+def keysym_for(vk: int) -> int:
+    try:
+        return VK_TO_KEYSYM[vk]
+    except KeyError:
+        raise ValueError(f"no X keysym for virtual-key code {vk:#x}") from None
+
+
+def char_keysym(ch: str) -> int | None:
+    """The keysym that types the character, or None for control characters (newline and tab are Return and Tab)."""
+    code = ord(ch)
+    if ch == "\n":
+        return 0xFF0D
+    if ch == "\t":
+        return 0xFF09
+    if code < 0x20 or 0x7F <= code < 0xA0:
+        return None
+    return code if code <= 0xFF else 0x01000000 + code
+
+
+def shift_level(keysym: int, level0: int, level1: int) -> bool | None:
+    """Whether Shift is needed to type the keysym on the key that has it (its keysyms at level 0 and 1); None if
+    neither level has it."""
+    if level0 == keysym:
+        return False
+    return True if level1 == keysym else None
+
+
+BUTTONS = {"left": 1, "middle": 2, "right": 3}
+WHEEL_UP, WHEEL_DOWN, WHEEL_LEFT, WHEEL_RIGHT = 4, 5, 6, 7
+
+
+def button_number(name: str) -> int:
+    try:
+        return BUTTONS[name]
+    except KeyError:
+        raise ValueError(f"no X button for {name!r}") from None
+
+
+class WheelAccumulator:
+    """Notches (positive is up, or right) to whole button clicks, carrying the fraction to the next call."""
+
+    def __init__(self) -> None:
+        self._remainder = 0.0
+
+    def buttons(self, notches: float, horizontal: bool = False) -> list[int]:
+        total = self._remainder + notches
+        whole = int(total)  # towards zero
+        self._remainder = total - whole
+        positive, negative = (WHEEL_RIGHT, WHEEL_LEFT) if horizontal else (WHEEL_UP, WHEEL_DOWN)
+        return [positive if whole > 0 else negative] * abs(whole)
+
+
+# --- Kill hotkey: Ctrl+Alt+Shift+Q ---------------------------------------------------------------
+
+KILL_KEYSYM = 0x71  # q
+SHIFT_MASK, LOCK_MASK, CONTROL_MASK, MOD1_MASK, MOD2_MASK = 1, 2, 4, 8, 16  # Mod1 is Alt, Mod2 is NumLock
+
+
+def kill_masks() -> list[int]:
+    """XGrabKey matches modifiers exactly, so the chord is grabbed with every NumLock and CapsLock combination."""
+    base = CONTROL_MASK | MOD1_MASK | SHIFT_MASK
+    return [base | extra for extra in (0, LOCK_MASK, MOD2_MASK, LOCK_MASK | MOD2_MASK)]
+
+
+# --- Approval dialog -------------------------------------------------------------------------------
+
+EXIT_YES, EXIT_NO, EXIT_TIMEOUT = 0, 1, 5  # zenity's codes; the tkinter fallback script uses the same
+
+
+def timeout_seconds(timeout_ms: int) -> int:
+    return max(1, math.ceil(timeout_ms / 1000))
+
+
+def zenity_argv(text: str, caption: str, timeout_s: int) -> list[str]:
+    """Text and title are single argv items (never a shell string); the default button is No."""
+    return ["zenity", "--question", "--no-markup", "--default-cancel", f"--timeout={timeout_s}",
+            "--ok-label=Yes", "--cancel-label=No", f"--title={caption}", f"--text={text}"]
+
+
+def tk_argv(script: str, text: str, caption: str, timeout_s: int) -> list[str]:
+    return [sys.executable, "-I", script, text, caption, str(timeout_s)]
+
+
+def answer_for(returncode: int | None) -> str:
+    """"yes", "no" or "timeout" from a dialog's exit code. Anything unexpected (a kill, an error) is "no"."""
+    return {EXIT_YES: "yes", EXIT_TIMEOUT: "timeout"}.get(returncode, "no")

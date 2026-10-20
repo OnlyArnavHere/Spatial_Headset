@@ -149,12 +149,16 @@ agent is killed with `kill -9` can survive; stop it by hand if `--list` or a res
 
 ### Linux X11 (experimental)
 
-Part 1 of the Linux backend: screens (`xrandr --listmonitors`), windows (EWMH properties through libX11 and `ctypes`, no
-extra Python packages), capture (ffmpeg `x11grab` + libx264), the identity key (a file with mode 0600, refused if
-group/other-readable or owned by someone else) and child cleanup (process groups plus a pidfd watcher). Mouse and keyboard
-input, the kill-switch hotkey and the approval prompt are not there yet, so `--input` does not work on Linux. Wayland
-sessions are refused with an "X11 session" message (the future route is the xdg-desktop-portal ScreenCast and RemoteDesktop
-interfaces); so is a missing `DISPLAY`. It needs `xrandr` and an ffmpeg with x11grab.
+Screens (`xrandr --listmonitors`), windows (EWMH properties through libX11 and `ctypes`, no extra Python packages),
+capture (ffmpeg `x11grab` + libx264), the identity key (a file with mode 0600, refused if group/other-readable or owned
+by someone else) and child cleanup (process groups plus a pidfd watcher). Mouse and keyboard input go through XTest
+(libXtst; keys are mapped through your current keyboard layout, and text characters the layout lacks are skipped and
+logged). The kill switch is Ctrl+Alt+Shift+Q, grabbed on the root window (with NumLock and CapsLock in any state); if
+another program already holds that key the agent warns and you stop it with Ctrl+C. The approval prompt is a `zenity`
+Yes/No box (default No, 30 s), or a `tkinter` window when zenity is missing; with neither, every request is denied and
+the agent warns. Wayland sessions are refused with an "X11 session" message (the future route is the xdg-desktop-portal
+ScreenCast and RemoteDesktop interfaces); so is a missing `DISPLAY`. It needs `xrandr`, libXtst and an ffmpeg with
+x11grab, plus `zenity` or `python3-tk`.
 
 ### Firewall
 
@@ -253,9 +257,10 @@ Read these before using `--input` or `--keyboard`.
 | `dispatch.py` | The input dispatcher: per-window input channels, the control state machine, cast-only rules, rate limits (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
-| `hostos/` | The OS layer every other module calls (`hostos.key(...)` etc.): `windows.py` wraps `winapi.py`; `macos.py` is the macOS backend; `linux_x11.py` is the experimental Linux backend (input, hotkey and prompt still stubs) |
+| `hostos/` | The OS layer every other module calls (`hostos.key(...)` etc.): `windows.py` wraps `winapi.py`; `macos.py` is the macOS backend; `linux_x11.py` is the experimental Linux backend |
 | `hostos/macos.py`, `hostos/_macos_pure.py`, `hostos/_macos_input.py`, `hostos/_reaper.py` | macOS capture and input: Quartz screens and windows, the ffmpeg avfoundation arguments and crop maths (pure, tested everywhere), the VK-to-kVK table, click counting and wheel maths (pure, too), the kqueue watcher that ends child processes |
-| `hostos/linux_x11.py`, `hostos/_linux_pure.py`, `hostos/_xlib.py` | Linux X11 (experimental): screens, windows, x11grab arguments, key-file check, session rows (pure parts tested everywhere); the libX11 calls through `ctypes` |
+| `hostos/linux_x11.py`, `hostos/_linux_pure.py`, `hostos/_xlib.py` | Linux X11 (experimental): screens, windows, capture, XTest input, the XGrabKey kill hotkey, the zenity prompt, key-file check, session rows (pure parts, the VK-to-keysym table and the dialog commands tested everywhere); the libX11 and libXtst calls through `ctypes` |
+| `hostos/_linux_dialog.py` | The tkinter Yes/No box the Linux prompt falls back to, run as a child process so it can be killed |
 | `hostos/_macos_secrets.py`, `_test_keychain.py` | The macOS identity wrap key (AES-GCM under a Keychain entry, through `keyring`); the test helper that points tests at a throwaway Keychain entry |
 | `winapi.py` | The Windows backend's calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), RSASSA-PKCS1-v1_5 (SHA-256) signatures and public-key fingerprints |
@@ -290,6 +295,7 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | jaraco.classes, jaraco.functools, jaraco.context, more-itertools | | MIT | keyring dependencies (macOS only) |
 | importlib_metadata, zipp, backports.tarfile | | Apache-2.0, MIT, MIT | keyring dependencies (macOS only, Python < 3.12) |
 | libX11, libXtst, xrandr | | MIT | system libraries and tool the Linux backend calls (`ctypes` / subprocess); not included or installed by the agent |
+| zenity | | LGPL-2.1-or-later | the Linux approval prompt runs it as a separate program if installed; not included or installed by the agent |
 | aioice 0.10.2, pylibsrtp 1.0.0 | | BSD-3-Clause | aiortc dependencies |
 | google-crc32c 1.9.0, pyOpenSSL 26.2.0 | | Apache-2.0 | aiortc dependencies (pyOpenSSL is pinned so `cryptography` stays at 46.0.5) |
 | ifaddr 0.2.0, pyee 15.0.0 | | MIT | aiortc / zeroconf dependencies |
