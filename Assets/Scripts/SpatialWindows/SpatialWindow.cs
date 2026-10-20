@@ -7,9 +7,10 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// A floating panel: a body quad that holds content, a title bar above it with an options
-    /// button and a close button, and a resize handle in the bottom-right corner. The options button
-    /// opens a strip under the body with the window's curve and aspect preset (<see cref="WindowOptions"/>).
+    /// A floating panel: a body quad that holds content and a title bar above it. Under it sit a grab-bar pill that
+    /// moves the window and round close and options controls; a round resize control sits outside the bottom-right
+    /// corner. The controls fade in while the pointer is over the window (<see cref="SetPointerOver"/>). The options
+    /// button opens a strip under the body with the window's curve and aspect preset (<see cref="WindowOptions"/>).
     /// The window's +Z points away from the viewer, so its quads face the user.
     /// Built at runtime by <see cref="WindowManager"/>; place content under <see cref="ContentRoot"/>.
     ///
@@ -21,9 +22,6 @@ namespace SpatialLauncher.SpatialWindows
     {
         public const float TitleBarHeight = 0.06f;
         public const float TitleBarGap = 0.005f;
-        public const float CloseButtonSize = 0.045f;
-        const float ResizeHandleSize = 0.04f;
-        public const float Margin = 0.008f;
         // Thin, so raycasts agree with what's drawn; a thick box would reach past the 1 cm focus push-forward.
         const float ColliderDepth = 0.001f;
         // Layers in front of the body, towards the viewer (-Z).
@@ -42,8 +40,16 @@ namespace SpatialLauncher.SpatialWindows
         const float FocusRimBoost = 1.5f;
 
         static readonly Color BodyColor = new Color(0.10f, 0.10f, 0.12f);  // only if no glass material is assigned
-        static readonly Color CloseColor = UITheme.Destructive;
-        static readonly Color HandleColor = UITheme.Accent;
+        static readonly Color FlatControlColor = new Color(0.32f, 0.34f, 0.40f);  // controls without glass
+
+        // Controls fade in quickly and out slowly (time constants of the exponential approach, seconds).
+        const float RevealTauIn = 0.15f;
+        const float RevealTauOut = 0.6f;
+        // Grab bar: white at this alpha, brighter while the pointer is over the window.
+        const float PillAlpha = 0.45f;
+        const float PillAlphaHover = 0.8f;
+        // The close control's hit area sits one minimum gap (8 mm) left of the grab bar's, the options control's one more to the left.
+        // (The bar itself hangs 12 pt below the slab or the open options strip, see ChromeControl.PillRisePt.)
 
         static readonly int TintId = Shader.PropertyToID("_Tint");
         static readonly int FallbackId = Shader.PropertyToID("_Fallback");
@@ -101,8 +107,10 @@ namespace SpatialLauncher.SpatialWindows
             get
             {
                 float top = Size.y * 0.5f + TitleBarGap + TitleBarHeight;
-                float bottom = -Size.y * 0.5f - (Options != null ? Options.ExtraHeight : 0f);
-                return Rect.MinMaxRect(-Size.x * 0.5f, bottom, Size.x * 0.5f, top);
+                float hit = UITheme.PtToMetres(ChromeControl.HitPt);
+                float bottom = -Size.y * 0.5f - (Options != null ? Options.ExtraHeight : 0f) - hit;
+                float left = Mathf.Min(-Size.x * 0.5f, OptionsControlX - hit * 0.5f);
+                return Rect.MinMaxRect(left, bottom, Size.x * 0.5f + hit, top);
             }
         }
 
@@ -120,7 +128,14 @@ namespace SpatialLauncher.SpatialWindows
 
         Transform head;
         Transform visualRoot;
-        Transform body, slab, shadow, titleBar, closeButton, resizeHandle;
+        Transform body, slab, shadow, titleBar;
+        ChromeControl closeControl, resizeControl, grabBar;
+        Material chromeMaterial;
+        // Pointers (mouse, each hand) currently over the window; the window counts as hovered while any is.
+        readonly HashSet<object> pointers = new HashSet<object>();
+        static readonly object DefaultPointer = new object();
+        bool alwaysShowControls;
+        float reveal;
         TextMeshPro titleText;
         MeshRenderer bodyRenderer, slabRenderer, shadowRenderer;
         MaterialPropertyBlock glassBlock;
@@ -171,23 +186,35 @@ namespace SpatialLauncher.SpatialWindows
             // The title band is only a hit area now: the title is drawn as text on the glass.
             titleBar = CreateQuad("TitleBar", visualRoot, baseMaterial, WindowPartType.TitleBar);
             titleBar.GetComponent<MeshRenderer>().enabled = false;
-            closeButton = CreateQuad("CloseButton", visualRoot, MakeMaterial(baseMaterial, CloseColor), WindowPartType.CloseButton);
-            resizeHandle = CreateQuad("ResizeHandle", visualRoot, MakeMaterial(baseMaterial, HandleColor), WindowPartType.ResizeHandle);
+
+            // Round controls reuse the glass shader without depth write (so a hidden one doesn't block anything).
+            if (glass)
+            {
+                chromeMaterial = new Material(glassMaterial) { name = "SpatialGlass Chrome" };
+                chromeMaterial.SetFloat("_ZWrite", 0f);
+                materials.Add(chromeMaterial);
+            }
+            else chromeMaterial = MakeMaterial(baseMaterial, FlatControlColor);
+            var disc = new Vector2(ChromeControl.DiscPt, ChromeControl.DiscPt);
+            var hitSquare = new Vector2(ChromeControl.HitPt, ChromeControl.HitPt);
+            closeControl = new ChromeControl(CreateQuad("CloseButton", visualRoot, baseMaterial, WindowPartType.CloseButton),
+                visualRoot, chromeMaterial, hitSquare, disc, 0f, ChromeControl.DiscFill, true, UIIcons.Close);
+            resizeControl = new ChromeControl(CreateQuad("ResizeHandle", visualRoot, baseMaterial, WindowPartType.ResizeHandle),
+                visualRoot, chromeMaterial, hitSquare, disc, 0f, ChromeControl.DiscFill, true, UIIcons.OpenInFull);
+            grabBar = new ChromeControl(CreateQuad("GrabBar", visualRoot, baseMaterial, WindowPartType.GrabBar),
+                visualRoot, chromeMaterial, new Vector2(ChromeControl.PillHitWidthPt, ChromeControl.HitPt),
+                new Vector2(ChromeControl.PillWidthPt, ChromeControl.PillHeightPt), ChromeControl.PillRisePt, Color.white, false, null);
+            grabBar.OutlinePt = ChromeControl.PillOutlinePt;
 
             titleText = CreateText("TitleText", visualRoot, Title, 0.3f, TextAlignmentOptions.TopLeft);
             ThemeApplier.Apply(titleText, TextRole.Title);
-            var closeGlyph = CreateText("CloseGlyph", closeButton, "X", 0.3f, TextAlignmentOptions.Center);
-            // The close button quad is scaled; undo it so the glyph keeps its size.
-            closeGlyph.transform.localScale = new Vector3(1f / CloseButtonSize, 1f / CloseButtonSize, 1f);
-            closeGlyph.transform.localPosition = new Vector3(0f, 0f, -0.01f);
-            closeGlyph.rectTransform.sizeDelta = new Vector2(CloseButtonSize, CloseButtonSize);
 
             ContentRoot = new GameObject("Content").transform;
             ContentRoot.SetParent(visualRoot, false);
             ContentRoot.localPosition = new Vector3(0f, 0f, -ContentDepth);
 
             Options = gameObject.AddComponent<WindowOptions>();
-            Options.Build(this, baseMaterial);
+            Options.Build(this, baseMaterial, chromeMaterial);
             gameObject.AddComponent<WindowCurver>();
         }
 
@@ -239,8 +266,66 @@ namespace SpatialLauncher.SpatialWindows
         public void SetSolid(bool value)
         {
             solid = value;
+            AlwaysShowControls = value;
             UpdateGlass();
         }
+
+        /// <summary>Keeps the close, options and resize controls visible even when the pointer is elsewhere (set by <see cref="SetSolid"/>).</summary>
+        public bool AlwaysShowControls
+        {
+            get => alwaysShowControls;
+            set { alwaysShowControls = value; ApplyReveal(); }
+        }
+
+        /// <summary>How far the pointer-over reveal has come, 0 (hidden) to 1 (shown).</summary>
+        public float Reveal => reveal;
+
+        /// <summary>Alpha the round controls are drawn with: 1 when <see cref="AlwaysShowControls"/>, else <see cref="Reveal"/>.</summary>
+        public float ControlsAlpha => alwaysShowControls ? 1f : reveal;
+
+        public bool IsPointerOver => pointers.Count > 0;
+
+        /// <summary>Called by input every frame: true while a pointer is over the window or working on it, false once it leaves.</summary>
+        public void SetPointerOver(bool over) => SetPointerOver(DefaultPointer, over);
+
+        /// <summary>As <see cref="SetPointerOver(bool)"/> for one pointer (the mouse, a hand); the window stays hovered while any pointer is over it.</summary>
+        public void SetPointerOver(object pointer, bool over)
+        {
+            if (over) pointers.Add(pointer);
+            else pointers.Remove(pointer);
+        }
+
+        /// <summary>Moves <see cref="Reveal"/> towards the pointer state: fast in (150 ms), slow out (600 ms), whatever the frame rate.</summary>
+        public void UpdateReveal(float deltaTime)
+        {
+            float target = IsPointerOver ? 1f : 0f;
+            float tau = target > reveal ? RevealTauIn : RevealTauOut;
+            reveal += (target - reveal) * (1f - Mathf.Exp(-deltaTime / tau));
+            ApplyReveal();
+        }
+
+        /// <summary>Jumps the reveal to a value (the UI gallery's Hover and Idle shots) and makes the pointer state agree.</summary>
+        public void SetReveal(float value)
+        {
+            reveal = Mathf.Clamp01(value);
+            pointers.Clear();
+            if (reveal >= 0.5f) pointers.Add(DefaultPointer);
+            ApplyReveal();
+        }
+
+        void ApplyReveal()
+        {
+            if (closeControl == null || Options == null || Options.Toggle == null) return;
+            float alpha = ControlsAlpha;
+            closeControl.Apply(alpha);
+            resizeControl.Apply(alpha);
+            Options.Toggle.Apply(alpha);
+            grabBar.Apply(1f, Mathf.Lerp(PillAlpha, PillAlphaHover, reveal));
+        }
+
+        public ChromeControl GrabBarControl => grabBar;
+        public ChromeControl CloseControl => closeControl;
+        public ChromeControl ResizeControl => resizeControl;
 
         // Pushes the theme values and the current size to the body and shadow renderers.
         void UpdateGlass()
@@ -351,20 +436,35 @@ namespace SpatialLauncher.SpatialWindows
             titleBar.localPosition = new Vector3(0f, titleY, 0f);
             titleBar.localScale = new Vector3(w, TitleBarHeight, 1f);
 
-            closeButton.localPosition = new Vector3(w * 0.5f - Margin - CloseButtonSize * 0.5f, titleY, -DecorationDepth);
-            closeButton.localScale = new Vector3(CloseButtonSize, CloseButtonSize, 1f);
-
-            // Room for the options and close buttons on the right.
-            float textWidth = Mathf.Max(0.01f, w - TitleInset - CloseButtonSize * 2f - Margin * 4f);
+            float textWidth = Mathf.Max(0.01f, w - TitleInset * 2f);
             float textHeight = TitleBarHeight * 0.5f;
             titleText.rectTransform.sizeDelta = new Vector2(textWidth, textHeight);
             titleText.transform.localPosition = new Vector3(-w * 0.5f + TitleInset + textWidth * 0.5f,
                 h * 0.5f + SlabExtra - TitleInset - textHeight * 0.5f, -DecorationDepth);
 
-            resizeHandle.localPosition = new Vector3(w * 0.5f - ResizeHandleSize * 0.5f, -h * 0.5f + ResizeHandleSize * 0.5f, -DecorationDepth);
-            resizeHandle.localScale = new Vector3(ResizeHandleSize, ResizeHandleSize, 1f);
+            Options.Layout(Size);
+            LayoutChrome();
+        }
 
-            Options.Layout(Size, titleY, w * 0.5f - Margin * 2f - CloseButtonSize * 1.5f);
+        // Centre of the close control; the options control is one step further left.
+        static float CloseControlX => -UITheme.PtToMetres(ChromeControl.PillHitWidthPt * 0.5f + UITheme.MinHitGapMm + ChromeControl.HitPt * 0.5f);
+        static float OptionsControlX => CloseControlX - UITheme.PtToMetres(ChromeControl.HitPt + UITheme.MinHitGapMm);
+
+        /// <summary>
+        /// Places the grab bar and the close and options controls in a row under the slab (or under the open options
+        /// strip), and the resize control outside the bottom-right corner. The hit areas hang from the edge they sit
+        /// under; the drawn shapes sit a little higher, 12 pt below the edge.
+        /// </summary>
+        internal void LayoutChrome()
+        {
+            if (closeControl == null || Size == Vector2.zero) return;
+            float hit = UITheme.PtToMetres(ChromeControl.HitPt);
+            float hitY = -Size.y * 0.5f - Options.ExtraHeight - hit * 0.5f;
+            grabBar.Place(0f, hitY, -DecorationDepth);
+            closeControl.Place(CloseControlX, hitY, -DecorationDepth);
+            Options.Toggle.Place(OptionsControlX, hitY, -DecorationDepth);
+            resizeControl.Place(Size.x * 0.5f + hit * 0.5f, -Size.y * 0.5f - hit * 0.5f, -DecorationDepth);
+            ApplyReveal();
         }
 
         /// <summary>Moves the window. Body-locked windows keep the new offset from the head.</summary>
@@ -426,6 +526,7 @@ namespace SpatialLauncher.SpatialWindows
         void LateUpdate()
         {
             AnimatePresentation();
+            UpdateReveal(Time.unscaledDeltaTime);
             if (head == null) return;
 
             if (!worldLocked)

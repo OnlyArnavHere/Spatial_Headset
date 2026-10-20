@@ -1,11 +1,12 @@
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// A window's options: a "..." button in its title bar opens a strip under the body with a Curve slider (flat to a
+    /// A window's options: a round "..." button under the window opens a strip under the body with a Curve slider (flat to a
     /// gentle cylinder) and the aspect presets (Free, 16:9, 16:10, 21:9, 4:3, 32:9, 1:1, 3:2). Built by
     /// <see cref="SpatialWindow"/>; picking a preset asks the window's manager to apply it.
     /// </summary>
@@ -29,6 +30,8 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>How far the open strip reaches below the body (0 when closed).</summary>
         public float ExtraHeight => IsOpen ? PanelHeight + Gap : 0f;
         public WindowButton ToggleButton { get; private set; }
+        /// <summary>The drawn side of <see cref="ToggleButton"/> (a round glass control).</summary>
+        public ChromeControl Toggle { get; private set; }
         public WindowSlider CurveSlider { get; private set; }
         /// <summary>Free first, then <see cref="AspectPresets.All"/>.</summary>
         public IReadOnlyList<WindowButton> AspectButtons => aspectButtons;
@@ -47,20 +50,21 @@ namespace SpatialLauncher.SpatialWindows
         Material baseMaterial;
         Vector2 size;
 
-        public void Build(SpatialWindow window, Material material)
+        public void Build(SpatialWindow window, Material material, Material chromeMaterial)
         {
             Window = window;
             baseMaterial = material;
             var visual = window.Visual;
 
             ToggleButton = Control<WindowButton>("OptionsButton", visual, ButtonColor);
-            Label("OptionsGlyph", ToggleButton.transform, "...", 0.3f, true);
+            Toggle = new ChromeControl(ToggleButton.transform, visual, chromeMaterial, new Vector2(ChromeControl.HitPt, ChromeControl.HitPt),
+                new Vector2(ChromeControl.DiscPt, ChromeControl.DiscPt), 0f, ChromeControl.DiscFill, true, UIIcons.MoreHoriz);
             ToggleButton.Clicked += () => SetOpen(!IsOpen);
 
             root = new GameObject("Options").transform;
             root.SetParent(visual, false);
             panel = Quad("OptionsPanel", root, PanelColor);
-            curveLabel = Label("CurveLabel", root, "", 0.16f, false);
+            curveLabel = Label("CurveLabel", root, "", 0.16f);
             CurveSlider = Control<WindowSlider>("CurveSlider", root, TrackColor);
             CurveSlider.ValueChanged += value => Window.SetCurve(value);
             fill = Quad("CurveFill", root, FillColor);
@@ -70,7 +74,7 @@ namespace SpatialLauncher.SpatialWindows
                 var choice = preset;
                 button.Clicked += () => Window.RequestAspect(choice);
                 aspectButtons.Add(button);
-                aspectVisuals.Add((Label($"AspectLabel {AspectPresets.Label(preset)}", root, AspectPresets.Label(preset), 0.14f, false),
+                aspectVisuals.Add((Label($"AspectLabel {AspectPresets.Label(preset)}", root, AspectPresets.Label(preset), 0.14f),
                     button.GetComponent<MeshRenderer>().sharedMaterial));
             }
             root.gameObject.SetActive(false);
@@ -83,6 +87,7 @@ namespace SpatialLauncher.SpatialWindows
             IsOpen = open;
             root.gameObject.SetActive(open);
             Refresh();
+            Window.LayoutChrome();
         }
 
         void Refresh()
@@ -93,13 +98,10 @@ namespace SpatialLauncher.SpatialWindows
             PlaceFill();
         }
 
-        /// <summary>Called from the window's layout: <paramref name="buttonX"/> is the options button's centre.</summary>
-        public void Layout(Vector2 bodySize, float titleY, float buttonX)
+        /// <summary>Called from the window's layout (the options button is placed by <see cref="SpatialWindow.LayoutChrome"/>).</summary>
+        public void Layout(Vector2 bodySize)
         {
             size = bodySize;
-            float button = SpatialWindow.CloseButtonSize;
-            ToggleButton.transform.localPosition = new Vector3(buttonX, titleY, -Depth);
-            ToggleButton.transform.localScale = new Vector3(button, button, 1f);
 
             float top = -bodySize.y * 0.5f - Gap;
             float width = bodySize.x;
@@ -160,7 +162,7 @@ namespace SpatialLauncher.SpatialWindows
             return quad.transform;
         }
 
-        static TextMeshPro Label(string name, Transform parent, string text, float fontSize, bool undoParentScale)
+        static TextMeshPro Label(string name, Transform parent, string text, float fontSize)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
@@ -171,14 +173,6 @@ namespace SpatialLauncher.SpatialWindows
             label.color = Color.white;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Ellipsis;
-            if (undoParentScale)
-            {
-                // The button quad is scaled to its size; undo it so the glyph keeps its own.
-                float s = SpatialWindow.CloseButtonSize;
-                go.transform.localScale = new Vector3(1f / s, 1f / s, 1f);
-                go.transform.localPosition = new Vector3(0f, 0f, -0.01f);
-                label.rectTransform.sizeDelta = new Vector2(s, s);
-            }
             return label;
         }
 

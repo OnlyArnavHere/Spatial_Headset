@@ -193,6 +193,7 @@ namespace SpatialLauncher.SpatialWindows
             bool wasPinched;
             WindowControl activeControl;
             WindowControl hoveredControl;
+            SpatialWindow pointerWindow;
             Vector3 gesturePoint;
 
             // Drag: a plane parallel to the window at grab time, pushed in/out by hand depth.
@@ -266,6 +267,12 @@ namespace SpatialLauncher.SpatialWindows
                 hoveredControl = hovered;
                 if (hovered != null) hovered.Hover(hit.point);
 
+                // The window under the ray (or being worked on) shows its controls; the one the ray left hides them.
+                var over = mode != Mode.None && ActiveWindow != null ? ActiveWindow : hasHit ? part.Window : null;
+                if (pointerWindow != over && pointerWindow != null) pointerWindow.SetPointerOver(this, false);
+                pointerWindow = over;
+                if (over != null) over.SetPointerOver(this, true);
+
                 // During a gesture the cursor stays on the grabbed point; otherwise it marks what the ray hits.
                 bool inGesture = mode == Mode.Drag || mode == Mode.Resize || mode == Mode.Control;
                 if (inGesture) UpdateCursor(ray, gesturePoint, true, pinched);
@@ -281,6 +288,7 @@ namespace SpatialLauncher.SpatialWindows
                 switch (part.Type)
                 {
                     case WindowPartType.TitleBar:
+                    case WindowPartType.GrabBar:
                         mode = Mode.Drag;
                         dragNormal = window.transform.forward;
                         dragOrigin = hit.point;
@@ -370,6 +378,8 @@ namespace SpatialLauncher.SpatialWindows
                 if (mode == Mode.Control && activeControl != null) activeControl.Release(false);
                 if (hoveredControl != null) hoveredControl.HoverExit();
                 hoveredControl = null;
+                if (pointerWindow != null) pointerWindow.SetPointerOver(this, false);
+                pointerWindow = null;
                 ResetGesture();
                 wasPinched = false;
                 Filter.Reset();

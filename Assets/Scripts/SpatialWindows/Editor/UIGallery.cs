@@ -178,17 +178,21 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 case GalleryState.Disabled: // no disabled look exists yet; same as idle until there is
                     window.SetFocused(false);
                     window.SetPresentation(0f, 1f, instant: true);
+                    window.SetReveal(0f); // chrome controls hidden
                     break;
                 case GalleryState.Hover:
                     Focus(window);
+                    window.SetReveal(1f); // chrome controls shown
                     control.Hover(control.transform.position);
                     break;
                 case GalleryState.Pressed:
                     Focus(window);
+                    window.SetReveal(1f);
                     control.Press(control.transform.position);
                     break;
                 case GalleryState.Focused:
                     Focus(window);
+                    window.SetReveal(0f);
                     break;
             }
         }

@@ -6,8 +6,8 @@ namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
     /// Editor stand-in for hand input: raycasts from the mouse through the camera.
-    /// Click a window to select it, drag its title bar to move it, drag the bottom-right
-    /// handle to resize it, and click the red button to close it. Content controls
+    /// Click a window to select it, drag its title bar or grab bar to move it, drag the
+    /// resize control at the bottom-right corner to resize it, and click the close button. Content controls
     /// (<see cref="WindowControl"/>) receive press, drag and release directly.
     /// </summary>
     public class MouseWindowInput : MonoBehaviour, IWindowInput
@@ -26,6 +26,7 @@ namespace SpatialLauncher.SpatialWindows
 
         Mode mode;
         SpatialWindow activeWindow;
+        SpatialWindow pointerWindow;
         WindowControl activeControl;
         WindowControl hoveredControl;
 
@@ -69,6 +70,19 @@ namespace SpatialLauncher.SpatialWindows
             }
 
             UpdateHover(ray, inView, mouse.scroll.ReadValue().y);
+            UpdatePointerOver(ray, inView);
+        }
+
+        // The window under the mouse (or being dragged) shows its controls; the one the mouse left hides them.
+        void UpdatePointerOver(Ray ray, bool inView)
+        {
+            SpatialWindow over = null;
+            if (mode != Mode.None && activeWindow != null) over = activeWindow;
+            else if (inView && TryHit(ray, out _, out var part)) over = part.Window;
+
+            if (pointerWindow != over && pointerWindow != null) pointerWindow.SetPointerOver(this, false);
+            pointerWindow = over;
+            if (over != null) over.SetPointerOver(this, true);
         }
 
         // Hover and scroll go to the control under the mouse while no gesture is in progress.
@@ -126,6 +140,7 @@ namespace SpatialLauncher.SpatialWindows
             switch (part.Type)
             {
                 case WindowPartType.TitleBar:
+                case WindowPartType.GrabBar:
                     mode = Mode.Drag;
                     grabDistance = hit.distance;
                     grabOffset = activeWindow.transform.position - hit.point;
@@ -208,6 +223,8 @@ namespace SpatialLauncher.SpatialWindows
             // Switching input sources mid-gesture: let go cleanly.
             if (mode == Mode.Control && activeControl != null) activeControl.Release(false);
             if (hoveredControl != null) hoveredControl.HoverExit();
+            if (pointerWindow != null) pointerWindow.SetPointerOver(this, false);
+            pointerWindow = null;
             mode = Mode.None;
             activeWindow = null;
             activeControl = null;
