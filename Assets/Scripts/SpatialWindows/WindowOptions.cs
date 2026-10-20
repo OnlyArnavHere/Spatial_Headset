@@ -152,7 +152,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
             quad.name = name;
-            Destroy(quad.GetComponent<MeshCollider>());
+            DestroyImmediate(quad.GetComponent<MeshCollider>());
             quad.transform.SetParent(parent, false);
             var material = new Material(baseMaterial) { color = color };
             materials.Add(material);

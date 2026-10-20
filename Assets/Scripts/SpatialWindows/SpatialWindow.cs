@@ -177,7 +177,7 @@ namespace SpatialLauncher.SpatialWindows
             var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
             quad.name = quadName;
             quad.transform.SetParent(parent, false);
-            Destroy(quad.GetComponent<MeshCollider>());
+            DestroyImmediate(quad.GetComponent<MeshCollider>());
             var box = quad.AddComponent<BoxCollider>();
             box.size = new Vector3(1f, 1f, ColliderDepth);
             quad.GetComponent<MeshRenderer>().sharedMaterial = material;
