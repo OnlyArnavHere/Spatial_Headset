@@ -132,11 +132,13 @@ class InterfaceTests(unittest.TestCase):
 
     def test_linux_backend_says_what_is_missing(self):
         backend = importlib.import_module("hostos.linux_x11")
-        with self.assertRaisesRegex(NotImplementedError, "Linux support lands in a later commit"):
+        with self.assertRaisesRegex(NotImplementedError, "land in a later commit"):
             backend.open_prompt("x")
-        with self.assertRaises(NotImplementedError):
-            backend.ChildReaper()
-        self.assertEqual(backend.preflight(), [])
+        for name in ("mouse_move", "key"):
+            with self.assertRaises(NotImplementedError):
+                getattr(backend, name)(1)
+        for name in ("list_windows", "capture_input_args", "preflight", "protect", "ChildReaper"):
+            self.assertNotEqual(getattr(backend, name).__name__, "unsupported", name)
 
     def test_macos_backend_has_no_stubs_left(self):
         backend = importlib.import_module("hostos.macos")

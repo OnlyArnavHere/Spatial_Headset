@@ -131,6 +131,10 @@ def _trusted() -> bool:
     return bool(AXIsProcessTrusted())
 
 
+def check_key_file(path) -> None:
+    pass  # the Keychain key protects the file
+
+
 def preflight() -> list[pure.Row]:
     """Screen Recording, Accessibility and Input Monitoring, each with whether it is granted."""
     q = _quartz()

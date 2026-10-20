@@ -145,6 +145,10 @@ def default_home() -> Path:
     return Path(base) / "SpatialLauncher" / "agent"
 
 
+def check_key_file(path):
+    pass  # DPAPI ties the file to this user
+
+
 def preflight() -> list[tuple[str, bool, str]]:
     return []
 

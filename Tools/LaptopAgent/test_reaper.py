@@ -1,4 +1,5 @@
 """Regression test: _reaper.py must start its main when it is run as a script (the watcher is launched that way)."""
+import os
 import runpy
 import select
 import sys
@@ -26,6 +27,15 @@ class ReaperScriptTests(unittest.TestCase):
             with self.assertRaises(Sentinel):
                 runpy.run_path(str(REAPER), run_name="__main__")
         self.assertEqual(seen, ["4242"])
+
+    def test_running_as_a_script_on_linux_calls_the_pidfd_main(self):
+        def fake_pidfd_open(pid):
+            raise Sentinel(pid)
+
+        with mock.patch.object(sys, "argv", [str(REAPER), "4242"]), mock.patch.object(sys, "platform", "linux"),                 mock.patch.object(os, "pidfd_open", fake_pidfd_open, create=True):
+            with self.assertRaises(Sentinel) as caught:
+                runpy.run_path(str(REAPER), run_name="__main__")
+        self.assertEqual(caught.exception.args, (4242,))
 
     def test_importing_has_no_side_effects(self):
         runpy.run_path(str(REAPER), run_name="not_main")

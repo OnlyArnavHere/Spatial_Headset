@@ -69,6 +69,7 @@ def load_or_create(home: Path) -> Identity:
     path = Path(home) / KEY_FILE
     if path.exists():
         try:
+            hostos.check_key_file(path)
             pkcs8 = hostos.unprotect(path.read_bytes())
             key = serialization.load_der_private_key(pkcs8, password=None)
         except (OSError, ValueError) as e:

@@ -1,7 +1,7 @@
 """Kills the agent's child process groups when the agent goes away, however it goes (Ctrl+C, crash, kill -9).
 
 Run as `python -I _reaper.py <agent pid>` (-I keeps this folder, which has a types.py, off sys.path). The agent writes
-one process-group id per line to stdin as it starts children. When the agent exits (kqueue NOTE_EXIT) or stdin reaches
+one process-group id per line to stdin as it starts children. When the agent exits (kqueue NOTE_EXIT on macOS, a pidfd on Linux) or stdin reaches
 EOF, every group gets SIGTERM, then SIGKILL after a grace period. Importing this module has no side effects.
 
 Known gap: a child started in the instant before the agent is SIGKILLed (after it was spawned, before its group id
@@ -109,5 +109,41 @@ def main(agent_pid: int) -> None:
             return
 
 
+def main_linux(agent_pid: int) -> None:
+    """Linux: wait for stdin EOF or for the agent's pidfd to become readable (it does when the agent exits). Without
+    pidfd_open (kernel < 5.3) the agent's pid is polled twice a second instead."""
+    import select
+    groups = Groups()
+    try:
+        pidfd = os.pidfd_open(agent_pid)
+    except ProcessLookupError:  # the agent is already gone
+        return
+    except (AttributeError, OSError):
+        pidfd = None
+    while True:
+        ready = select.select([0] + ([pidfd] if pidfd is not None else []), [], [], None if pidfd is not None else 0.5)[0]
+        if 0 in ready:
+            data = os.read(0, 4096)
+            if data:
+                groups.feed(data)
+                continue
+            kill_groups(groups.ids)  # EOF: the agent closed the pipe or died
+            return
+        if pidfd is not None and pidfd in ready or pidfd is None and not _alive_pid(agent_pid):
+            drain(groups, lambda: os.read(0, 4096), lambda: bool(select.select([0], [], [], 0)[0]))
+            kill_groups(groups.ids)
+            return
+
+
+def _alive_pid(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
 if __name__ == "__main__":
-    main(int(sys.argv[1]))
+    (main_linux if sys.platform.startswith("linux") else main)(int(sys.argv[1]))

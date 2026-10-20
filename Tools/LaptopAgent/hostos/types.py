@@ -40,6 +40,6 @@ FUNCTIONS = (
     "window_is_minimized", "window_rect", "raise_window", "window_at", "focus_window", "foreground_window",
     "request_repaint", "mouse_move", "mouse_button", "mouse_wheel", "key", "type_text", "watch_kill_switch",
     "open_prompt", "protect", "unprotect", "default_home", "capture_input_args", "encoder_args",
-    "preflight", "window_selector", "monitor_selector", "visible_rect",
+    "preflight", "check_key_file", "window_selector", "monitor_selector", "visible_rect",
 )
 CONSTANTS = ("KILL_SWITCH", "ENCODERS", "exe_suffix", "ChildReaper")

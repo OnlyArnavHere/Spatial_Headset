@@ -239,22 +239,31 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReape
 
 
 def check_permissions(args: argparse.Namespace, rows: list) -> None:
-    """Tells the user which OS permissions are missing (macOS; Windows has none, so rows is empty and nothing prints).
+    """Tells the user which OS permissions are missing (macOS, and the Linux session rows; Windows has none, so rows is
+    empty and nothing prints).
     Missing Screen Recording stops the agent unless it only lists or pairs; missing Accessibility stops --input and
     --cast-only; missing Input Monitoring only costs the kill-switch hotkey, so it warns."""
     lists_only = args.list or args.pairs or args.pair or args.revoke is not None
     needs_input = args.input or args.cast_only
-    refused = False
+    pairing_only = args.pairs or args.pair or args.revoke is not None
+    refused = linux = False
     for row in rows:
         if row.ok:
             continue
-        if row.name == "Accessibility" and not needs_input:
+        if row.name in ("Accessibility", "Input") and not needs_input:
             continue  # nothing in this run injects input or raises windows
+        # Linux (X11, experimental): without an X11 session nothing can be listed or captured, so only pairing still
+        # runs; ffmpeg without x11grab stops everything that captures
         refuse = (row.name == "Screen Recording" and not lists_only) or (row.name == "Accessibility")
+        refuse = refuse or row.name == "Input"
+        refuse = refuse or (row.name == "X11 session" and not pairing_only) or (
+            row.name == "ffmpeg x11grab" and not lists_only)
         refused = refused or refuse
+        linux = linux or row.name in ("X11 session", "ffmpeg x11grab", "Input")
         print(("error: " if refuse else "warning: ") + row.text, file=sys.stderr)
     if refused:
-        raise SystemExit("Grant the permission above, restart the app you run this from, and start the agent again.")
+        raise SystemExit("Fix the problem above and start the agent again." if linux else
+                         "Grant the permission above, restart the app you run this from, and start the agent again.")
 
 
 def watch_kill_switch(runner: LinkRunner) -> None:
@@ -265,7 +274,7 @@ def watch_kill_switch(runner: LinkRunner) -> None:
         log.info("Kill switch: press %s on this laptop to end every session and stop the video", hostos.KILL_SWITCH)
     else:
         log.warning("Kill switch %s is unavailable (taken by another program, or Input Monitoring is not granted on "
-                    "macOS); stop the agent with Ctrl+C instead",
+                    "macOS, or not implemented yet on Linux); stop the agent with Ctrl+C instead",
                     hostos.KILL_SWITCH)
 
 
