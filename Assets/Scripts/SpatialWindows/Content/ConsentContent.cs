@@ -1,3 +1,4 @@
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -11,9 +12,11 @@ namespace SpatialLauncher.SpatialWindows
     public class ConsentContent : WindowContent
     {
         static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
-        static readonly Color ApproveColor = new Color(0.20f, 0.55f, 0.35f);
-        static readonly Color DenyColor = new Color(0.60f, 0.25f, 0.25f);
-        const float ButtonHeight = 0.045f, ButtonWidth = 0.15f, Gap = 0.012f;
+        static readonly Color ApproveColor = UITheme.SuccessFill;
+        static readonly Color DenyColor = UITheme.DestructiveFill;
+        /// <summary>56 pt high buttons, the consent exception in the design spec.</summary>
+        public const float ButtonHeight = 0.056f;
+        const float ButtonWidth = 0.15f, Gap = 0.012f;
 
         public WindowButton ApproveButton { get; private set; }
         public WindowButton DenyButton { get; private set; }
@@ -38,8 +41,10 @@ namespace SpatialLauncher.SpatialWindows
             countdown.color = new Color(0.75f, 0.77f, 0.82f);
             ApproveButton = CreateControl<WindowButton>("Approve", transform, CreateMaterial(ApproveColor));
             approveLabel = CreateLabel("ApproveLabel", transform, "Approve", 0.22f, TextAlignmentOptions.Center);
+            ThemeApplier.Apply(approveLabel, TextRole.Headline);
             DenyButton = CreateControl<WindowButton>("Deny", transform, CreateMaterial(DenyColor));
             denyLabel = CreateLabel("DenyLabel", transform, "Deny", 0.22f, TextAlignmentOptions.Center);
+            ThemeApplier.Apply(denyLabel, TextRole.Headline);
             ApproveButton.Clicked += () => gate.Approve();
             DenyButton.Clicked += () => gate.Deny();
             Relayout();

@@ -131,6 +131,8 @@ namespace SpatialLauncher.SpatialWindows
         Transform body, slab, shadow, titleBar;
         ChromeControl closeControl, resizeControl, grabBar;
         Material chromeMaterial;
+        /// <summary>The glass material the window was built with (null for a plain window); content shapes are drawn with its shader.</summary>
+        public Material GlassMaterial { get; private set; }
         // Pointers (mouse, each hand) currently over the window; the window counts as hovered while any is.
         readonly HashSet<object> pointers = new HashSet<object>();
         static readonly object DefaultPointer = new object();
@@ -169,6 +171,7 @@ namespace SpatialLauncher.SpatialWindows
             visualRoot = new GameObject("Visual").transform;
             visualRoot.SetParent(transform, false);
 
+            GlassMaterial = glassMaterial;
             bool glass = glassMaterial != null;
             body = CreateQuad("Body", visualRoot, glass ? glassMaterial : MakeMaterial(baseMaterial, BodyColor), WindowPartType.Content);
             if (glass)

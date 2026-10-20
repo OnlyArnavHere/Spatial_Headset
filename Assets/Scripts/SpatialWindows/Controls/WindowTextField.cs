@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -14,8 +15,10 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class WindowTextField : WindowControl
     {
-        static readonly Color NormalColor = new Color(0.20f, 0.21f, 0.25f);
-        static readonly Color FocusedColor = new Color(0.16f, 0.30f, 0.60f);
+        /// <summary>The raised glass overlay over the dark fallback, like the round controls.</summary>
+        public static readonly Color NormalColor = UITheme.CompositeOver(UITheme.GlassRaised, UITheme.GlassFallback);
+        /// <summary>The accent over the normal fill, so a focused field stands out from its neighbours.</summary>
+        public static readonly Color FocusedColor = UITheme.CompositeOver(new Color(UITheme.Accent.r, UITheme.Accent.g, UITheme.Accent.b, 0.45f), NormalColor);
 
         /// <summary>The field that has keyboard focus, if any.</summary>
         public static WindowTextField Focused { get; private set; }

@@ -28,6 +28,9 @@ Direction: visionOS-like frosted glass, tuned for the HoloKit stereo view. Units
 | accent | #0A84FF |
 | destructive | #FF453A |
 | success | #30D158 |
+| accentFill | #0062CC (primary button fill under white text, ~5.8:1; accent is for text-free accents) |
+| successFill | #1E7B34 (solid button fill under white text, ~5.3:1; success is for accents without text) |
+| destructiveFill | #D70015 (solid button fill under white text, ~5.3:1; destructive is for accents without text) |
 | rim | #FFFFFF alpha 0.28 (top) to 0.08 (bottom), 1 px |
 | shadow | #000000, alpha 0.35 |
 | focus ring | #FFFFFF alpha 0.9, 2 pt, 3 pt outside the edge |
@@ -81,12 +84,12 @@ All animation uses `Time.unscaledDeltaTime` and exponential smoothing k = 1 - ex
 
 ## 9. Window types
 - Home: 4-column grid of app tiles, 72 pt square, 12 pt radius, icon plus caption.
-- Image / Video: content fills the glass with inset 0, clipped to the radius. Video controls are a floating glass capsule (44 pt high) on hover.
+- Image / Video: content fills the glass with inset 0, clipped to the radius (12 pt: 24 pt less the 20 pt padding, never below the control radius). Video controls are a floating glass capsule (44 pt high) on hover.
 - Settings: 160 pt sidebar of 44 pt rows, accent capsule on the selected row; switches 52x32 pt.
 - Keyboard: keys 44 pt with 6 pt gaps (the one allowed exception, still >= 0.3 deg), glass.raised, Return in accent.
 - Connect laptop: body text plus a primary accent button 44 pt high.
 - Remote stream: content opaque; only the chrome is glass.
-- Consent (exception, clarity over style): solid, not glass. Body #1E2026 alpha 1.0 with a 2 pt rim #FFFFFF alpha 0.5. Approve solid success, Deny solid destructive, both 56 pt high, white SemiBold 17 pt text. Countdown text.secondary 15 pt. Close always visible (no hover-hide). No open scale (120 ms fade only). Semantics and timeouts unchanged.
+- Consent (exception, clarity over style): solid, not glass. Body #1E2026 alpha 1.0 with a 2 pt rim #FFFFFF alpha 0.5. Approve solid successFill, Deny solid destructiveFill (white text needs the darker fills), both 56 pt high, white SemiBold 17 pt text. Countdown text.secondary 15 pt. Close always visible (no hover-hide). No open scale (120 ms fade only). Semantics and timeouts unchanged.
 
 ## 10. Stages
 - C2: static `UITheme` tokens + `ThemeApplier`; Inter and Material Symbols as TMP font assets under Assets/Fonts/; THIRD_PARTY.md.

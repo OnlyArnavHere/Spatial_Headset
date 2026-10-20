@@ -17,6 +17,11 @@ namespace SpatialLauncher.SpatialWindows.Theme
         public static readonly Color Accent = Hex(0x0A84FF, 1f);
         public static readonly Color Destructive = Hex(0xFF453A, 1f);
         public static readonly Color Success = Hex(0x30D158, 1f);
+        /// <summary>Fill of a solid button with white text (about 5.3:1); Success and Destructive are for accents without text.</summary>
+        /// <summary>Fill of a primary button with white text (about 5.8:1); Accent is for text-free accents.</summary>
+        public static readonly Color AccentFill = Hex(0x0062CC, 1f);
+        public static readonly Color SuccessFill = Hex(0x1E7B34, 1f);
+        public static readonly Color DestructiveFill = Hex(0xD70015, 1f);
         public static readonly Color RimTop = Hex(0xFFFFFF, 0.28f);
         public static readonly Color RimBottom = Hex(0xFFFFFF, 0.08f);
         public static readonly Color Shadow = Hex(0x000000, 0.35f);

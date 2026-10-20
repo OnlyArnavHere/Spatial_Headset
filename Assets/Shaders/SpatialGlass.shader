@@ -19,6 +19,10 @@ Shader "SpatialLauncher/SpatialGlass"
         _Solid ("Solid", Float) = 0
         _ShadowOnly ("Shadow only", Float) = 0
         _ZWrite ("ZWrite", Float) = 1
+        [MainTexture] _MainTex ("Texture (flat shapes)", 2D) = "white" {}
+        [MainColor] _Color ("Fill (flat shapes)", Color) = (1, 1, 1, 1)
+        _UseTex ("Use texture", Float) = 0
+        _Flat ("Flat shape", Float) = 0
     }
 
     HLSLINCLUDE
@@ -39,7 +43,14 @@ Shader "SpatialLauncher/SpatialGlass"
         float4 _Quad;
         float _Solid;
         float _ShadowOnly;
+        half4 _Color;
+        float4 _MainTex_ST;
+        float _UseTex;
+        float _Flat;
     CBUFFER_END
+
+    TEXTURE2D(_MainTex);
+    SAMPLER(sampler_MainTex);
 
     // Set by the blur pass (later); until then _SpatialBlurOn stays 0.
     TEXTURE2D(_SpatialBackdrop);
@@ -101,6 +112,15 @@ Shader "SpatialLauncher/SpatialGlass"
         float cover = saturate(0.5 - d / aa);
         // The slab writes depth, so clip its transparent corners.
         clip(cover - 0.01);
+
+        // Flat shapes (in-window controls and images): a solid fill, times the texture when _UseTex is 1, with the rounded edge.
+        if (_Flat > 0.5)
+        {
+            half4 fill = _Color;
+            if (_UseTex > 0.5) fill.rgb *= SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv * _MainTex_ST.xy + _MainTex_ST.zw).rgb;
+            return half4(fill.rgb, fill.a * cover);
+        }
+
         float t = saturate(p.y / max(_Size.y, 1e-5) + 0.5);   // 0 at the bottom, 1 at the top
 
         half3 rgb;

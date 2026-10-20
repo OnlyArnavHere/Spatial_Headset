@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using SpatialLauncher.LaptopLink;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -15,8 +16,9 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class LaptopPickerContent : WindowContent
     {
-        static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
-        static readonly Color ListColor = new Color(0.20f, 0.55f, 0.35f);
+        /// <summary>No panel fill: the texts sit on the glass itself (a raised panel dropped them under 4.5:1).</summary>
+        public static readonly Color PanelColor = Color.clear;
+        public static readonly Color ListColor = UITheme.AccentFill;
         static readonly Color WindowEntryColor = new Color(0.22f, 0.27f, 0.38f);
         static readonly Color DesktopEntryColor = new Color(0.30f, 0.42f, 0.70f);
         static readonly Color MoreColor = new Color(0.32f, 0.34f, 0.40f);
@@ -94,10 +96,11 @@ namespace SpatialLauncher.SpatialWindows
             pairRequested = openPairing;
 
             panel = CreateQuad("ConnectPanel", transform, CreateMaterial(PanelColor));
+            Round(panel, UITheme.ControlRadius);
 
             statusLine = CreateLabel("StatusLine", transform, "",
                 0.17f, TextAlignmentOptions.MidlineLeft);
-            statusLine.color = new Color(0.75f, 0.77f, 0.82f);
+            statusLine.color = UITheme.TextPrimary;
 
             for (int i = 0; i < RowsPerPage; i++)
             {
@@ -119,7 +122,7 @@ namespace SpatialLauncher.SpatialWindows
             pairLabel.gameObject.SetActive(pairRequested != null);
             messageLabel = CreateLabel("Message", transform, "", 0.2f, TextAlignmentOptions.Center);
             messageLabel.textWrappingMode = TextWrappingModes.Normal;
-            messageLabel.color = new Color(0.75f, 0.77f, 0.82f);
+            messageLabel.color = UITheme.TextPrimary;
             messageLabel.richText = false;
             messageLabel.gameObject.SetActive(false);
 
