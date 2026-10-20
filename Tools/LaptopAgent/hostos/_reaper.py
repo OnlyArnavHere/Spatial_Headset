@@ -107,3 +107,7 @@ def main(agent_pid: int) -> None:
         if exited or eof:
             kill_groups(groups.ids)
             return
+
+
+if __name__ == "__main__":
+    main(int(sys.argv[1]))
