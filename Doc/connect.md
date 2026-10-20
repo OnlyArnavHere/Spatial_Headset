@@ -1,6 +1,6 @@
 # Connecting a laptop
 
-The headset shows a Windows laptop's windows or desktop. This page covers setup, pairing, connecting, and what is and is not protected.
+The headset shows a laptop's windows or desktop. The laptop can run Windows, macOS, or Linux on X11 (experimental). This page covers setup, pairing, connecting, and what is and is not protected.
 
 ## How it works
 
@@ -8,15 +8,82 @@ The headset listens. The laptop agent dials out to it over one WebRTC connection
 
 ## Setup on the laptop
 
+Needs Python 3.10 or later on every OS.
+
+### Windows
+
+Requires Windows 10 1903 or later (Windows 11 recommended).
+
 ```
 cd Tools/LaptopAgent
 python setup.py
 ```
 
+### macOS
+
+```
+brew install ffmpeg mediamtx
+cd Tools/LaptopAgent
+python3 setup.py
+```
+
+On a Mac `setup.py` downloads nothing. It checks that `ffmpeg` and `mediamtx` are on the PATH, then runs `pip install -r requirements.txt` (which adds pyobjc and keyring on macOS). An ffmpeg you install yourself is under its own licence, which is yours to follow.
+
+Give the app you run the agent from (Terminal, iTerm, VS Code) three permissions under System Settings > Privacy & Security, then quit and reopen that app:
+
+| Permission | Where | Needed for |
+|---|---|---|
+| Screen Recording | Screen & System Audio Recording (macOS 15 and later) or Screen Recording (macOS 13-14). Shortcut: `open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"` | Capturing and listing windows and screens |
+| Accessibility | Accessibility. Shortcut: `open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"` | Clicks, keys, text and raising windows (`--input`, `--cast-only`) |
+| Input Monitoring | Input Monitoring. Shortcut: `open "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"` | The kill hotkey |
+
+At start the agent checks them. For each missing one it prints a line starting `error: ` or `warning: ` with the Settings path and the shortcut. Errors stop the agent; warnings do not:
+
+- Screen Recording missing: error, unless the run only lists (`--list`) or pairs (`--pair`, `--pairs`, `--revoke`).
+- Accessibility missing: error with `--input` or `--cast-only`. Without them it is not checked.
+- Input Monitoring missing: warning only. The kill hotkey is deaf; Ctrl+C in the terminal still stops the agent.
+
+On first run the agent creates a random key in your login Keychain (service `SpatialLauncher.agent.identity.v1`) that encrypts `identity.key`; macOS may ask you to allow Keychain access then. The agent's home is `~/Library/Application Support/SpatialLauncher/agent` (override with `SPATIAL_LAUNCHER_HOME`).
+
+### Linux X11 (experimental)
+
+Install, for example on Debian or Ubuntu:
+
+```
+sudo apt install ffmpeg libxtst6 x11-xserver-utils zenity
+```
+
+- `ffmpeg` must have `x11grab`; the distribution's package normally does.
+- `libxtst6` is for input. Without it the agent can still stream view-only.
+- `x11-xserver-utils` provides `xrandr`.
+- `zenity` or `python3-tk` is for the approval prompt. With neither, every approval request is denied.
+- `mediamtx` must be on the PATH.
+
+Then:
+
+```
+cd Tools/LaptopAgent
+pip install -r requirements.txt
+```
+
+Do not run `setup.py` on Linux: it still downloads the Windows binaries.
+
+The key file is `identity.key` in `$XDG_DATA_HOME/SpatialLauncher/agent` (`~/.local/share/SpatialLauncher/agent` if `XDG_DATA_HOME` is unset; `SPATIAL_LAUNCHER_HOME` overrides). The agent creates it as 0600 and refuses a key file that someone else owns or that group or others can access.
+
+The agent needs an X11 session. At start it checks the session, ffmpeg x11grab, libXtst and the approval prompt, and prints `error: ` or `warning: ` lines:
+
+- X11 session missing: error, unless the run only pairs. A Wayland session is refused (XWayland would show black): log in to an Xorg session. The xdg-desktop-portal ScreenCast and RemoteDesktop interfaces are the future route and are not implemented. A missing `DISPLAY`, for example plain SSH, is refused too.
+- ffmpeg without x11grab: error, unless the run only lists or pairs.
+- libXtst missing: error with `--input` or `--cast-only`; otherwise not checked.
+- No approval dialog: warning only.
+
+### Running
+
 Then run `agent.py`. The flags that matter here:
 
 | Flag | What it does |
 |---|---|
+| `--list` | List monitors and windows, then exit |
 | `--pairs` | List paired headsets, then exit |
 | `--revoke <name>` | Forget one paired headset, then exit |
 | `--pair` | Pair a new headset: type the code it shows, confirm there, exit |
@@ -24,8 +91,12 @@ Then run `agent.py`. The flags that matter here:
 | `--input` | Allow the headset to move and click the mouse, once you approve |
 | `--keyboard` | With `--input`: also allow typing |
 | `--cast-only` | Media keys only. Can't be combined with `--input` |
-| `--max-windows N` | Most windows open at once (default 4, at most 8) |
+| `--dry-run-input` | With `--input` or `--cast-only`: log the mapped events instead of injecting them |
+| `--no-picker` | With `--window` or `--monitor`: offer only that target |
+| `--max-windows N` | Most windows open at once (default 4, 1 to 8) |
+| `--max-width N`, `--max-height N` | Scale each stream down to fit (default 1920x1080) |
 | `--wired` | Also look for the USB Personal Hotspot (see [wired.md](wired.md)) |
+| `--verbose` | Show ffmpeg and MediaMTX logs |
 
 Run `python agent.py --help` for the rest (`--window`, `--monitor`, `--fps`, `--bitrate`, `--encoder`). More detail is in [Tools/LaptopAgent/README.md](../Tools/LaptopAgent/README.md).
 
@@ -66,13 +137,13 @@ Measured on Windows 11 on this project's laptop:
 - Sessions start view-only. Tapping Connect is the consent to view.
 - Control needs all three: the agent run with `--input`, approval on the headset's consent prompt, and Yes on the laptop's prompt. The laptop prompt defaults to No and is refused after 30 s. Nothing is injected before both approvals.
 - Cast-only mode allows media keys only, from a fixed list, with no laptop prompt. Control requests are refused.
-- Kill hotkey: Ctrl+Alt+Shift+Q on the laptop closes every session, stops video, and stops reconnecting until the agent restarts.
+- Kill hotkey on the laptop: Ctrl+Alt+Shift+Q (Windows, Linux) or Ctrl+Option+Shift+Q (macOS). It closes every session, stops video, and stops reconnecting until the agent restarts.
 - On the headset, a LIVE indicator shows while a session runs. Panic ends the session and cancels a waiting connection: F8 in the editor, the cross-sweep gesture, or touch Stop.
 
 ## What is protected
 
 - **Encryption:** DTLS-SRTP for video and DTLS for the data channels.
-- **Mutual pinning:** each side has an RSA-2048 identity key. The laptop's is kept in DPAPI, the headset's in the iOS Keychain. Signatures are RSASSA-PKCS1-v1_5 with SHA-256 over a transcript that binds both keys, both nonces and the DTLS fingerprints. A man in the middle can't swap certificates.
+- **Mutual pinning:** each side has an RSA-2048 identity key. The laptop's is kept in DPAPI on Windows, encrypted under a login Keychain key on macOS, and in a 0600 file on Linux; the headset's in the iOS Keychain. Signatures are RSASSA-PKCS1-v1_5 with SHA-256 over a transcript that binds both keys, both nonces and the DTLS fingerprints. A man in the middle can't swap certificates.
 - **Pairing code:** it is bound with PBKDF2-HMAC-SHA256 (100,000 iterations) and HMAC. The headset proves nothing derived from the code to an unverified laptop. The laptop sends its code proof first.
 - **Two approvals for control**, and the kill hotkey.
 - **Limits before authentication** on the headset listener: 64 KiB frames, 5 s until the laptop is verified, 5 attempts per minute per IP, one at a time.
@@ -95,7 +166,7 @@ Measured on Windows 11 on this project's laptop:
 
 ## Dependencies and licences
 
-From `Tools/LaptopAgent/requirements.txt`. None is GPL.
+From `Tools/LaptopAgent/requirements.txt`. None is GPL. ffmpeg is a separate program, not a Python package; see the README's licence table.
 
 | Package | Version | Licence |
 |---|---|---|
@@ -109,5 +180,12 @@ From `Tools/LaptopAgent/requirements.txt`. None is GPL.
 | ifaddr | 0.2.0 | MIT |
 | google-crc32c | 1.9.0 | Apache-2.0 |
 | pyOpenSSL | 26.2.0 | Apache-2.0 |
+| pyobjc-core | 11.1 | MIT (macOS only) |
+| pyobjc-framework-Quartz | 11.1 | MIT (macOS only) |
+| pyobjc-framework-Cocoa | 11.1 | MIT (macOS only) |
+| pyobjc-framework-ApplicationServices | 11.1 | MIT (macOS only) |
+| keyring | 25.7.0 | MIT (macOS only) |
+| jaraco.classes, jaraco.functools, jaraco.context, more-itertools | 3.4.0, 4.4.0, 6.0.2, 10.8.0 | MIT (macOS only) |
+| importlib_metadata, zipp, backports.tarfile | 8.7.1, 3.23.0, 1.2.0 | Apache-2.0, MIT, MIT (macOS only, Python before 3.12) |
 
 segno is no longer used.
