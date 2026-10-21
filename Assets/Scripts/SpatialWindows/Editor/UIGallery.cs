@@ -122,6 +122,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             {
                 if ((state == GalleryState.Hover || state == GalleryState.Pressed) && control == null) continue;
                 ApplyState(window, control, state);
+                window.SnapMotion();
                 rig.Prepare(window);
                 rig.Save(Path.Combine(folder, UIGalleryShots.FileName(id, state)));
                 ResetState(control);
@@ -160,6 +161,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             {
                 bool front = window == windows[windows.Count - 1];
                 window.SetPresentation(front ? FocusedDepth : 0f, front ? 1f : UnfocusedScale, instant: true);
+                window.SnapMotion();
                 rig.Prepare(window);
             }
             rig.FrameWindows(windows);
@@ -234,6 +236,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
         {
             var window = manager.Spawn(title, size);
             window?.SetPresentation(0f, 1f, instant: true);
+            window?.SnapMotion();
             return window;
         }
 

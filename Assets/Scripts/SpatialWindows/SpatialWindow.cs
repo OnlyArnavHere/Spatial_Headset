@@ -147,6 +147,7 @@ namespace SpatialLauncher.SpatialWindows
         // Focus presentation: how far the visuals sit towards the viewer, and their scale.
         float targetDepth, currentDepth;
         float targetScale = 1f, currentScale = 1f;
+        WindowMotion motion;
 
         // Body-locked pose, relative to the head's yaw frame.
         Vector3 headLocalPosition;
@@ -542,8 +543,48 @@ namespace SpatialLauncher.SpatialWindows
         void ApplyPresentation()
         {
             visualRoot.localPosition = new Vector3(0f, 0f, -currentDepth);
-            visualRoot.localScale = new Vector3(currentScale, currentScale, 1f);
+            float scale = currentScale * MotionScale;
+            visualRoot.localScale = new Vector3(scale, scale, 1f);
         }
+
+        /// <summary>Open and close motion (<see cref="WindowMotion"/>), created on first use.</summary>
+        public WindowMotion Motion
+        {
+            get
+            {
+                if (motion == null && !TryGetComponent(out motion)) motion = gameObject.AddComponent<WindowMotion>();
+                return motion;
+            }
+        }
+
+        /// <summary>Scale the open/close motion multiplies into the visuals' scale (1 when idle).</summary>
+        public float MotionScale { get; private set; } = 1f;
+
+        /// <summary>Whole-window alpha from the open/close motion (1 when idle).</summary>
+        public float MotionAlpha => motion != null ? motion.Alpha : 1f;
+
+        internal void SetMotionScale(float scale)
+        {
+            if (Mathf.Approximately(scale, MotionScale)) return;
+            MotionScale = scale;
+            if (visualRoot != null) ApplyPresentation();
+        }
+
+        /// <summary>Starts the open motion: scale 0.92 to 1 and fade in over 250 ms, or only a 120 ms fade for <paramref name="fadeOnly"/> (consent).</summary>
+        public void BeginOpen(bool fadeOnly = false) => Motion.BeginOpen(fadeOnly);
+
+        /// <summary>
+        /// Starts the close motion and turns the colliders off at once; <paramref name="done"/> runs when it has finished
+        /// (the manager destroys the window then).
+        /// </summary>
+        public void BeginClose(Action done)
+        {
+            foreach (var collider in GetComponentsInChildren<Collider>(true)) collider.enabled = false;
+            Motion.BeginClose(done);
+        }
+
+        /// <summary>Jumps the open or close motion to its end (the UI gallery's stills).</summary>
+        public void SnapMotion() { if (motion != null) motion.Snap(); }
 
         void AnimatePresentation()
         {

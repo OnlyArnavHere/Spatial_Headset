@@ -61,6 +61,16 @@ namespace SpatialLauncher.SpatialWindows.Theme
         /// <summary>Time constant of the press overlay and scale (ms).</summary>
         public const float PressMs = 60f;
 
+        // Window motion (Doc/ui-design.md section 8)
+        public const float OpenMs = 250f;
+        public const float CloseMs = 180f;
+        public const float ConsentFadeMs = 120f;
+        public const float OpenScaleFrom = 0.92f;
+        public const float CloseScaleTo = 0.95f;
+
+        public static float EaseOutCubic(float t) { float u = 1f - Mathf.Clamp01(t); return 1f - u * u * u; }
+        public static float EaseInCubic(float t) { t = Mathf.Clamp01(t); return t * t * t; }
+
         // Type scale (pt)
         public const float LargeTitlePt = 29f;
         public const float TitlePt = 22f;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using UnityEngine;
 
 namespace SpatialLauncher.SpatialWindows
@@ -197,6 +198,7 @@ namespace SpatialLauncher.SpatialWindows
             foreach (var window in GetComponentsInChildren<SpatialWindow>())
             {
                 if (windows.Contains(window)) continue;
+                if (window.TryGetComponent<WindowMotion>(out var motion) && motion.IsClosing) continue;
                 windows.Add(window);
                 window.AspectRequested -= SetAspect;
                 window.AspectRequested += SetAspect;
@@ -242,6 +244,7 @@ namespace SpatialLauncher.SpatialWindows
             // Start in the receded state so the new window grows forward into focus.
             window.SetPresentation(0f, unfocusedScale, instant: true);
             windows.Add(window);
+            if (Application.isPlaying) window.BeginOpen();
             WindowOpened?.Invoke(window);
             Focus(window);
             return window;
@@ -264,9 +267,19 @@ namespace SpatialLauncher.SpatialWindows
             if (window == null || !windows.Remove(window)) return;
 
             WindowClosed?.Invoke(window);
-            Destroy(window.gameObject);
+            // Out of the list and unhittable now; it fades out and is destroyed when the motion is done.
+            // Hidden windows (and edit mode, where nothing ticks) go at once.
+            if (Application.isPlaying && window.isActiveAndEnabled) window.BeginClose(() => DestroyWindow(window));
+            else DestroyWindow(window);
             ApplyOrder();
             FocusChanged?.Invoke(FocusedWindow);
+        }
+
+        static void DestroyWindow(SpatialWindow window)
+        {
+            if (window == null) return;
+            if (Application.isPlaying) Destroy(window.gameObject);
+            else DestroyImmediate(window.gameObject);
         }
 
         public void CloseAll()

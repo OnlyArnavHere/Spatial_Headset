@@ -121,6 +121,8 @@ namespace SpatialLauncher.SpatialWindows
         public float defaultCurve;
         /// <summary>Aspect of new windows opened without a size of their own.</summary>
         public AspectPreset defaultAspect = AspectPreset.Free;
+        /// <summary>Windows open and close with a fade only (no scale).</summary>
+        public bool reduceMotion;
     }
 
     [Serializable]

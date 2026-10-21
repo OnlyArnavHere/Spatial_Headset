@@ -29,6 +29,8 @@ Shader "SpatialLauncher/SpatialGlass"
         _FocusBand ("Focus ring offset and width", Vector) = (0.003, 0.002, 0, 0)
         _PressScale ("Press scale", Float) = 1
         _Fade ("Fade", Float) = 1
+        // Whole-window fade for open and close (WindowMotion); multiplies _Fade, which belongs to the control.
+        _WindowFade ("Window fade", Float) = 1
     }
 
     HLSLINCLUDE
@@ -58,6 +60,7 @@ Shader "SpatialLauncher/SpatialGlass"
         float4 _FocusBand;
         float _PressScale;
         float _Fade;
+        float _WindowFade;
     CBUFFER_END
 
     TEXTURE2D(_MainTex);
@@ -110,7 +113,7 @@ Shader "SpatialLauncher/SpatialGlass"
         float ring = saturate(0.5 - (abs(d + _FocusBand.x + half_) - half_) / aa) * _FocusRing.a;
         rgb = lerp(rgb, _FocusRing.rgb, ring);
         alpha = alpha + (1 - alpha) * ring;
-        return half4(rgb, alpha * _Fade);
+        return half4(rgb, alpha * _Fade * _WindowFade);
     }
 
     half4 Frag(Varyings input) : SV_Target
@@ -131,7 +134,7 @@ Shader "SpatialLauncher/SpatialGlass"
             float shade = 1.0 - smoothstep(0.0, blur, ds);
             // Nothing under the body itself: glass over a shadow would look muddy.
             float outside = saturate(d / aa + 0.5);
-            return half4(_ShadowColor.rgb, _ShadowColor.a * shade * outside);
+            return half4(_ShadowColor.rgb, _ShadowColor.a * shade * outside * _WindowFade);
         }
 
         float cover = saturate(0.5 - d / aa);

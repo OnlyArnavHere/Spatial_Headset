@@ -343,6 +343,7 @@ namespace SpatialLauncher.SpatialWindows
             presets.AddRange(AspectPresets.All);
             Choice("Default aspect", presets.ConvertAll(AspectPresets.Label).ToArray(), () => presets.IndexOf(S.windows.defaultAspect),
                 i => SettingsStore.Update(x => x.windows.defaultAspect = presets[i]));
+            Toggle("Reduce motion", () => S.windows.reduceMotion, v => SettingsStore.Update(x => x.windows.reduceMotion = v));
             Value("Note", () => "Defaults apply to new windows. Each window's ... button changes its own curve and aspect.");
         }
 
