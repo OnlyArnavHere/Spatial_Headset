@@ -181,16 +181,15 @@ namespace SpatialLauncher.SpatialWindows
             slider.AttachKnob(knob);
         }
 
-        protected static TextMeshPro CreateLabel(string labelName, Transform parent, string text, float fontSize,
+        protected static TextMeshPro CreateLabel(string labelName, Transform parent, string text, TextRole role,
             TextAlignmentOptions alignment)
         {
             var go = new GameObject(labelName);
             go.transform.SetParent(parent, false);
             var label = go.AddComponent<TextMeshPro>();
             label.text = text;
-            label.fontSize = fontSize;
             label.alignment = alignment;
-            label.color = Color.white;
+            ThemeApplier.Apply(label, role);
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Ellipsis;
             return label;

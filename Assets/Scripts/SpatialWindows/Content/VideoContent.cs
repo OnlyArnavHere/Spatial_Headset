@@ -66,13 +66,13 @@ namespace SpatialLauncher.SpatialWindows
             bar = CreateQuad("ControlBar", transform, CreateMaterial(BarColor));
             Round(bar, UITheme.ControlRadius);
             PlayPauseButton = CreateControl<WindowButton>("PlayPause", transform, CreateMaterial(ButtonColor));
-            playGlyph = CreateLabel("PlayGlyph", transform, "II", 0.25f, TextAlignmentOptions.Center);
+            playGlyph = CreateLabel("PlayGlyph", transform, "II", TextRole.Headline, TextAlignmentOptions.Center);
             SeekBar = CreateControl<WindowSlider>("SeekBar", transform, CreateMaterial(TrackColor));
             AddKnob(SeekBar);
             // The fill has no collider, so clicks on it reach the seek bar behind it.
             fill = CreateQuad("SeekFill", transform, CreateMaterial(FillColor), FillLayer);
             Round(fill, 0f, capsule: true);
-            timeLabel = CreateLabel("Time", transform, "0:00 / 0:00", 0.2f, TextAlignmentOptions.MidlineRight);
+            timeLabel = CreateLabel("Time", transform, "0:00 / 0:00", TextRole.Body, TextAlignmentOptions.MidlineRight);
 
             PlayPauseButton.Clicked += TogglePlay;
             SeekBar.ValueChanged += Seek;

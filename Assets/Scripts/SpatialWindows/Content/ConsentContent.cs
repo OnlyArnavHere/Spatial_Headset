@@ -16,7 +16,7 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color DenyColor = UITheme.DestructiveFill;
         /// <summary>56 pt high buttons, the consent exception in the design spec.</summary>
         public const float ButtonHeight = 0.056f;
-        const float ButtonWidth = 0.15f, Gap = 0.012f;
+        const float ButtonWidth = 0.15f, Gap = 0.012f, CountdownHeight = 0.042f;
 
         public WindowButton ApproveButton { get; private set; }
         public WindowButton DenyButton { get; private set; }
@@ -34,17 +34,16 @@ namespace SpatialLauncher.SpatialWindows
             panel = CreateQuad("Panel", transform, CreateMaterial(PanelColor));
             // The window itself is the solid panel; this quad only stays as a hit area.
             panel.GetComponent<MeshRenderer>().enabled = false;
-            question = CreateLabel("Question", transform, gate.Question, 0.24f, TextAlignmentOptions.TopLeft);
+            question = CreateLabel("Question", transform, gate.Question, TextRole.Headline, TextAlignmentOptions.TopLeft);
             question.textWrappingMode = TextWrappingModes.Normal;
             question.overflowMode = TextOverflowModes.Truncate;
-            countdown = CreateLabel("Countdown", transform, "", 0.18f, TextAlignmentOptions.MidlineRight);
-            countdown.color = new Color(0.75f, 0.77f, 0.82f);
+            countdown = CreateLabel("Countdown", transform, "", TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
+            countdown.textWrappingMode = TextWrappingModes.Normal; // consent text is never cut off
+            countdown.overflowMode = TextOverflowModes.Overflow;
             ApproveButton = CreateControl<WindowButton>("Approve", transform, CreateMaterial(ApproveColor));
-            approveLabel = CreateLabel("ApproveLabel", transform, "Approve", 0.22f, TextAlignmentOptions.Center);
-            ThemeApplier.Apply(approveLabel, TextRole.Headline);
+            approveLabel = CreateLabel("ApproveLabel", transform, "Approve", TextRole.Headline, TextAlignmentOptions.Center);
             DenyButton = CreateControl<WindowButton>("Deny", transform, CreateMaterial(DenyColor));
-            denyLabel = CreateLabel("DenyLabel", transform, "Deny", 0.22f, TextAlignmentOptions.Center);
-            ThemeApplier.Apply(denyLabel, TextRole.Headline);
+            denyLabel = CreateLabel("DenyLabel", transform, "Deny", TextRole.Headline, TextAlignmentOptions.Center);
             ApproveButton.Clicked += () => gate.Approve();
             DenyButton.Clicked += () => gate.Deny();
             Relayout();
@@ -61,7 +60,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             panel.localPosition = new Vector3(0f, 0f, -0.0005f);
             panel.localScale = new Vector3(size.x, size.y, 1f);
-            float textHeight = size.y - ButtonHeight - Gap * 3f;
+            float textHeight = size.y - ButtonHeight - CountdownHeight - Gap * 4f;
             question.transform.localPosition = new Vector3(0f, size.y * 0.5f - Gap - textHeight * 0.5f, -0.003f);
             question.rectTransform.sizeDelta = new Vector2(size.x - Gap * 2f, textHeight);
 
@@ -75,9 +74,10 @@ namespace SpatialLauncher.SpatialWindows
             DenyButton.transform.localScale = new Vector3(ButtonWidth, ButtonHeight, 1f);
             denyLabel.transform.localPosition = new Vector3(denyX, y, -0.003f);
             denyLabel.rectTransform.sizeDelta = new Vector2(ButtonWidth, ButtonHeight);
-            float countdownLeft = denyX + ButtonWidth * 0.5f + Gap, countdownWidth = size.x * 0.5f - Gap - countdownLeft;
-            countdown.transform.localPosition = new Vector3(countdownLeft + countdownWidth * 0.5f, y, -0.003f);
-            countdown.rectTransform.sizeDelta = new Vector2(Mathf.Max(0.02f, countdownWidth), ButtonHeight);
+            // The countdown has its own full-width row above the buttons.
+            float countdownY = y + ButtonHeight * 0.5f + Gap + CountdownHeight * 0.5f;
+            countdown.transform.localPosition = new Vector3(0f, countdownY, -0.003f);
+            countdown.rectTransform.sizeDelta = new Vector2(Mathf.Max(0.02f, size.x - Gap * 2f), CountdownHeight);
         }
     }
 }

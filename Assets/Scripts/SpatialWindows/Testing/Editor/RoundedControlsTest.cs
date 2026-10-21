@@ -106,7 +106,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 Slider = CreateControl<WindowSlider>("Slider", transform, CreateMaterial(Color.blue));
                 AddKnob(Slider);
                 Field = CreateControl<WindowTextField>("Field", transform, CreateMaterial(Color.grey));
-                FieldLabel = CreateLabel("FieldLabel", transform, "", 0.2f, TextAlignmentOptions.MidlineLeft);
+                FieldLabel = CreateLabel("FieldLabel", transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
                 Field.Init(FieldLabel, MaterialOf(Field), "placeholder");
                 Panel = CreateQuad("Panel", transform, CreateMaterial(UITheme.GlassRaised));
                 Round(Panel, UITheme.ControlRadius);

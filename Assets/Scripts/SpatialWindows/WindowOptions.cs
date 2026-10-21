@@ -64,7 +64,7 @@ namespace SpatialLauncher.SpatialWindows
             root = new GameObject("Options").transform;
             root.SetParent(visual, false);
             panel = Quad("OptionsPanel", root, PanelColor);
-            curveLabel = Label("CurveLabel", root, "", 0.16f);
+            curveLabel = Label("CurveLabel", root, "", TextRole.Body);
             CurveSlider = Control<WindowSlider>("CurveSlider", root, TrackColor);
             CurveSlider.ValueChanged += value => Window.SetCurve(value);
             fill = Quad("CurveFill", root, FillColor);
@@ -74,7 +74,7 @@ namespace SpatialLauncher.SpatialWindows
                 var choice = preset;
                 button.Clicked += () => Window.RequestAspect(choice);
                 aspectButtons.Add(button);
-                aspectVisuals.Add((Label($"AspectLabel {AspectPresets.Label(preset)}", root, AspectPresets.Label(preset), 0.14f),
+                aspectVisuals.Add((Label($"AspectLabel {AspectPresets.Label(preset)}", root, AspectPresets.Label(preset), TextRole.Caption),
                     button.GetComponent<MeshRenderer>().sharedMaterial));
             }
             root.gameObject.SetActive(false);
@@ -127,7 +127,6 @@ namespace SpatialLauncher.SpatialWindows
                 aspectButtons[i].transform.localScale = new Vector3(cell, RowHeight, 1f);
                 aspectVisuals[i].label.transform.localPosition = new Vector3(x, rowY, -Depth * 1.5f);
                 aspectVisuals[i].label.rectTransform.sizeDelta = new Vector2(cell, RowHeight);
-                aspectVisuals[i].label.fontSize = Mathf.Min(0.14f, cell * 2.2f);
             }
             Refresh();
         }
@@ -162,15 +161,14 @@ namespace SpatialLauncher.SpatialWindows
             return quad.transform;
         }
 
-        static TextMeshPro Label(string name, Transform parent, string text, float fontSize)
+        static TextMeshPro Label(string name, Transform parent, string text, TextRole role)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
             var label = go.AddComponent<TextMeshPro>();
             label.text = text;
-            label.fontSize = fontSize;
             label.alignment = TextAlignmentOptions.Center;
-            label.color = Color.white;
+            ThemeApplier.Apply(label, role);
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Ellipsis;
             return label;

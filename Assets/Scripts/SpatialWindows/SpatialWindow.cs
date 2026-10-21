@@ -209,8 +209,7 @@ namespace SpatialLauncher.SpatialWindows
                 new Vector2(ChromeControl.PillWidthPt, ChromeControl.PillHeightPt), ChromeControl.PillRisePt, Color.white, false, null);
             grabBar.OutlinePt = ChromeControl.PillOutlinePt;
 
-            titleText = CreateText("TitleText", visualRoot, Title, 0.3f, TextAlignmentOptions.TopLeft);
-            ThemeApplier.Apply(titleText, TextRole.Title);
+            titleText = CreateText("TitleText", visualRoot, Title, TextRole.Title, TextAlignmentOptions.TopLeft);
 
             ContentRoot = new GameObject("Content").transform;
             ContentRoot.SetParent(visualRoot, false);
@@ -379,16 +378,15 @@ namespace SpatialLauncher.SpatialWindows
             return quad.transform;
         }
 
-        static TextMeshPro CreateText(string textName, Transform parent, string text, float fontSize,
+        static TextMeshPro CreateText(string textName, Transform parent, string text, TextRole role,
             TextAlignmentOptions alignment)
         {
             var go = new GameObject(textName);
             go.transform.SetParent(parent, false);
             var tmp = go.AddComponent<TextMeshPro>();
             tmp.text = text;
-            tmp.fontSize = fontSize;
             tmp.alignment = alignment;
-            tmp.color = Color.white;
+            ThemeApplier.Apply(tmp, role);
             tmp.textWrappingMode = TextWrappingModes.NoWrap;
             tmp.overflowMode = TextOverflowModes.Ellipsis;
             return tmp;

@@ -73,8 +73,7 @@ namespace SpatialLauncher.SpatialWindows
             voice = voiceTyping;
 
             panel = CreateQuad("KeyboardPanel", transform, CreateRounded(PanelColor, UITheme.ControlRadius));
-            status = CreateLabel("Status", transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
-            status.color = UITheme.TextSecondary;
+            status = CreateLabel("Status", transform, "", TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
 
             var characterMaterial = CreateRounded(KeyColor, UITheme.ControlRadius);
             var specialMaterial = CreateRounded(KeyColor, UITheme.ControlRadius);
@@ -85,12 +84,9 @@ namespace SpatialLauncher.SpatialWindows
                     : key.Id == "Enter" ? CreateRounded(ReturnColor, UITheme.ControlRadius)
                     : key.Kind == VirtualKeyKind.Character ? characterMaterial : specialMaterial;
                 var icon = KeyIcon(key.Id);
-                var label = CreateLabel($"KeyLabel {key.Id}", transform, icon ?? (key.Id == "Space" ? "Space" : key.Label), 0.18f,
-                    TextAlignmentOptions.Center);
-                // Labels are large text (Headline, 17 pt); arrows and Home are icons so they fit a one-unit key.
-                ThemeApplier.Apply(label, icon != null ? TextRole.Icon : TextRole.Headline);
-                label.fontSize = UITheme.PtToMetres(LabelPt) * ThemeApplier.TmpWorldScale;
-                label.color = UITheme.TextPrimary;
+                var label = CreateLabel($"KeyLabel {key.Id}", transform, icon ?? (key.Id == "Space" ? "Space" : key.Label),
+                    icon != null ? TextRole.Icon : TextRole.Headline, TextAlignmentOptions.Center);
+                // Labels are large text (Headline, 17 pt); arrows and Home are icons (20 pt) so they fit a one-unit key.
                 WindowControl control;
                 if (key.Kind == VirtualKeyKind.Voice)
                 {

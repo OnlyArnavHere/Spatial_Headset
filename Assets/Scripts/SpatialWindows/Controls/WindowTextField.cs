@@ -155,7 +155,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Text.Length == 0 && !focused)
             {
                 label.text = placeholder;
-                label.color = new Color(0.55f, 0.57f, 0.62f);
+                label.color = UITheme.TextSecondary;
             }
             else
             {

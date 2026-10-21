@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -17,7 +18,6 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color KnobColor = new Color(0.92f, 0.93f, 0.96f);
         static readonly Color ButtonColor = new Color(0.32f, 0.34f, 0.40f);
         static readonly Color SelectedColor = new Color(0.16f, 0.36f, 0.95f);
-        static readonly Color HintColor = new Color(0.62f, 0.64f, 0.70f);
 
         const float ReadoutHeight = 0.04f;
         const float SliderHeight = 0.03f;
@@ -46,14 +46,13 @@ namespace SpatialLauncher.SpatialWindows
             Attach(window, baseMaterial);
             Controller = controller;
 
-            readout = CreateLabel("Readout", transform, "", 0.24f, TextAlignmentOptions.MidlineLeft);
+            readout = CreateLabel("Readout", transform, "", TextRole.Headline, TextAlignmentOptions.MidlineLeft);
             Slider = CreateControl<WindowSlider>("Slider", transform, CreateMaterial(TrackColor));
             Slider.ValueChanged += value => Controller.SetLevel(SnapToEnds(value));
             fill = CreateQuad("SliderFill", transform, CreateMaterial(FillColor));
             knob = CreateQuad("SliderKnob", transform, CreateMaterial(KnobColor));
-            passthroughHint = CreateLabel("PassthroughHint", transform, "Passthrough", 0.15f, TextAlignmentOptions.MidlineLeft);
-            environmentHint = CreateLabel("EnvironmentHint", transform, "Environment   [ ]", 0.15f, TextAlignmentOptions.MidlineRight);
-            passthroughHint.color = environmentHint.color = HintColor;
+            passthroughHint = CreateLabel("PassthroughHint", transform, "Passthrough", TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
+            environmentHint = CreateLabel("EnvironmentHint", transform, "Environment   [ ]", TextRole.Secondary, TextAlignmentOptions.MidlineRight);
 
             foreach (ImmersiveEnvironment environment in Enum.GetValues(typeof(ImmersiveEnvironment)))
             {
@@ -62,7 +61,7 @@ namespace SpatialLauncher.SpatialWindows
                 var choice = environment;
                 button.Clicked += () => Controller.SetEnvironment(choice);
                 buttons.Add(button);
-                buttonVisuals.Add((CreateLabel($"EnvironmentLabel {environment}", transform, environment.ToString(), 0.2f,
+                buttonVisuals.Add((CreateLabel($"EnvironmentLabel {environment}", transform, environment.ToString(), TextRole.Body,
                     TextAlignmentOptions.Center), material));
             }
 

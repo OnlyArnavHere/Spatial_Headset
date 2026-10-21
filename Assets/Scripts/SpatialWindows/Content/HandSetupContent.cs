@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -89,12 +90,11 @@ namespace SpatialLauncher.SpatialWindows
             Source = handInput != null ? handInput.HandSource : null;
 
             panel = CreateQuad("Panel", transform, CreateMaterial(PanelColor));
-            heading = CreateLabel("Heading", transform, "", 0.3f, TextAlignmentOptions.MidlineLeft);
-            body = CreateLabel("Body", transform, "", 0.2f, TextAlignmentOptions.TopLeft);
+            heading = CreateLabel("Heading", transform, "", TextRole.Title, TextAlignmentOptions.MidlineLeft);
+            body = CreateLabel("Body", transform, "", TextRole.Body, TextAlignmentOptions.TopLeft);
             body.textWrappingMode = TextWrappingModes.Normal;
             body.overflowMode = TextOverflowModes.Truncate;
-            status = CreateLabel("Status", transform, "", 0.18f, TextAlignmentOptions.MidlineLeft);
-            status.color = new Color(0.75f, 0.77f, 0.82f);
+            status = CreateLabel("Status", transform, "", TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
 
             ring = new GameObject("Ring").transform;
             ring.SetParent(transform, false);
@@ -111,7 +111,7 @@ namespace SpatialLauncher.SpatialWindows
                 int index = i;
                 buttonMaterials[i] = CreateMaterial(i == 0 ? PrimaryColor : ButtonColor);
                 buttons[i] = CreateControl<WindowButton>($"Button {i}", transform, buttonMaterials[i]);
-                labels[i] = CreateLabel($"ButtonLabel {i}", transform, "", 0.2f, TextAlignmentOptions.Center);
+                labels[i] = CreateLabel($"ButtonLabel {i}", transform, "", TextRole.Headline, TextAlignmentOptions.Center);
                 buttons[i].Clicked += () => actions[index]?.Invoke();
             }
             PrimaryButton = buttons[0];
@@ -120,7 +120,7 @@ namespace SpatialLauncher.SpatialWindows
 
             HandLengthSlider = CreateControl<WindowSlider>("HandLength", transform, CreateMaterial(TrackColor));
             lengthFill = CreateQuad("HandLengthFill", transform, CreateMaterial(PrimaryColor));
-            lengthLabel = CreateLabel("HandLengthLabel", transform, "", 0.18f, TextAlignmentOptions.MidlineLeft);
+            lengthLabel = CreateLabel("HandLengthLabel", transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
             HandLengthSlider.ValueChanged += t => SetHandLength(Mathf.Lerp(HandCalibration.MinHandLength, HandCalibration.MaxHandLength, t));
 
             ShowIntro("");

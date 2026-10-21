@@ -85,14 +85,12 @@ namespace SpatialLauncher.SpatialWindows
                 var open = entry.Open;
                 button.Clicked += () => open?.Invoke();
                 buttons.Add(button);
-                var glyph = CreateLabel($"Glyph {entry.Label}", transform, entry.Icon ?? IconFor(entry.Label), 0.5f, TextAlignmentOptions.Center);
-                ThemeApplier.Apply(glyph, TextRole.Icon);
+                var glyph = CreateLabel($"Glyph {entry.Label}", transform, entry.Icon ?? IconFor(entry.Label), TextRole.Icon, TextAlignmentOptions.Center);
                 glyph.fontSize = UITheme.PtToMetres(GlyphPt) * ThemeApplier.TmpWorldScale;
                 glyph.color = Color.white;
                 glyph.overflowMode = TextOverflowModes.Overflow;
                 glyphs.Add(glyph);
-                var caption = CreateLabel($"Label {entry.Label}", transform, entry.Label, 0.25f, TextAlignmentOptions.Center);
-                ThemeApplier.Apply(caption, TextRole.Caption);
+                var caption = CreateLabel($"Label {entry.Label}", transform, entry.Label, TextRole.Caption, TextAlignmentOptions.Center);
                 caption.overflowMode = TextOverflowModes.Ellipsis;
                 labels.Add(caption);
             }
