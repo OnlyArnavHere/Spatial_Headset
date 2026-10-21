@@ -17,5 +17,21 @@ namespace SpatialLauncher.SpatialWindows.Theme
         public const string PlayArrow = "";
         public const string Search = "";
         public const string Settings = "";
+        public const string Image = "";
+        public const string Movie = "";
+        public const string CheckBoxOutlineBlank = "";
+        public const string Laptop = "";
+        public const string DarkMode = "";
+        public const string Theaters = "";
+        public const string WbSunny = "";
+        public const string Visibility = "";
+        public const string VisibilityOff = "";
+        public const string Cast = "";
+        public const string Apps = "";
+        public const string KeyboardArrowUp = "\uE316";
+        public const string KeyboardArrowDown = "\uE313";
+        public const string KeyboardArrowLeft = "\uE314";
+        public const string KeyboardArrowRight = "\uE315";
+        public const string Home = "\uE88A";
     }
 }

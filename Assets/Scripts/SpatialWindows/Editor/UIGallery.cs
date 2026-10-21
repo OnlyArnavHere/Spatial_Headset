@@ -281,7 +281,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     gate.Request(new GallerySession(), null, null);
                     return gate.Modal;
                 case "keyboard":
-                    window = Open(manager, "Keyboard", new Vector2(0.66f, 0.29f));
+                    window = Open(manager, "Keyboard", VirtualKeyboardContent.WindowSize);
                     AddContent<VirtualKeyboardContent>(rig).Init(window, mat, strokes => false, () => null);
                     return window;
                 default:
@@ -290,8 +290,8 @@ namespace SpatialLauncher.SpatialWindows.Editor
             }
         }
 
-        static LauncherContent.Entry Icon(string label, string glyph, float r, float g, float b) =>
-            new LauncherContent.Entry { Label = label, Glyph = glyph, Color = new Color(r, g, b) };
+        static LauncherContent.Entry Icon(string label, string unused, float r, float g, float b) =>
+            new LauncherContent.Entry { Label = label, Color = new Color(r, g, b) };
 
         sealed class GallerySession : IRemoteSession
         {

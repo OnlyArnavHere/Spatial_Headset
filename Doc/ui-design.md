@@ -23,6 +23,7 @@ Direction: visionOS-like frosted glass, tuned for the HoloKit stereo view. Units
 | glass.tint | #2A2C33, alpha 0.72 |
 | glass.fallback (blur off / no passthrough) | #1E2026, alpha 0.92 |
 | glass.raised (controls) | #FFFFFF, alpha 0.12 |
+| key.fill (keyboard keys; 17 pt white labels reach 4.5:1 on the worst glass) | #FFFFFF, alpha 0.08 |
 | text.primary | #FFFFFF, alpha 1.0 |
 | text.secondary | #EBEBF5, alpha 0.70 |
 | accent | #0A84FF |

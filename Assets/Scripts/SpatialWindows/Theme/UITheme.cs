@@ -12,6 +12,8 @@ namespace SpatialLauncher.SpatialWindows.Theme
         public static readonly Color GlassTint = Hex(0x2A2C33, 0.72f);
         public static readonly Color GlassFallback = Hex(0x1E2026, 0.92f);
         public static readonly Color GlassRaised = Hex(0xFFFFFF, 0.12f);
+        /// <summary>Fill of a keyboard key: lighter than GlassRaised so 17 pt white labels reach 4.5:1 on the worst glass (about 4.9:1).</summary>
+        public static readonly Color KeyFill = Hex(0xFFFFFF, 0.08f);
         public static readonly Color TextPrimary = Hex(0xFFFFFF, 1f);
         public static readonly Color TextSecondary = Hex(0xEBEBF5, 0.70f);
         public static readonly Color Accent = Hex(0x0A84FF, 1f);

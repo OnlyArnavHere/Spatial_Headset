@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using SpatialLauncher.LaptopLink;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -14,23 +15,26 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class SettingsContent : WindowContent
     {
-        static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
-        static readonly Color TabColor = new Color(0.22f, 0.23f, 0.28f);
-        static readonly Color SelectedColor = new Color(0.16f, 0.36f, 0.95f);
-        static readonly Color ControlColor = new Color(0.32f, 0.34f, 0.40f);
-        static readonly Color TrackColor = new Color(0.24f, 0.25f, 0.30f);
-        static readonly Color FieldColor = new Color(0.20f, 0.21f, 0.25f);
-        static readonly Color OnColor = new Color(0.20f, 0.55f, 0.35f);
-        static readonly Color DimText = new Color(0.70f, 0.72f, 0.78f);
+        /// <summary>No opaque panel behind the rows: the window's glass shows through.</summary>
+        public static readonly Color PanelColor = new Color(0f, 0f, 0f, 0f);
+        /// <summary>An unselected sidebar row or segment is transparent; the selected one is AccentFill.</summary>
+        public static readonly Color TabColor = new Color(1f, 1f, 1f, 0f);
+        public static readonly Color SelectedColor = UITheme.AccentFill;
+        public static readonly Color TrackColor = UITheme.GlassRaised;
+        public static readonly Color FieldColor = WindowTextField.NormalColor;
+        public static readonly Color OnColor = UITheme.AccentFill;
+        public static readonly Color RemoveColor = UITheme.DestructiveFill;
+        static readonly Color DimText = UITheme.TextSecondary;
 
-        const float TabWidth = 0.15f;
-        const float RowHeight = 0.036f;
+        /// <summary>Sidebar rows are 160 x 44 pt capsules; every control row is 44 pt high.</summary>
+        public const float TabWidth = 0.16f, TabHeight = 0.044f, RowHeight = 0.044f;
+        /// <summary>The on/off switch: 52 x 32 pt with a 28 pt knob.</summary>
+        public const float SwitchWidth = 0.052f, SwitchHeight = 0.032f, SwitchKnob = 0.028f;
         const float Gap = 0.008f;
         const float LabelWidth = 0.17f;
         const float HeaderHeight = 0.045f;
         /// <summary>Paired laptops listed in Settings > Laptop (each with a Remove button); more show as "+N more".</summary>
         public const int PairedSlots = 3;
-        static readonly Color RemoveColor = new Color(0.60f, 0.25f, 0.25f);
 
         public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "About" };
 
@@ -75,16 +79,18 @@ namespace SpatialLauncher.SpatialWindows
         {
             Attach(window, baseMaterial);
             Service = service;
-            panel = CreateQuad("SettingsPanel", transform, CreateMaterial(PanelColor));
+            panel = CreateQuad("SettingsPanel", transform, CreateRounded(PanelColor, UITheme.ControlRadius));
             header = CreateLabel("Header", transform, "", 0.3f, TextAlignmentOptions.MidlineLeft);
 
             foreach (var name in SectionNames)
             {
                 var section = new Section { Name = name, Root = new GameObject($"Section {name}") };
                 section.Root.transform.SetParent(transform, false);
-                section.TabMaterial = CreateMaterial(TabColor);
+                section.TabMaterial = CreateRounded(TabColor, TabHeight * 500f);
                 section.Tab = CreateControl<WindowButton>($"Tab {name}", transform, section.TabMaterial);
+                Round(section.Tab.transform, 0f, true);
                 section.TabLabel = CreateLabel($"TabLabel {name}", transform, name, 0.22f, TextAlignmentOptions.Center);
+                section.TabLabel.color = UITheme.TextPrimary;
                 int index = sections.Count;
                 section.Tab.Clicked += () => Select(index);
                 sections.Add(section);
@@ -132,7 +138,7 @@ namespace SpatialLauncher.SpatialWindows
             var row = NewRow(slot == 0 ? "Paired laptops" : "Paired #" + (slot + 1));
             var text = CreateLabel("Value", row.Root.transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
             text.richText = false; // laptop names are shown as typed, never as markup
-            var button = CreateControl<WindowButton>("Remove", row.Root.transform, CreateMaterial(RemoveColor));
+            var button = CreateControl<WindowButton>("Remove", row.Root.transform, CreateRounded(RemoveColor, UITheme.ControlRadius));
             var buttonText = CreateLabel("RemoveLabel", row.Root.transform, "Remove", 0.17f, TextAlignmentOptions.Center);
             row.Controls["Remove"] = button;
             string current = null;
@@ -405,8 +411,9 @@ namespace SpatialLauncher.SpatialWindows
         {
             const float valueWidth = 0.12f;
             var row = NewRow(label);
-            var slider = CreateControl<WindowSlider>("Slider", row.Root.transform, CreateMaterial(TrackColor));
-            var fill = CreateQuad("Fill", row.Root.transform, CreateMaterial(SelectedColor));
+            var slider = CreateControl<WindowSlider>("Slider", row.Root.transform, CreateRounded(TrackColor, 0f));
+            var fill = CreateQuad("Fill", row.Root.transform, CreateRounded(SelectedColor, 0f), FillLayer);
+            Round(fill, 0f, true);
             var text = CreateLabel("Value", row.Root.transform, "", 0.19f, TextAlignmentOptions.MidlineRight);
             slider.ValueChanged += t => { set(Mathf.Lerp(min, max, t)); row.Refresh(); };
             row.Controls["Slider"] = slider;
@@ -436,10 +443,14 @@ namespace SpatialLauncher.SpatialWindows
         {
             var row = NewRow(label);
             var buttons = new List<(WindowButton button, Material material, TextMeshPro text)>();
+            // One raised capsule track; the selected option is an AccentFill capsule segment on it.
+            var track = CreateQuad("Track", row.Root.transform, CreateRounded(TrackColor, 0f));
+            Round(track, 0f, true);
             for (int i = 0; i < options.Length; i++)
             {
-                var material = CreateMaterial(ControlColor);
+                var material = CreateRounded(TabColor, 0f);
                 var button = CreateControl<WindowButton>($"Option {options[i]}", row.Root.transform, material);
+                Round(button.transform, 0f, true);
                 var text = CreateLabel($"OptionLabel {options[i]}", row.Root.transform, options[i], 0.17f, TextAlignmentOptions.Center);
                 int index = i;
                 button.Clicked += () => { set(index); row.Refresh(); };
@@ -452,6 +463,8 @@ namespace SpatialLauncher.SpatialWindows
                 layoutLabel(y, left, width);
                 float area = width - LabelWidth - Gap;
                 float cell = (area - Gap * (buttons.Count - 1)) / buttons.Count;
+                track.localPosition = new Vector3(left + LabelWidth + Gap + area * 0.5f, y, -0.0005f);
+                track.localScale = new Vector3(area, RowHeight, 1f);
                 for (int i = 0; i < buttons.Count; i++)
                 {
                     float x = left + LabelWidth + Gap + cell * (i + 0.5f) + Gap * i;
@@ -463,40 +476,51 @@ namespace SpatialLauncher.SpatialWindows
             row.Refresh = () =>
             {
                 int current = get();
-                for (int i = 0; i < buttons.Count; i++) buttons[i].material.color = i == current ? SelectedColor : ControlColor;
+                for (int i = 0; i < buttons.Count; i++) buttons[i].material.color = i == current ? SelectedColor : TabColor;
             };
         }
 
         void Toggle(string label, Func<bool> get, Action<bool> set)
         {
-            const float width = 0.1f;
             var row = NewRow(label);
-            var material = CreateMaterial(ControlColor);
-            var button = CreateControl<WindowButton>("Toggle", row.Root.transform, material);
-            var text = CreateLabel("ToggleLabel", row.Root.transform, "", 0.18f, TextAlignmentOptions.Center);
+            // The hit area is a clear 52 x 44 button; the switch (track and knob) is drawn over it.
+            var button = CreateControl<WindowButton>("Toggle", row.Root.transform, CreateRounded(TabColor, 0f));
+            var trackMaterial = CreateRounded(TrackColor, 0f);
+            var track = CreateQuad("SwitchTrack", row.Root.transform, trackMaterial, ControlLayer);
+            Round(track, 0f, true);
+            var knob = CreateQuad("SwitchKnob", row.Root.transform, CreateRounded(Color.white, 0f), FillLayer);
+            Round(knob, 0f, true);
+            var text = CreateLabel("ToggleLabel", row.Root.transform, "", 0.18f, TextAlignmentOptions.MidlineLeft);
             button.Clicked += () => { set(!get()); row.Refresh(); };
             row.Controls["On"] = button;
             var layoutLabel = row.Layout;
             row.Layout = (y, left, rowWidth) =>
             {
                 layoutLabel(y, left, rowWidth);
-                float x = left + LabelWidth + Gap + width * 0.5f;
+                float x = left + LabelWidth + Gap + SwitchWidth * 0.5f;
                 button.transform.localPosition = new Vector3(x, y, -0.001f);
-                button.transform.localScale = new Vector3(width, RowHeight, 1f);
-                Place(text.transform, text, x, y, width, RowHeight);
+                button.transform.localScale = new Vector3(SwitchWidth, RowHeight, 1f);
+                track.localPosition = new Vector3(x, y, -0.0015f);
+                track.localScale = new Vector3(SwitchWidth, SwitchHeight, 1f);
+                knob.localScale = new Vector3(SwitchKnob, SwitchKnob, 1f);
+                Place(text.transform, text, x + SwitchWidth * 0.5f + Gap + 0.03f, y, 0.06f, RowHeight);
+                row.Refresh();
             };
             row.Refresh = () =>
             {
                 bool on = get();
                 SetText(text, on ? "On" : "Off");
-                material.color = on ? OnColor : ControlColor;
+                trackMaterial.color = on ? OnColor : TrackColor;
+                float travel = (SwitchWidth - SwitchKnob) * 0.5f - 0.002f;
+                var t = track.localPosition;
+                knob.localPosition = new Vector3(t.x + (on ? travel : -travel), t.y, -0.002f);
             };
         }
 
         void Field(string label, Func<string> get, Action<string> set, bool masked, bool digits, string placeholder)
         {
             var row = NewRow(label);
-            var material = CreateMaterial(FieldColor);
+            var material = CreateRounded(FieldColor, UITheme.ControlRadius);
             var field = CreateControl<WindowTextField>("Field", row.Root.transform, material);
             var text = CreateLabel("FieldText", row.Root.transform, "", 0.19f, TextAlignmentOptions.MidlineLeft);
             field.Init(text, material, placeholder);
@@ -528,7 +552,7 @@ namespace SpatialLauncher.SpatialWindows
             var made = new List<(WindowButton button, TextMeshPro text, Func<string> caption)>();
             foreach (var (name, click, caption) in buttons)
             {
-                var button = CreateControl<WindowButton>($"Button {name}", row.Root.transform, CreateMaterial(OnColor));
+                var button = CreateControl<WindowButton>($"Button {name}", row.Root.transform, CreateRounded(OnColor, UITheme.ControlRadius));
                 var text = CreateLabel($"ButtonLabel {name}", row.Root.transform, name, 0.2f, TextAlignmentOptions.Center);
                 button.Clicked += () => { click(); row.Refresh(); };
                 row.Controls[name] = button;
@@ -573,12 +597,12 @@ namespace SpatialLauncher.SpatialWindows
 
         protected override void Layout(Vector2 size)
         {
-            panel.localPosition = new Vector3(0f, 0f, -0.0005f);
+            panel.localPosition = new Vector3(0f, 0f, -0.0003f);
             panel.localScale = new Vector3(size.x, size.y, 1f);
 
             float top = size.y * 0.5f;
             float left = -size.x * 0.5f;
-            float tabHeight = Mathf.Min(RowHeight * 1.3f, (size.y - Gap * (sections.Count + 1)) / sections.Count);
+            float tabHeight = Mathf.Min(TabHeight, (size.y - Gap * (sections.Count + 1)) / sections.Count);
             for (int i = 0; i < sections.Count; i++)
             {
                 float y = top - Gap - tabHeight * (i + 0.5f) - Gap * i;
