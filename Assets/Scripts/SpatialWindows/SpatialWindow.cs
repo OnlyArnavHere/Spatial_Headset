@@ -297,12 +297,43 @@ namespace SpatialLauncher.SpatialWindows
             else pointers.Remove(pointer);
         }
 
+        /// <summary>A pointer is over (or left) one of the chrome controls: lights up the close button, resize handle or grab bar.</summary>
+        public void SetChromeHover(WindowPartType part, object pointer, bool over)
+        {
+            if (this == null) return;
+            var control = part == WindowPartType.CloseButton ? closeControl
+                : part == WindowPartType.ResizeHandle ? resizeControl
+                : part == WindowPartType.GrabBar ? grabBar : null;
+            control?.State.SetHover(pointer, over);
+        }
+
+        /// <summary>A pointer pressed (or let go of) a chrome control: overlay and shrink.</summary>
+        public void SetChromePressed(WindowPartType part, bool pressed)
+        {
+            if (this == null) return;
+            var control = part == WindowPartType.CloseButton ? closeControl
+                : part == WindowPartType.ResizeHandle ? resizeControl
+                : part == WindowPartType.GrabBar ? grabBar : null;
+            control?.State.SetPressed(pressed);
+        }
+
+        public void ClearChromePressed()
+        {
+            if (this == null) return;
+            closeControl?.State.SetPressed(false);
+            resizeControl?.State.SetPressed(false);
+            grabBar?.State.SetPressed(false);
+        }
+
         /// <summary>Moves <see cref="Reveal"/> towards the pointer state: fast in (150 ms), slow out (600 ms), whatever the frame rate.</summary>
         public void UpdateReveal(float deltaTime)
         {
             float target = IsPointerOver ? 1f : 0f;
             float tau = target > reveal ? RevealTauIn : RevealTauOut;
             reveal += (target - reveal) * (1f - Mathf.Exp(-deltaTime / tau));
+            closeControl?.State.Step(deltaTime);
+            resizeControl?.State.Step(deltaTime);
+            grabBar?.State.Step(deltaTime);
             ApplyReveal();
         }
 

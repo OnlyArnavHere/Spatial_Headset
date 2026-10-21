@@ -193,6 +193,8 @@ namespace SpatialLauncher.SpatialWindows
             bool wasPinched;
             WindowControl activeControl;
             WindowControl hoveredControl;
+            WindowPart hoveredChrome;
+            SpatialWindow chromeWindow;
             SpatialWindow pointerWindow;
             Vector3 gesturePoint;
 
@@ -262,10 +264,18 @@ namespace SpatialLauncher.SpatialWindows
 
                 // Hover goes to the control under the ray while no gesture is in progress (hands have no scroll).
                 WindowControl hovered = null;
-                if (mode == Mode.None && hasHit && part.Type == WindowPartType.Control) part.TryGetComponent(out hovered);
-                if (hoveredControl != hovered && hoveredControl != null) hoveredControl.HoverExit();
+                WindowPart chrome = null;
+                if (mode == Mode.None && hasHit)
+                {
+                    if (part.Type == WindowPartType.Control) part.TryGetComponent(out hovered);
+                    else chrome = part;
+                }
+                if (hoveredChrome != chrome) hoveredChrome?.Window.SetChromeHover(hoveredChrome.Type, this, false);
+                hoveredChrome = chrome;
+                chrome?.Window.SetChromeHover(chrome.Type, this, true);
+                if (hoveredControl != hovered && hoveredControl != null) hoveredControl.HoverExitFrom(this);
                 hoveredControl = hovered;
-                if (hovered != null) hovered.Hover(hit.point);
+                if (hovered != null) hovered.HoverFrom(this, hit.point);
 
                 // The window under the ray (or being worked on) shows its controls; the one the ray left hides them.
                 var over = mode != Mode.None && ActiveWindow != null ? ActiveWindow : hasHit ? part.Window : null;
@@ -283,6 +293,8 @@ namespace SpatialLauncher.SpatialWindows
             {
                 var window = part.Window;
                 owner.SelectRequested?.Invoke(window);
+                window.SetChromePressed(part.Type, true);
+                chromeWindow = window;
                 gesturePoint = hit.point;
 
                 switch (part.Type)
@@ -368,6 +380,8 @@ namespace SpatialLauncher.SpatialWindows
             void ResetGesture()
             {
                 mode = Mode.None;
+                if (chromeWindow != null) chromeWindow.ClearChromePressed();
+                chromeWindow = null;
                 ActiveWindow = null;
                 activeControl = null;
             }
@@ -376,7 +390,9 @@ namespace SpatialLauncher.SpatialWindows
             public void Cancel()
             {
                 if (mode == Mode.Control && activeControl != null) activeControl.Release(false);
-                if (hoveredControl != null) hoveredControl.HoverExit();
+                if (hoveredControl != null) hoveredControl.HoverExitFrom(this);
+                hoveredChrome?.Window.SetChromeHover(hoveredChrome.Type, this, false);
+                hoveredChrome = null;
                 hoveredControl = null;
                 if (pointerWindow != null) pointerWindow.SetPointerOver(this, false);
                 pointerWindow = null;

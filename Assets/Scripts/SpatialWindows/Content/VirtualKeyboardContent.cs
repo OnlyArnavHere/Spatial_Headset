@@ -102,6 +102,7 @@ namespace SpatialLauncher.SpatialWindows
                     button.Clicked += () => Press(pressed);
                     control = button;
                 }
+                control.BindLabel(label);
                 keys.Add((key, control, label, material));
             }
             RefreshKeys();

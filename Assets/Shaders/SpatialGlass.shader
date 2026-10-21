@@ -23,6 +23,12 @@ Shader "SpatialLauncher/SpatialGlass"
         [MainColor] _Color ("Fill (flat shapes)", Color) = (1, 1, 1, 1)
         _UseTex ("Use texture", Float) = 0
         _Flat ("Flat shape", Float) = 0
+        // Control states (Doc/ui-design.md section 7): overlay colour over the fill, focus ring band inside the edge, press shrink, disabled fade.
+        _Overlay ("State overlay", Color) = (1, 1, 1, 0)
+        _FocusRing ("Focus ring", Color) = (1, 1, 1, 0)
+        _FocusBand ("Focus ring offset and width", Vector) = (0.003, 0.002, 0, 0)
+        _PressScale ("Press scale", Float) = 1
+        _Fade ("Fade", Float) = 1
     }
 
     HLSLINCLUDE
@@ -47,6 +53,11 @@ Shader "SpatialLauncher/SpatialGlass"
         float4 _MainTex_ST;
         float _UseTex;
         float _Flat;
+        half4 _Overlay;
+        half4 _FocusRing;
+        float4 _FocusBand;
+        float _PressScale;
+        float _Fade;
     CBUFFER_END
 
     TEXTURE2D(_MainTex);
@@ -90,12 +101,26 @@ Shader "SpatialLauncher/SpatialGlass"
         return l > 0.25 ? c * (0.25 / l) : c;
     }
 
+    // The state overlay over a colour, then the focus ring band (inside the edge: _FocusBand.x from it, .y wide).
+    half4 ApplyState(half4 c, float d, float aa)
+    {
+        half3 rgb = lerp(c.rgb, _Overlay.rgb, _Overlay.a);
+        half alpha = c.a + (1 - c.a) * _Overlay.a;
+        float half_ = _FocusBand.y * 0.5;
+        float ring = saturate(0.5 - (abs(d + _FocusBand.x + half_) - half_) / aa) * _FocusRing.a;
+        rgb = lerp(rgb, _FocusRing.rgb, ring);
+        alpha = alpha + (1 - alpha) * ring;
+        return half4(rgb, alpha * _Fade);
+    }
+
     half4 Frag(Varyings input) : SV_Target
     {
         float2 p = (input.uv - 0.5) * _Quad.xy;
         float2 halfSize = _Size.xy * 0.5;
         float radius = min(_Radius, min(halfSize.x, halfSize.y));
         float d = RoundedBoxSdf(p, halfSize, radius);
+        float pressScale = max(_PressScale, 0.01);
+        if (pressScale < 0.999) d = RoundedBoxSdf(p / pressScale, halfSize, radius) * pressScale;
         // One pixel of anti-aliasing on the edge.
         float aa = max(fwidth(d), 1e-5);
 
@@ -118,10 +143,11 @@ Shader "SpatialLauncher/SpatialGlass"
         {
             half4 fill = _Color;
             if (_UseTex > 0.5) fill.rgb *= SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv * _MainTex_ST.xy + _MainTex_ST.zw).rgb;
-            return half4(fill.rgb, fill.a * cover);
+            half4 shaped = ApplyState(fill, d, aa);
+            return half4(shaped.rgb, shaped.a * cover);
         }
 
-        float t = saturate(p.y / max(_Size.y, 1e-5) + 0.5);   // 0 at the bottom, 1 at the top
+        float t = saturate(p.y / pressScale / max(_Size.y, 1e-5) + 0.5);   // 0 at the bottom, 1 at the top
 
         half3 rgb;
         half alpha;
@@ -160,7 +186,8 @@ Shader "SpatialLauncher/SpatialGlass"
         rgb = lerp(rgb, rim.rgb, rimA);
         alpha = alpha + (1 - alpha) * rimA;
 
-        return half4(rgb, alpha * cover);
+        half4 shaded = ApplyState(half4(rgb, alpha), d, aa);
+        return half4(shaded.rgb, shaded.a * cover);
     }
     ENDHLSL
 

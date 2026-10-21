@@ -32,6 +32,14 @@ namespace SpatialLauncher.SpatialWindows
         readonly List<WindowButton> buttons = new List<WindowButton>();
         readonly List<TextMeshPro> glyphs = new List<TextMeshPro>();
         readonly List<TextMeshPro> labels = new List<TextMeshPro>();
+        // A soft plate behind each whole tile (icon and caption) that lights up with the hover state.
+        readonly List<Transform> plates = new List<Transform>();
+        readonly List<Vector3> plateScales = new List<Vector3>();
+        MaterialPropertyBlock plateBlock;
+        public static readonly Color PlateColor = new Color(1f, 1f, 1f, 0.12f);
+        public const float PlateRadiusPt = 16f;
+        const float PlatePad = 0.008f;
+        static readonly int PlateColorId = Shader.PropertyToID("_Color");
 
         /// <summary>The icon glyph of an entry by its label (Material Icons Round), with a fallback for unknown ones.</summary>
         public static string IconFor(string label)
@@ -80,21 +88,48 @@ namespace SpatialLauncher.SpatialWindows
             Attach(window, baseMaterial);
             foreach (var entry in entries)
             {
+                var plate = CreateQuad($"Plate {entry.Label}", transform, CreateRounded(new Color(1f, 1f, 1f, 0f), PlateRadiusPt), 0);
+                plates.Add(plate);
+                plateScales.Add(Vector3.one);
+                int tile = plates.Count - 1;
                 var button = CreateControl<WindowButton>($"Icon {entry.Label}", transform,
                     CreateRounded(TileColor(entry.Color), UITheme.ControlRadius));
                 var open = entry.Open;
                 button.Clicked += () => open?.Invoke();
+                button.VisualRefreshed += () => RefreshPlate(tile);
                 buttons.Add(button);
                 var glyph = CreateLabel($"Glyph {entry.Label}", transform, entry.Icon ?? IconFor(entry.Label), TextRole.Icon, TextAlignmentOptions.Center);
                 glyph.fontSize = UITheme.PtToMetres(GlyphPt) * ThemeApplier.TmpWorldScale;
                 glyph.color = Color.white;
                 glyph.overflowMode = TextOverflowModes.Overflow;
+                button.BindLabel(glyph);
                 glyphs.Add(glyph);
                 var caption = CreateLabel($"Label {entry.Label}", transform, entry.Label, TextRole.Caption, TextAlignmentOptions.Center);
                 caption.overflowMode = TextOverflowModes.Ellipsis;
+                button.BindLabel(caption);
                 labels.Add(caption);
             }
             Relayout();
+        }
+
+        // Plate alpha follows the smoothed overlay (0.10 hover, 0.18 pressed -> 1x and 1.8x), and the tile content shrinks with a press.
+        void RefreshPlate(int i)
+        {
+            plateBlock ??= new MaterialPropertyBlock();
+            if (i < buttons.Count && i < plates.Count && i < glyphs.Count && i < labels.Count)
+            {
+                var state = buttons[i].State;
+                float k = state.OverlayAlpha / UITheme.HoverOverlay.a;
+                var renderer = plates[i].GetComponent<MeshRenderer>();
+                renderer.GetPropertyBlock(plateBlock);
+                var color = PlateColor;
+                color.a = Mathf.Clamp01(PlateColor.a * k);
+                plateBlock.SetColor(PlateColorId, color);
+                renderer.SetPropertyBlock(plateBlock);
+                plates[i].localScale = plateScales[i] * state.Scale;
+                glyphs[i].transform.localScale = Vector3.one * state.Scale;
+                labels[i].transform.localScale = Vector3.one * state.Scale;
+            }
         }
 
         protected override void Layout(Vector2 size)
@@ -114,6 +149,10 @@ namespace SpatialLauncher.SpatialWindows
                 float x = -size.x * 0.5f + cellWidth * (column + 0.5f) + Gap * column;
                 float cellY = size.y * 0.5f - cellHeight * (row + 0.5f) - Gap * row;
                 float iconY = cellY + LabelHeight * 0.5f;
+
+                plates[i].localPosition = new Vector3(x, cellY, -0.0005f);
+                plateScales[i] = new Vector3(cellWidth, icon + LabelHeight + PlatePad * 2f, 1f);
+                plates[i].localScale = plateScales[i];
 
                 buttons[i].transform.localPosition = new Vector3(x, iconY, -0.001f);
                 buttons[i].transform.localScale = new Vector3(icon, icon, 1f);

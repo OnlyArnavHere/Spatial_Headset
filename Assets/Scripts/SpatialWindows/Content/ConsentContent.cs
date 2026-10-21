@@ -44,6 +44,9 @@ namespace SpatialLauncher.SpatialWindows
             approveLabel = CreateLabel("ApproveLabel", transform, "Approve", TextRole.Headline, TextAlignmentOptions.Center);
             DenyButton = CreateControl<WindowButton>("Deny", transform, CreateMaterial(DenyColor));
             denyLabel = CreateLabel("DenyLabel", transform, "Deny", TextRole.Headline, TextAlignmentOptions.Center);
+            // Solid in every state, never disabled; the labels stay white.
+            ApproveButton.AlwaysEnabled = true;
+            DenyButton.AlwaysEnabled = true;
             ApproveButton.Clicked += () => gate.Approve();
             DenyButton.Clicked += () => gate.Deny();
             Relayout();

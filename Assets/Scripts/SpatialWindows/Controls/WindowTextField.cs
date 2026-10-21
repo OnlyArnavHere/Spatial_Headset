@@ -70,6 +70,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Focused == this) return;
             if (Focused != null) Focused.Blur();
             Focused = this;
+            SetFocused(true);
             caretVisible = true;
             caretTimer = 0f;
             if (Keyboard.current != null) Keyboard.current.onTextInput += OnTextInput;
@@ -84,6 +85,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             if (Focused != this) return;
             Focused = null;
+            SetFocused(false);
             if (Keyboard.current != null) Keyboard.current.onTextInput -= OnTextInput;
 #if UNITY_IOS && !UNITY_EDITOR
             if (touchKeyboard != null) touchKeyboard.active = false;
@@ -94,9 +96,18 @@ namespace SpatialLauncher.SpatialWindows
 
         public static void BlurAll() => Focused?.Blur();
 
+        protected override void OnInteractableChanged(bool nowInteractable)
+        {
+            base.OnInteractableChanged(nowInteractable);
+            if (!nowInteractable) Blur();
+        }
+
+        public override void Press(Vector3 worldPoint) => BeginPress();
+
         public override void Release(bool inside)
         {
-            if (inside) Focus();
+            EndPress();
+            if (inside && Interactable) Focus();
         }
 
         void OnTextInput(char character)
@@ -105,8 +116,9 @@ namespace SpatialLauncher.SpatialWindows
             SetText(Text + character);
         }
 
-        void Update()
+        protected override void Update()
         {
+            base.Update();
             if (Focused != this) return;
 
             caretTimer += Time.unscaledDeltaTime;

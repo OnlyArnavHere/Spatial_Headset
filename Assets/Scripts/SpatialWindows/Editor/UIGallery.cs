@@ -169,21 +169,27 @@ namespace SpatialLauncher.SpatialWindows.Editor
         }
 
         const float Distance = 1.5f;
+        static readonly object GalleryPointer = new object();
 
         static void ApplyState(SpatialWindow window, WindowControl control, GalleryState state)
         {
             switch (state)
             {
                 case GalleryState.Idle:
-                case GalleryState.Disabled: // no disabled look exists yet; same as idle until there is
                     window.SetFocused(false);
                     window.SetPresentation(0f, 1f, instant: true);
                     window.SetReveal(0f); // chrome controls hidden
                     break;
+                case GalleryState.Disabled:
+                    window.SetFocused(false);
+                    window.SetPresentation(0f, 1f, instant: true);
+                    window.SetReveal(0f);
+                    if (control != null) control.Interactable = false;
+                    break;
                 case GalleryState.Hover:
                     Focus(window);
                     window.SetReveal(1f); // chrome controls shown
-                    control.Hover(control.transform.position);
+                    control.HoverFrom(GalleryPointer, control.transform.position);
                     break;
                 case GalleryState.Pressed:
                     Focus(window);
@@ -193,8 +199,10 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 case GalleryState.Focused:
                     Focus(window);
                     window.SetReveal(0f);
+                    if (control != null) control.SetFocused(true);
                     break;
             }
+            control?.SnapVisual();
         }
 
         static void Focus(SpatialWindow window)
@@ -208,7 +216,10 @@ namespace SpatialLauncher.SpatialWindows.Editor
         {
             if (control == null) return;
             control.Release(false);
-            control.HoverExit();
+            control.HoverExitFrom(GalleryPointer);
+            control.SetFocused(false);
+            control.Interactable = true;
+            control.SnapVisual();
         }
 
         // The first button-like control, which hover and press are shown on.

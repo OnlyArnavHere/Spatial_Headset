@@ -36,10 +36,9 @@ namespace SpatialLauncher.SpatialWindows.Editor
         };
 
         /// <summary>
-        /// Controls have no disabled look yet (there is no disabled API). Flip this when they do and the Disabled shots join
-        /// the list.
+        /// Controls have a disabled look (<see cref="WindowControl.Interactable"/>), so the Disabled shots join the list.
         /// </summary>
-        public const bool DisabledSupported = false;
+        public const bool DisabledSupported = true;
 
         /// <summary>
         /// Whether a window has controls to hover and press. The image and the video placeholder are display-only, and an

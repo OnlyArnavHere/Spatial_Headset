@@ -12,12 +12,14 @@ namespace SpatialLauncher.SpatialWindows
 
         public override void Press(UnityEngine.Vector3 worldPoint)
         {
+            if (!BeginPress()) return;
             IsHeld = true;
             Pressed?.Invoke();
         }
 
         public override void Release(bool inside)
         {
+            EndPress();
             if (!IsHeld) return;
             IsHeld = false;
             Released?.Invoke();

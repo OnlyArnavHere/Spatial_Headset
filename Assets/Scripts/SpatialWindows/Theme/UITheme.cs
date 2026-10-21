@@ -53,6 +53,14 @@ namespace SpatialLauncher.SpatialWindows.Theme
         // Pressed scale
         public const float PressedScale = 0.96f;
 
+        // States (Doc/ui-design.md section 7)
+        public const float DisabledAlpha = 0.38f;
+        public const float PressScale = PressedScale;
+        /// <summary>Time constant of the hover overlay's exponential smoothing (ms).</summary>
+        public const float HoverTauMs = 60f;
+        /// <summary>Time constant of the press overlay and scale (ms).</summary>
+        public const float PressMs = 60f;
+
         // Type scale (pt)
         public const float LargeTitlePt = 29f;
         public const float TitlePt = 22f;

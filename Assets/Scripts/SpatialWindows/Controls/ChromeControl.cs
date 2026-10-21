@@ -42,6 +42,8 @@ namespace SpatialLauncher.SpatialWindows
 
         public readonly Transform Hit;
         public Color Fill { get; private set; }
+        /// <summary>Hover (per pointer), press and focus of this control; drawn by <see cref="Apply"/>.</summary>
+        public ControlVisualState State { get; } = new ControlVisualState();
         /// <summary>Width in pt of a dark outline (<see cref="PillOutline"/>) drawn instead of the glass rim; 0 for none.</summary>
         public float OutlinePt;
         public float Alpha { get; private set; }
@@ -140,6 +142,7 @@ namespace SpatialLauncher.SpatialWindows
                 block.SetVector(QuadId, new Vector4(visualSize.x, visualSize.y, 0f, 0f));
                 block.SetFloat(SolidId, 0f);
                 block.SetFloat(ShadowOnlyId, 0f);
+                State.Apply(block);
                 discRenderer.SetPropertyBlock(block);
             }
             Alpha = alpha;

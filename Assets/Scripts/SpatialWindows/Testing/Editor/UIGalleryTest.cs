@@ -56,15 +56,14 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(unique, $"{shots.Count} shot names are unique and none is the overview");
             Check(pattern, "every name is <window>_<state>.png");
 
-            // Disabled is left out until controls have a look for it, and ready when they do.
-            Check(!UIGalleryShots.DisabledSupported, "disabled is off until the controls have a disabled look");
-            bool noDisabled = true;
-            foreach (var shot in shots) noDisabled &= shot.State != GalleryState.Disabled;
-            Check(noDisabled, "no disabled shots by default");
+            // Disabled shots are part of the default list; asking explicitly for them or not still works.
+            Check(UIGalleryShots.DisabledSupported, "disabled shots are on now that controls have a disabled look");
             var withDisabled = UIGalleryShots.All(true);
+            var without = UIGalleryShots.All(false);
             int disabled = 0;
             foreach (var shot in withDisabled) if (shot.State == GalleryState.Disabled) disabled++;
-            Check(disabled > 0 && withDisabled.Count == shots.Count + disabled, $"asked for, {disabled} disabled shots join the list");
+            Check(disabled > 0 && withDisabled.Count == without.Count + disabled && shots.Count == withDisabled.Count,
+                $"{disabled} disabled shots are in the default list");
             Check(UIGalleryShots.FileName("home", GalleryState.Disabled) == "home_disabled.png", "home disabled is home_disabled.png");
 
             // Folder labels.

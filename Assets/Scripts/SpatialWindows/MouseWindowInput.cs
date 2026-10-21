@@ -29,6 +29,8 @@ namespace SpatialLauncher.SpatialWindows
         SpatialWindow pointerWindow;
         WindowControl activeControl;
         WindowControl hoveredControl;
+        WindowPart hoveredChrome;
+        SpatialWindow chromeWindow;
 
         // Drag: keep the grabbed point at the same distance along the mouse ray.
         float grabDistance;
@@ -90,17 +92,26 @@ namespace SpatialLauncher.SpatialWindows
         {
             WindowControl hovered = null;
             Vector3 point = default;
-            if (inView && mode == Mode.None && TryHit(ray, out var hit, out var part) && part.Type == WindowPartType.Control)
+            WindowPart chrome = null;
+            if (inView && mode == Mode.None && TryHit(ray, out var hit, out var part))
             {
-                part.TryGetComponent(out hovered);
-                point = hit.point;
+                if (part.Type == WindowPartType.Control)
+                {
+                    part.TryGetComponent(out hovered);
+                    point = hit.point;
+                }
+                else chrome = part;
             }
 
-            if (hoveredControl != hovered && hoveredControl != null) hoveredControl.HoverExit();
+            if (hoveredChrome != chrome) hoveredChrome?.Window.SetChromeHover(hoveredChrome.Type, this, false);
+            hoveredChrome = chrome;
+            chrome?.Window.SetChromeHover(chrome.Type, this, true);
+
+            if (hoveredControl != hovered && hoveredControl != null) hoveredControl.HoverExitFrom(this);
             hoveredControl = hovered;
             if (hovered == null) return;
 
-            hovered.Hover(point);
+            hovered.HoverFrom(this, point);
             // Mouse wheels report about 120 per notch on Windows and 1 elsewhere; pass whole notches.
             if (Mathf.Abs(scroll) > 0.01f) hovered.Scroll(point, Mathf.Abs(scroll) >= 60f ? scroll / 120f : scroll);
         }
@@ -136,6 +147,8 @@ namespace SpatialLauncher.SpatialWindows
 
             activeWindow = part.Window;
             SelectRequested?.Invoke(activeWindow);
+            chromeWindow = activeWindow;
+            chromeWindow.SetChromePressed(part.Type, true);
 
             switch (part.Type)
             {
@@ -194,8 +207,15 @@ namespace SpatialLauncher.SpatialWindows
             }
         }
 
+        void ClearChromePressed()
+        {
+            if (chromeWindow != null) chromeWindow.ClearChromePressed();
+            chromeWindow = null;
+        }
+
         void End(Ray ray, bool inView)
         {
+            ClearChromePressed();
             if (mode == Mode.Control && activeControl != null)
             {
                 bool inside = inView && TryHit(ray, out _, out var hitPart)
@@ -221,8 +241,11 @@ namespace SpatialLauncher.SpatialWindows
         void OnDisable()
         {
             // Switching input sources mid-gesture: let go cleanly.
+            ClearChromePressed();
             if (mode == Mode.Control && activeControl != null) activeControl.Release(false);
-            if (hoveredControl != null) hoveredControl.HoverExit();
+            if (hoveredControl != null) hoveredControl.HoverExitFrom(this);
+            hoveredChrome?.Window.SetChromeHover(hoveredChrome.Type, this, false);
+            hoveredChrome = null;
             if (pointerWindow != null) pointerWindow.SetPointerOver(this, false);
             pointerWindow = null;
             mode = Mode.None;

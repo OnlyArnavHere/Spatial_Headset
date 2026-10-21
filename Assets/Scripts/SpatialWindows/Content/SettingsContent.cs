@@ -91,6 +91,7 @@ namespace SpatialLauncher.SpatialWindows
                 section.Tab = CreateControl<WindowButton>($"Tab {name}", transform, section.TabMaterial);
                 Round(section.Tab.transform, 0f, true);
                 section.TabLabel = CreateLabel($"TabLabel {name}", transform, name, TextRole.Headline, TextAlignmentOptions.Center);
+                section.Tab.BindLabel(section.TabLabel);
                 int index = sections.Count;
                 section.Tab.Clicked += () => Select(index);
                 sections.Add(section);
@@ -140,6 +141,7 @@ namespace SpatialLauncher.SpatialWindows
             text.richText = false; // laptop names are shown as typed, never as markup
             var button = CreateControl<WindowButton>("Remove", row.Root.transform, CreateRounded(RemoveColor, UITheme.ControlRadius));
             var buttonText = CreateLabel("RemoveLabel", row.Root.transform, "Remove", TextRole.Headline, TextAlignmentOptions.Center);
+            button.BindLabel(buttonText);
             row.Controls["Remove"] = button;
             string current = null;
             button.Clicked += () =>
@@ -464,6 +466,7 @@ namespace SpatialLauncher.SpatialWindows
                 var button = CreateControl<WindowButton>($"Option {options[i]}", row.Root.transform, material);
                 Round(button.transform, 0f, true);
                 var text = CreateLabel($"OptionLabel {options[i]}", row.Root.transform, options[i], TextRole.Body, TextAlignmentOptions.Center);
+                button.BindLabel(text);
                 int index = i;
                 button.Clicked += () => { set(index); row.Refresh(); };
                 row.Controls[options[i]] = button;
@@ -503,6 +506,11 @@ namespace SpatialLauncher.SpatialWindows
             var knob = CreateQuad("SwitchKnob", row.Root.transform, CreateRounded(Color.white, 0f), FillLayer);
             Round(knob, 0f, true);
             var text = CreateLabel("ToggleLabel", row.Root.transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
+            // The switch itself shows the state; the clear hit area behind it doesn't.
+            button.OwnShapeReacts = false;
+            button.BindRenderer(track.GetComponent<MeshRenderer>());
+            button.BindRenderer(knob.GetComponent<MeshRenderer>());
+            button.BindLabel(text);
             button.Clicked += () => { set(!get()); row.Refresh(); };
             row.Controls["On"] = button;
             var layoutLabel = row.Layout;
@@ -566,6 +574,7 @@ namespace SpatialLauncher.SpatialWindows
             {
                 var button = CreateControl<WindowButton>($"Button {name}", row.Root.transform, CreateRounded(OnColor, UITheme.ControlRadius));
                 var text = CreateLabel($"ButtonLabel {name}", row.Root.transform, name, TextRole.Headline, TextAlignmentOptions.Center);
+                button.BindLabel(text);
                 button.Clicked += () => { click(); row.Refresh(); };
                 row.Controls[name] = button;
                 made.Add((button, text, caption));

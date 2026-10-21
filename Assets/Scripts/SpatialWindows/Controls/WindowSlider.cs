@@ -34,6 +34,7 @@ namespace SpatialLauncher.SpatialWindows
         public void AttachKnob(Transform knob)
         {
             Knob = knob;
+            if (knob.TryGetComponent<MeshRenderer>(out var knobRenderer)) { BindRenderer(knobRenderer); OwnShapeReacts = false; }
             if (knob.TryGetComponent<RoundedShape>(out var shape))
             {
                 shape.Capsule = true;
@@ -75,6 +76,7 @@ namespace SpatialLauncher.SpatialWindows
 
         public override void Press(Vector3 worldPoint)
         {
+            if (!BeginPress()) return;
             IsDragging = true;
             SetFromPoint(worldPoint);
         }
@@ -84,7 +86,11 @@ namespace SpatialLauncher.SpatialWindows
             if (IsDragging) SetFromPoint(worldPoint);
         }
 
-        public override void Release(bool inside) => IsDragging = false;
+        public override void Release(bool inside)
+        {
+            EndPress();
+            IsDragging = false;
+        }
 
         void SetFromPoint(Vector3 worldPoint)
         {

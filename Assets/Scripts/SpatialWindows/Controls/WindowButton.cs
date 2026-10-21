@@ -8,9 +8,12 @@ namespace SpatialLauncher.SpatialWindows
     {
         public event Action Clicked;
 
+        public override void Press(Vector3 worldPoint) => BeginPress();
+
         public override void Release(bool inside)
         {
-            if (inside) Clicked?.Invoke();
+            EndPress();
+            if (inside && Interactable) Clicked?.Invoke();
         }
     }
 }
