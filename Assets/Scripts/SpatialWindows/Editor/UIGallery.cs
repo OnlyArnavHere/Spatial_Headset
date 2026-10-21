@@ -352,6 +352,8 @@ namespace SpatialLauncher.SpatialWindows.Editor
             readonly Transform head, backdrop;
             readonly RenderTexture target;
             readonly Texture2D readback;
+            readonly Texture backdropTexture;
+            readonly BackdropBlurPass blur = new BackdropBlurPass();
             readonly List<Object> owned = new List<Object>();
             readonly List<GameObject> windowRoots = new List<GameObject>();
             readonly List<GameObject> fixedRoots = new List<GameObject>();
@@ -381,7 +383,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 SceneManager.MoveGameObjectToScene(backdropObject, scene);
                 fixedRoots.Add(backdropObject);
                 backdrop = backdropObject.transform;
-                var backdropTexture = MakeBackdropTexture(1024, 640);
+                backdropTexture = MakeBackdropTexture(1024, 640);
                 var backdropMaterial = new Material(windowMaterial) { color = Color.white, hideFlags = HideFlags.HideAndDontSave };
                 backdropMaterial.mainTexture = backdropTexture;
                 if (backdropMaterial.HasProperty("_BaseMap")) backdropMaterial.SetTexture("_BaseMap", backdropTexture);
@@ -508,6 +510,12 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 var previous = RenderTexture.active;
                 try
                 {
+                    // Glass blurs the room behind it: the backdrop quad covers 1/1.02 of the camera's view (see ApplyCamera), and
+                    // the blur projects through this same camera, so the shots match what the windows would show on a device.
+                    const float cover = 1f / 1.02f;
+                    if (!blur.Render(backdropTexture, null, new Rect(0.5f - cover * 0.5f, 0.5f - cover * 0.5f, cover, cover),
+                            camera.projectionMatrix * camera.worldToCameraMatrix))
+                        Debug.LogWarning("[UIGallery] The backdrop blur couldn't run (Resources/Materials/BackdropBlur missing); glass shows its fallback.");
                     var request = new RenderPipeline.StandardRequest { destination = target };
                     if (RenderPipeline.SupportsRenderRequest(camera, request))
                     {
@@ -542,6 +550,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 try
                 {
                     ClearWindows();
+                    blur.Dispose();
                     foreach (var root in fixedRoots) DestroyImmediateSafe(root);
                     fixedRoots.Clear();
                     foreach (var asset in owned) DestroyImmediateSafe(asset);

@@ -35,7 +35,7 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>Paired laptops listed in Settings > Laptop (each with a Remove button); more show as "+N more".</summary>
         public const int PairedSlots = 3;
 
-        public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "About" };
+        public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "Performance", "About" };
 
         /// <summary>Content size the window needs.</summary>
         public static readonly Vector2 PreferredSize = new Vector2(0.86f, 0.66f);
@@ -105,7 +105,8 @@ namespace SpatialLauncher.SpatialWindows
             BuildWindows(sections[4]);
             BuildImmersion(sections[5]);
             BuildVoice(sections[6]);
-            BuildAbout(sections[7]);
+            BuildPerformance(sections[7]);
+            BuildAbout(sections[8]);
 
             var pairs = LinkService.Current != null && LinkService.Current.Host != null ? LinkService.Current.Host : null;
             if (pairs != null)
@@ -370,6 +371,21 @@ namespace SpatialLauncher.SpatialWindows
                 i => SettingsStore.Update(x => x.voice.language = VoiceSettings.Languages[i]));
             Toggle("On-device only", () => S.voice.preferOnDevice, v => SettingsStore.Update(x => x.voice.preferOnDevice = v));
             Value("Note", () => "Voice typing: hold Talk on the keyboard (iPhone). Speech stays on the phone when the language supports it.");
+        }
+
+        void BuildPerformance(Section s)
+        {
+            building = s;
+            Toggle("Glass blur", () => S.performance.glassBlur, v => SettingsStore.Update(x => x.performance.glassBlur = v));
+            Value("Cost", BlurCost);
+            Value("Note", () => "Blurs the passthrough behind window glass. Off uses flat dark glass and saves a little GPU and heat.");
+        }
+
+        static string BlurCost()
+        {
+            var blur = BackdropBlur.Current;
+            if (blur == null || !blur.On) return S.performance.glassBlur ? "Off for now (no passthrough)" : "Off";
+            return $"{blur.Ms:0.00} ms per frame";
         }
 
         void BuildAbout(Section s)

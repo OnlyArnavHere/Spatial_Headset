@@ -9,7 +9,7 @@ Direction: visionOS-like frosted glass, tuned for the HoloKit stereo view. Units
 ## 1. Legibility
 - Minimum text: cap height >= 0.4 deg (24 arcmin, ~7 mm at 1 m, ~8 px per eye) = 10 pt font minimum, for single short labels only. Running text >= 12 pt.
 - Contrast: >= 7:1 for text on glass (AAA), >= 4.5:1 for large text (>= 17 pt) and icons, measured against the worst case: a white wall behind the glass. Low px/deg, lens blur and a bright mono passthrough erase thin strokes.
-- How the glass guarantees it: backdrop linear luminance clamped to <= 0.25 before tinting, tint alpha 0.72. Worst case glass luminance = 0.28*0.25 + 0.72*0.024 = 0.087, so white text = (1.05)/(0.137) = 7.6:1. text.secondary (~0.59 luminance) = 4.6:1, so secondary text is used only at >= 15 pt.
+- How the glass guarantees it: backdrop linear luminance clamped to <= 0.25 before tinting, tint alpha 0.72. Before the sheen the worst case glass luminance is 0.28*0.25 + 0.72*0.024 = 0.087, but the sheen (+0.04 sRGB at the top) would lift it to ~0.11 (6.5:1 for white text). So the shader also clamps the finished glass colour, sheen included, to a linear luminance of 0.088: white text = 1.05/0.138 = 7.6:1, text.secondary (70% of a ~0.84 luminance colour, ~0.61 over the glass) = 4.8:1, so secondary text is used only at >= 15 pt. Over dark backdrops the clamp does nothing and the sheen shows in full.
 - No Light/Thin weights; Regular (400) or heavier.
 
 ## 2. Hand targets (HoloKit pinch-ray)

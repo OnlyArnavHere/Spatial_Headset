@@ -1,6 +1,8 @@
 // Glass window body (Doc/ui-design.md section 3): rounded-rect SDF, tint over the (blurred) backdrop, vertical sheen,
 // rim and soft shadow. The body quad draws the glass; a larger quad behind it (_ShadowOnly = 1) draws the shadow.
-// Lengths are metres in the quad's own plane. No blur yet: while _SpatialBlurOn is 0 the flat _Fallback colour is used.
+// Lengths are metres in the quad's own plane. The backdrop is the shared blur of the mono passthrough feed (BackdropBlur),
+// sampled at the feed UV of the fragment's world position (_SpatialBackdropVP), so both eyes read the same spot. While
+// _SpatialBlurOn is 0 (no feed, or Glass blur off) the flat _Fallback colour is used; _Solid always uses it.
 Shader "SpatialLauncher/SpatialGlass"
 {
     Properties
@@ -66,10 +68,12 @@ Shader "SpatialLauncher/SpatialGlass"
     TEXTURE2D(_MainTex);
     SAMPLER(sampler_MainTex);
 
-    // Set by the blur pass (later); until then _SpatialBlurOn stays 0.
+    // Set by BackdropBlur each frame: the blurred feed, its on/off flag and the world to feed-UV matrix
+    // (AR camera view-projection, then the feed's display mapping; xy / w is the feed UV).
     TEXTURE2D(_SpatialBackdrop);
     SAMPLER(sampler_SpatialBackdrop);
     float _SpatialBlurOn;
+    float4x4 _SpatialBackdropVP;
 
     struct Attributes
     {
@@ -81,6 +85,7 @@ Shader "SpatialLauncher/SpatialGlass"
     {
         float4 positionCS : SV_POSITION;
         float2 uv : TEXCOORD0;
+        float3 backdrop : TEXCOORD1;   // x, y, w of the world position in feed space (divided per fragment)
     };
 
     Varyings Vert(Attributes input)
@@ -88,6 +93,8 @@ Shader "SpatialLauncher/SpatialGlass"
         Varyings output;
         output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
         output.uv = input.uv;
+        float4 feed = mul(_SpatialBackdropVP, float4(TransformObjectToWorld(input.positionOS.xyz), 1.0));
+        output.backdrop = float3(feed.x, feed.y, feed.w);
         return output;
     }
 
@@ -98,10 +105,10 @@ Shader "SpatialLauncher/SpatialGlass"
     }
 
     // Scales a linear colour down so its luminance is at most 0.25 (the backdrop clamp that keeps text readable).
-    half3 ClampLuminance(half3 c)
+    half3 ClampLuminance(half3 c, half maxLuminance)
     {
         half l = dot(c, half3(0.2126, 0.7152, 0.0722));
-        return l > 0.25 ? c * (0.25 / l) : c;
+        return l > maxLuminance ? c * (maxLuminance / l) : c;
     }
 
     // The state overlay over a colour, then the focus ring band (inside the edge: _FocusBand.x from it, .y wide).
@@ -163,8 +170,8 @@ Shader "SpatialLauncher/SpatialGlass"
         {
             if (_SpatialBlurOn > 0.5)
             {
-                float2 screenUv = input.positionCS.xy / _ScaledScreenParams.xy;
-                half3 backdrop = ClampLuminance(SAMPLE_TEXTURE2D(_SpatialBackdrop, sampler_SpatialBackdrop, screenUv).rgb);
+                float2 feedUv = saturate(input.backdrop.xy / max(input.backdrop.z, 1e-4));
+                half3 backdrop = ClampLuminance(SAMPLE_TEXTURE2D(_SpatialBackdrop, sampler_SpatialBackdrop, feedUv).rgb, 0.25);
                 rgb = lerp(backdrop, _Tint.rgb, _Tint.a);
                 alpha = 1;
             }
@@ -179,6 +186,9 @@ Shader "SpatialLauncher/SpatialGlass"
             #else
             rgb += 0.04 * t;
             #endif
+            // The contrast budget (Doc/ui-design.md section 1) covers the sheen too: over a bright backdrop the finished glass
+            // is held to 0.088 linear luminance, so white text keeps 7.6:1 and secondary text 4.8:1 at the window top.
+            if (_SpatialBlurOn > 0.5) rgb = ClampLuminance(rgb, 0.088);
         }
 
         // Rim: a band just inside the edge, brighter at the top.

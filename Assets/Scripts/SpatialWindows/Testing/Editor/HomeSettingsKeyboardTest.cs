@@ -200,7 +200,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 Check(MaterialOf(panel).color.a == 0f && SettingsContent.PanelColor.a == 0f && VirtualKeyboardContent.PanelColor.a == 0f,
                     "the settings and keyboard inner panels are transparent, not opaque");
 
-                bool tabsOk = settings.Tabs.Count == 8;
+                bool tabsOk = settings.Tabs.Count == 9;
                 for (int i = 0; i < settings.Tabs.Count; i++)
                 {
                     var size = HitSize(settings.Tabs[i]);

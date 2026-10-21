@@ -20,6 +20,7 @@ namespace SpatialLauncher.SpatialWindows
         public WindowSettings windows = new WindowSettings();
         public ImmersionSettings immersion = new ImmersionSettings();
         public VoiceSettings voice = new VoiceSettings();
+        public PerformanceSettings performance = new PerformanceSettings();
 
         public SpatialSettings Clone() => JsonUtility.FromJson<SpatialSettings>(JsonUtility.ToJson(this));
     }
@@ -132,6 +133,16 @@ namespace SpatialLauncher.SpatialWindows
         public float level;
         /// <summary>Start in the saved environment at the saved level; otherwise start in passthrough.</summary>
         public bool resumeOnStart;
+    }
+
+    [Serializable]
+    public class PerformanceSettings
+    {
+        /// <summary>
+        /// Windows' glass blurs the passthrough behind it (one shared pass per frame, <see cref="BackdropBlur"/>). Off: flat
+        /// glass.fallback colour, saves the pass's GPU time and a little heat.
+        /// </summary>
+        public bool glassBlur = true;
     }
 
     [Serializable]

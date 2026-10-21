@@ -41,6 +41,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             CheckBuildScenes();
             CheckScene();
             CheckSceneAssets();
+            CheckBlurMaterial();
             CheckTextures();
             Debug.Log($"[DeviceCheck] Done: {passed} passed, {warnings} warnings, {failures} failures -> " +
                       (failures == 0 ? "OK to build" : "fix the failures before building"));
@@ -351,6 +352,15 @@ namespace SpatialLauncher.SpatialWindows.Editor
             {
                 if (openedHere) EditorSceneManager.CloseScene(scene, true);
             }
+        }
+
+        // The backdrop blur loads its material from Resources (BackdropBlurPass.MaterialPath), which keeps the shader in the build.
+        static void CheckBlurMaterial()
+        {
+            var material = Resources.Load<Material>(BackdropBlurPass.MaterialPath);
+            var shader = material != null ? material.shader : null;
+            Expect(shader != null && shader.name == "SpatialLauncher/KawaseBlur" && !ShaderUtil.ShaderHasError(shader),
+                $"Resources/{BackdropBlurPass.MaterialPath} uses the KawaseBlur shader ({(shader != null ? shader.name : "material missing")}), so the glass blur ships");
         }
 
         static void CheckSceneAssets()

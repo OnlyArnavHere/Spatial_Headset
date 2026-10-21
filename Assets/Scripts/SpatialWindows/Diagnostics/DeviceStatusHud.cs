@@ -23,6 +23,8 @@ namespace SpatialLauncher.SpatialWindows
         public string Input;
         public bool HandInputActive;
         public string Passthrough;
+        /// <summary>The glass blur line: "on 0.12 ms gpu", "off (setting)"...</summary>
+        public string Blur;
         public int Frame;
         public float Fps;
         /// <summary>Vision results per second, measured.</summary>
@@ -166,6 +168,7 @@ namespace SpatialLauncher.SpatialWindows
                     ? $" ({ARSession.notTrackingReason})" : ""),
                 Input = manager != null ? manager.ActiveInputName : "none",
                 Passthrough = passthrough != null ? passthrough.Status : "not in scene",
+                Blur = BlurLine(),
                 Frame = Time.frameCount,
                 Fps = fps,
                 VisionHz = visionHz,
@@ -221,6 +224,7 @@ namespace SpatialLauncher.SpatialWindows
                             $"right {Hand(s.RightTracked, s.RightOnWindow, s.RightPaused)}");
             text.AppendLine($"Input: {s.Input}{(s.HandInputActive ? "" : " (hand input off)")}");
             text.AppendLine($"Passthrough: {s.Passthrough}");
+            if (s.Blur != null) text.AppendLine($"Blur: {s.Blur}");
             // The zoom, what the image spans now, and what one eye (or the screen) shows: below "fits at", all of the
             // camera image is in view.
             text.Append($"Zoom: {DisplaySettings.ZoomLabel(s.Zoom)}   image {Degrees(s.ImageFov)}   " +
@@ -238,6 +242,14 @@ namespace SpatialLauncher.SpatialWindows
                     text.Append(i % 3 == 0 ? "\n  " : ",  ").Append(s.CameraFormats[i]);
             }
             return text.ToString();
+        }
+
+        // "on 0.12 ms gpu" (cpu where the device reports no GPU time for the pass), or "off (why)".
+        static string BlurLine()
+        {
+            var blur = BackdropBlur.Current;
+            if (blur == null) return "off (not in scene)";
+            return blur.On ? $"on {blur.Ms:0.00} ms {(blur.MsIsGpu ? "gpu" : "cpu")}" : blur.Status;
         }
 
         static string Degrees(Vector2? fov) => fov is Vector2 f && f.x > 0f && f.y > 0f ? $"{f.x:0.0}° x {f.y:0.0}°" : "-";
