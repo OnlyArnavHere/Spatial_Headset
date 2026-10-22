@@ -131,7 +131,15 @@ while a request is in flight wins over it.
   shell's icon list. Launching opens the Start Menu or taskbar shortcut itself (`os.startfile`, after checking it is
   still in those folders) or a Store app through `explorer.exe shell:AppsFolder\<AUMID>`. Close sends the window a
   normal close request, so the app can still ask to save.
-- **macOS:** see stage 2 (not yet). **Linux:** every shell request is answered "unsupported".
+- **macOS:** running apps are the Dock's: Finder and the pinned apps first in Dock order (from
+  `~/Library/Preferences/com.apple.dock.plist`), then the other running apps in launch order. A pin stored under a
+  temporary App Translocation folder (an app first opened from a quarantined download) is found again by its bundle
+  identifier, or else by its name in the Applications folders. Installed apps are the
+  `.app` bundles in `/Applications`, `~/Applications` and `/System/Applications` (and one level of subfolders, such as
+  Utilities). A window counts as minimized when it isn't on screen, which includes windows on another Space. Icons are
+  the apps' own, drawn at 48 px. Launching runs `/usr/bin/open` on a bundle re-checked against a fresh listing; window
+  actions use Accessibility (minimize, restore, raise, the close button), which `--input` already needs.
+- **Linux:** every shell request is answered "unsupported".
 - File search is not offered.
 
 ### Measuring delay
@@ -279,6 +287,7 @@ Read these before using `--input` or `--keyboard`.
 | `dispatch.py` | The input dispatcher: per-window input channels, the control state machine, cast-only rules, rate limits (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `shell.py` | The laptop shell protocol: running/pinned/installed apps, icons, launch, window actions, search; the control gate, id checks and rate limits (protocol at the top of the file) |
+| `hostos/shell_macos.py`, `hostos/_shell_macos_pure.py` | The macOS shell backend (pyobjc) and its OS-free parts (Dock pins, app bundles, window filter) |
 | `hostos/shell_windows.py`, `hostos/_shell_windows_pure.py`, `hostos/_lnk.py`, `hostos/_png.py`, `hostos/_shell_types.py` | The Windows shell backend (ctypes), its OS-free parts, the shortcut parser, the PNG encoder and the shared shell types |
 | `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
 | `hostos/__init__.py`, `hostos/types.py` | Picks the backend by `sys.platform` and re-exports its names; the shared data types (`Rect`, `Monitor`, `Window`) and the list of names every backend must expose |
@@ -303,7 +312,7 @@ Read these before using `--input` or `--keyboard`.
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
 | `selftest_wired.py` | Checks wired-mode detection and the firewall logic with made-up adapters and rules: `python selftest_wired.py --no-live` |
 | `test_dispatch.py` | Unit tests for the input dispatcher (no network, no real input): routing per window, the control states, cast-only, rate limits, malformed input, releasing held input: `python -m unittest test_dispatch` |
-| `test_shell.py`, `test_shell_windows.py` | Unit tests for the laptop shell with a fake backend (every request, the control gate, invalid ids, rate limits, reply sizes, session wiring) and for the Windows backend (shortcut parser, PNG, Start Menu rules, pin order, Store app ids; a read-only live listing on Windows): `python -m unittest test_shell test_shell_windows` |
+| `test_shell.py`, `test_shell_windows.py`, `test_shell_macos.py` | Unit tests for the laptop shell with a fake backend (every request, the control gate, invalid ids, rate limits, reply sizes, session wiring), for the Windows backend (shortcut parser, PNG, Start Menu rules, pin order, Store app ids) and the macOS backend (Dock pins, bundles, window filter); each has a read-only live listing on its own OS: `python -m unittest test_shell test_shell_windows test_shell_macos` |
 | `test_hostos.py`, `test_macos.py`, `test_macos_input.py`, `test_macos_secrets.py`, `test_linux.py`, `test_reaper.py` | Unit tests for the OS layer: every backend exposes the same names, macOS (screens, input, Keychain wrap), Linux (pure parts, key file, rows, dialog commands) and the child watcher: `python -m unittest test_hostos test_macos test_macos_input test_macos_secrets test_linux test_reaper` |
 | `_test_keychain.py` | Not a test: imported first by the test files that create identities, it points the macOS Keychain wrap key at a throwaway entry |
 | `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
