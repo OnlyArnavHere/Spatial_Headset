@@ -1,6 +1,6 @@
 cryptography==46.0.5  # Apache-2.0 OR BSD-3-Clause
 aiortc==1.15.0  # BSD-3-Clause
-av==17.1.0  # BSD-3-Clause (its wheels bundle LGPL FFmpeg libraries)
+av==17.1.0  # BSD-3-Clause (the PyPI wheels bundle FFmpeg libraries including GPL x264/x265; see THIRD_PARTY_NOTICES.md)
 zeroconf==0.151.5  # LGPL-2.1-or-later
 aioice==0.10.2  # BSD-3-Clause (aiortc)
 google-crc32c==1.9.0  # Apache-2.0 (aiortc)
