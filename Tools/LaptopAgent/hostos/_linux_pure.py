@@ -241,6 +241,8 @@ def zenity_argv(text: str, caption: str, timeout_s: int) -> list[str]:
 
 
 def tk_argv(script: str, text: str, caption: str, timeout_s: int) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--_linux_dialog", text, caption, str(timeout_s)]
     return [sys.executable, "-I", script, text, caption, str(timeout_s)]
 
 

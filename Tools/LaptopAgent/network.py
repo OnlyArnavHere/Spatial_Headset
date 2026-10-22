@@ -10,6 +10,7 @@ selftest_wired.py checks them without a phone.
 """
 import ipaddress
 import json
+import paths
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -164,7 +165,7 @@ $fw = Get-NetFirewallProfile -PolicyStore ActiveStore -Name $profile
 
 def _powershell(script: str, timeout: float = 60.0) -> object:
     result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                            capture_output=True, text=True, timeout=timeout)
+                            **paths.no_window(dict(capture_output=True, text=True, timeout=timeout)))
     if result.returncode != 0 or not result.stdout.strip():
         raise OSError((result.stderr.strip().splitlines() or ["no output"])[-1])
     return json.loads(result.stdout)

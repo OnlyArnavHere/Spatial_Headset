@@ -8,6 +8,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+import paths
 import winapi as _w
 from ._ffmpeg import common_args
 
@@ -20,6 +21,11 @@ ENCODERS = [
     ("qsv", "h264_qsv", "nv12"),
     ("amf", "h264_amf", "nv12"),
     ("x264", "libx264", "yuv420p"),
+]
+# Tried after ENCODERS when none of them works (the LGPL ffmpeg build has no x264): Media Foundation, then OpenH264.
+FALLBACK_ENCODERS = [
+    ("mf", "h264_mf", "nv12"),
+    ("openh264", "libopenh264", "yuv420p"),
 ]
 
 
@@ -161,7 +167,7 @@ class ChildReaper:
 
     def spawn(self, command, **kwargs) -> subprocess.Popen:
         """Starts the child and puts it in the job right after (same timing as before)."""
-        process = subprocess.Popen(command, **kwargs)
+        process = subprocess.Popen(command, **paths.no_window(kwargs))
         self._job.add(process.pid)
         return process
 
@@ -187,4 +193,8 @@ def encoder_args(name: str, codec: str, fps: int, bitrate: int) -> list[str]:
     if name == "amf":
         return ["-c:v", codec, "-usage", "ultralowlatency", "-quality", "speed", "-rc", "cbr",
                 "-profile:v", "constrained_baseline"] + common
+    if name == "mf":
+        return ["-c:v", codec, "-rate_control", "cbr", "-scenario", "display_remoting"] + common
+    if name == "openh264":
+        return ["-c:v", codec, "-profile:v", "constrained_baseline", "-allow_skip_frames", "1"] + common
     return ["-c:v", codec, "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline"] + common

@@ -122,6 +122,8 @@ def capture_args(index: int, fps: int, width: int, height: int, pix_fmt: str,
 def encoder_args(name: str, codec: str, fps: int, bitrate: int) -> list[str]:
     if name == "videotoolbox":
         head = ["-c:v", codec, "-realtime", "1", "-prio_speed", "1", "-profile:v", "baseline"]
+    elif name == "openh264":
+        head = ["-c:v", codec, "-profile:v", "constrained_baseline", "-allow_skip_frames", "1"]
     else:
         head = ["-c:v", codec, "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline"]
     return head + common_args(fps, bitrate)
