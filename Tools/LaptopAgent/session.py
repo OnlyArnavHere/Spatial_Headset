@@ -512,7 +512,9 @@ class LinkRunner:
                  keyboard_enabled: bool = False, cast_only: bool = False, dry_run: bool = False,
                  approver: dispatch.Approver | None = None,
                  pinned: list[tuple[str, int]] | None = None, discover: bool = False,
-                 browse: Callable = discovery.browse, wired: Callable = discovery.wired_candidates):
+                 browse: Callable = discovery.browse, wired: Callable = discovery.wired_candidates,
+                 on_connect_failed: Callable[[str, int, bool], None] | None = None):
+        self.on_connect_failed = on_connect_failed  # (host, port, found_by_discovery) when a dial can't connect
         self.ident = ident
         self.store = store
         self.streams = streams
@@ -644,6 +646,11 @@ class LinkRunner:
                     log.debug("Headset %s:%d: %s", *key, reason)
                 last_failure = reason
                 failures += 1
+                if reason == "can't connect" and self.on_connect_failed is not None:  # handshake's reason text
+                    try:
+                        self.on_connect_failed(key[0], key[1], key in self._discovered)
+                    except Exception:
+                        log.debug("on_connect_failed callback failed", exc_info=True)
                 if drop_after and failures >= drop_after:
                     log.info("Headset %s:%d: giving up after %d failed attempts (it is re-added if Bonjour sees it again)",
                              *key, failures)
