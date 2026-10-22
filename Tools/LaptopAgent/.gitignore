@@ -2,3 +2,9 @@
 bin/
 .runtime/
 __pycache__/
+
+# Packaging output (packaging/build_win.ps1, build_mac.sh)
+build/
+dist/
+*.spec~
+THIRD_PARTY_LICENSES.txt

@@ -42,4 +42,4 @@ FUNCTIONS = (
     "open_prompt", "protect", "unprotect", "default_home", "capture_input_args", "encoder_args",
     "preflight", "check_key_file", "window_selector", "monitor_selector", "visible_rect",
 )
-CONSTANTS = ("KILL_SWITCH", "ENCODERS", "exe_suffix", "ChildReaper")
+CONSTANTS = ("KILL_SWITCH", "ENCODERS", "FALLBACK_ENCODERS", "exe_suffix", "ChildReaper")

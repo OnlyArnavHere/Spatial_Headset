@@ -1,0 +1,277 @@
+# UNTESTED: written without being able to run it. Expect to iterate on the first real run.
+#
+# Builds an LGPL-only FFmpeg and PyAV 17.1.0 wheels against it (win_amd64, macosx_arm64), plus a static macOS ffmpeg
+# CLI, and publishes them to a separate release. agent-release.yml installs the wheels instead of the PyPI av, whose
+# wheels bundle GPL x264/x265.
+#
+# FFmpeg 8.1.x is the line PyAV 17.1.0 was built against on PyPI (libavcodec 62.28; PyAV's docs say FFmpeg 8.0 or newer).
+name: agent-deps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "agent-deps-v*"
+
+permissions:
+  contents: read
+
+env:
+  FFMPEG_VERSION: "8.1.3"
+  # Computed from the downloaded ffmpeg.org tarball; cross-check it against the .asc signature when bumping.
+  FFMPEG_SHA256: "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3"
+  AV_VERSION: "17.1.0"
+  # sha256 of av-17.1.0.tar.gz on PyPI
+  AV_SDIST_SHA256: "7f1e71ff621b66253333926f948e00faae11d855b2442133c65128bca64cdeb3"
+  # What the libraries PyAV links need, and nothing else: open an RTSP stream, read H.264 packets, parse them.
+  # --enable-gpl and --enable-nonfree are never passed, and --disable-autodetect keeps libx264/libx265 and every other
+  # external library out. aiortc's own libx264/libopus/libvpx encoders are therefore absent; the agent only forwards
+  # H.264 packets (MediaPlayer(decode=False)) and never uses them.
+  FFMPEG_LIB_FLAGS: >-
+    --disable-everything --disable-doc --disable-debug --disable-programs --disable-autodetect
+    --disable-gpl --disable-nonfree --enable-shared --disable-static --enable-network
+    --enable-demuxer=rtsp,sdp,rtp --enable-protocol=rtp,tcp,udp,file
+    --enable-parser=h264 --enable-decoder=h264 --enable-bsf=h264_mp4toannexb
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    # Why MSYS2 + the MSVC toolchain: PyAV is built by setuptools with MSVC, so it needs MSVC import libraries
+    # (avcodec.lib) and the MSVC runtime. FFmpeg's configure supports --toolchain=msvc (it needs the MSYS2 shell for
+    # make/nasm/sh), which produces exactly that. A mingw-w64 build would need hand-made import libraries and mixes
+    # C runtimes. The MSYS2 "link.exe" must be moved aside or it shadows MSVC's linker.
+    steps:
+      - name: Guard (only run from an agent-deps-v* tag)
+        shell: bash
+        run: |
+          # Run this workflow from a tag ref (Run workflow > Use workflow from > Tags). It never creates a tag.
+          if [ "$GITHUB_REF_TYPE" != "tag" ] || [[ "$GITHUB_REF_NAME" != agent-deps-v* ]]; then
+            echo "Must run on a tag named agent-deps-v*, not $GITHUB_REF_TYPE '$GITHUB_REF_NAME'"; exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MSYS
+          path-type: inherit
+          update: false
+          install: make nasm diffutils curl xz
+      - name: Download and verify FFmpeg source
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c -
+          tar xJf ffmpeg.tar.xz
+      - name: Configure FFmpeg
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mv /usr/bin/link.exe /usr/bin/link.exe.bak || true
+          which -a link || true   # the first one listed must be MSVC's, not MSYS2's
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          # shellcheck disable=SC2086
+          ./configure --toolchain=msvc --arch=x86_64 --prefix=/c/ffmpeg-install ${FFMPEG_LIB_FLAGS} \
+            | tee ../configure-output.txt
+          echo "./configure --toolchain=msvc --arch=x86_64 --prefix=/c/ffmpeg-install ${FFMPEG_LIB_FLAGS}" > ../configure-line.txt
+      - name: Fail on GPL, nonfree or x264/x265
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          if grep -E -- "--enable-(gpl|nonfree|version3|libx264|libx265)" configure-line.txt; then echo "forbidden configure flag"; exit 1; fi
+          if grep -E "^#define CONFIG_(GPL|NONFREE|LIBX264|LIBX265) 1" "ffmpeg-${FFMPEG_VERSION}/config.h"; then echo "forbidden CONFIG_ in config.h"; exit 1; fi
+          grep -E "^#define CONFIG_(GPL|NONFREE) 0" "ffmpeg-${FFMPEG_VERSION}/config.h"
+      - name: Build and install FFmpeg
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          make -j"$(nproc)"
+          make install
+          # pkg-config for Windows needs Windows-style paths in the .pc files
+          sed -i 's|/c/ffmpeg-install|C:/ffmpeg-install|g' /c/ffmpeg-install/lib/pkgconfig/*.pc
+          grep -H "^prefix" /c/ffmpeg-install/lib/pkgconfig/libavcodec.pc
+      - name: Build the PyAV wheel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          choco install pkgconfiglite --version=0.28 --no-progress -y
+          python -m pip install --upgrade pip wheel delvewheel
+          "av==$env:AV_VERSION --hash=sha256:$env:AV_SDIST_SHA256" | Out-File -Encoding ascii av-req.txt
+          $env:PKG_CONFIG_PATH = "C:\ffmpeg-install\lib\pkgconfig"
+          pkg-config --modversion libavcodec
+          python -m pip wheel -r av-req.txt --no-binary av --no-deps --require-hashes -w wheelhouse
+          delvewheel repair --add-path C:\ffmpeg-install\bin -w out (Get-ChildItem wheelhouse\av-*.whl).FullName
+      - name: Smoke test in a fresh venv
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv smoke
+          smoke\Scripts\python -m pip install -r Tools/LaptopAgent/requirements.txt
+          smoke\Scripts\python -m pip install --no-deps --force-reinstall (Get-ChildItem out\av-*.whl).FullName
+          smoke\Scripts\python -c "import av, aiortc; print(av.__version__, av.codecs_available)"
+          smoke\Scripts\python -c "import av; assert 'libx264' not in av.codecs_available and 'libx265' not in av.codecs_available; assert 'h264' in av.codecs_available"
+          $listing = python -m zipfile -l (Get-ChildItem out\av-*.whl).FullName
+          if ($listing -match "x264|x265") { throw "x264/x265 found in wheel" }
+      - name: Collect files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item out\av-*.whl dist\
+          Copy-Item configure-line.txt dist\configure-line-win.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deps-win
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - name: Guard (only run from an agent-deps-v* tag)
+        shell: bash
+        run: |
+          # Run this workflow from a tag ref (Run workflow > Use workflow from > Tags). It never creates a tag.
+          if [ "$GITHUB_REF_TYPE" != "tag" ] || [[ "$GITHUB_REF_NAME" != agent-deps-v* ]]; then
+            echo "Must run on a tag named agent-deps-v*, not $GITHUB_REF_TYPE '$GITHUB_REF_NAME'"; exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Tools
+        run: |
+          brew install nasm pkg-config
+          python -m pip install --upgrade pip wheel delocate
+      - name: Download and verify FFmpeg source
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | shasum -a 256 -c -
+          tar xJf ffmpeg.tar.xz
+          cp -R "ffmpeg-${FFMPEG_VERSION}" ffmpeg-cli-src
+      - name: Configure FFmpeg libraries (for PyAV)
+        run: |
+          set -euo pipefail
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          # shellcheck disable=SC2086
+          ./configure --arch=arm64 --prefix="$HOME/ffmpeg-lib" ${FFMPEG_LIB_FLAGS}
+          echo "./configure --arch=arm64 --prefix=\$HOME/ffmpeg-lib ${FFMPEG_LIB_FLAGS}" > ../configure-line-libs.txt
+      - name: Configure the static ffmpeg CLI
+        run: |
+          set -euo pipefail
+          cd ffmpeg-cli-src
+          # The CLI adds what the agent's capture command uses: avfoundation capture, the VideoToolbox H.264 encoder,
+          # scale/format/crop/fps filters and the RTSP muxer. Static, so it is a single file for the first-run download.
+          CLI_FLAGS="--disable-everything --disable-doc --disable-debug --disable-autodetect --disable-gpl --disable-nonfree \
+            --disable-shared --enable-static --disable-ffplay --disable-ffprobe --enable-network \
+            --enable-avfoundation --enable-videotoolbox \
+            --enable-indev=avfoundation --enable-decoder=rawvideo --enable-encoder=h264_videotoolbox \
+            --enable-filter=scale,format,crop,fps,null,buffer,buffersink \
+            --enable-muxer=rtsp,rtp,null --enable-protocol=rtp,tcp,udp,file,pipe --enable-bsf=h264_mp4toannexb"
+          # shellcheck disable=SC2086
+          ./configure --arch=arm64 --prefix="$HOME/ffmpeg-cli" ${CLI_FLAGS}
+          echo "./configure --arch=arm64 --prefix=\$HOME/ffmpeg-cli ${CLI_FLAGS}" > ../configure-line-cli.txt
+      - name: Fail on GPL, nonfree or x264/x265
+        run: |
+          set -euo pipefail
+          for f in configure-line-libs.txt configure-line-cli.txt; do
+            if grep -E -- "--enable-(gpl|nonfree|version3|libx264|libx265)" "$f"; then echo "forbidden flag in $f"; exit 1; fi
+          done
+          for d in "ffmpeg-${FFMPEG_VERSION}" ffmpeg-cli-src; do
+            if grep -E "^#define CONFIG_(GPL|NONFREE|LIBX264|LIBX265) 1" "$d/config.h"; then echo "forbidden CONFIG_ in $d"; exit 1; fi
+            grep -E "^#define CONFIG_(GPL|NONFREE) 0" "$d/config.h"
+          done
+      - name: Build and install both
+        run: |
+          set -euo pipefail
+          (cd "ffmpeg-${FFMPEG_VERSION}" && make -j"$(sysctl -n hw.ncpu)" && make install)
+          (cd ffmpeg-cli-src && make -j"$(sysctl -n hw.ncpu)" && make install)
+      - name: Check the CLI build
+        run: |
+          set -euo pipefail
+          "$HOME/ffmpeg-cli/bin/ffmpeg" -hide_banner -buildconf | tee buildconf.txt
+          if grep -E -- "--enable-(gpl|nonfree|version3|libx264|libx265)|libx26[45]" buildconf.txt; then echo "forbidden in -buildconf"; exit 1; fi
+          "$HOME/ffmpeg-cli/bin/ffmpeg" -hide_banner -devices 2>&1 | grep avfoundation
+          "$HOME/ffmpeg-cli/bin/ffmpeg" -hide_banner -encoders 2>&1 | grep h264_videotoolbox
+          if "$HOME/ffmpeg-cli/bin/ffmpeg" -hide_banner -encoders 2>&1 | grep -E "libx26[45]"; then echo "x264/x265 present"; exit 1; fi
+      - name: Build the PyAV wheel
+        run: |
+          set -euo pipefail
+          echo "av==${AV_VERSION} --hash=sha256:${AV_SDIST_SHA256}" > av-req.txt
+          export PKG_CONFIG_PATH="$HOME/ffmpeg-lib/lib/pkgconfig"
+          pkg-config --modversion libavcodec
+          python -m pip wheel -r av-req.txt --no-binary av --no-deps --require-hashes -w wheelhouse
+          delocate-wheel --require-archs arm64 -w out -v wheelhouse/av-*.whl
+      - name: Smoke test in a fresh venv
+        run: |
+          set -euo pipefail
+          python -m venv smoke
+          smoke/bin/python -m pip install -r Tools/LaptopAgent/requirements.txt
+          smoke/bin/python -m pip install --no-deps --force-reinstall out/av-*.whl
+          smoke/bin/python -c "import av, aiortc; print(av.__version__, av.codecs_available)"
+          smoke/bin/python -c "import av; assert 'libx264' not in av.codecs_available and 'libx265' not in av.codecs_available; assert 'h264' in av.codecs_available"
+          if unzip -l out/av-*.whl | grep -i -E "x264|x265"; then echo "x264/x265 found in wheel"; exit 1; fi
+      - name: Package the CLI
+        run: |
+          set -euo pipefail
+          mkdir -p dist stage
+          cp "$HOME/ffmpeg-cli/bin/ffmpeg" stage/ffmpeg
+          cp ffmpeg-cli-src/COPYING.LGPLv2.1 stage/LICENSE.txt
+          tar -czf "dist/ffmpeg-${FFMPEG_VERSION}-macos-arm64-lgpl.tar.gz" -C stage ffmpeg LICENSE.txt
+          cp out/av-*.whl dist/
+          cat configure-line-libs.txt configure-line-cli.txt > dist/configure-line-mac.txt
+          cp buildconf.txt dist/ffmpeg-buildconf-mac.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deps-mac
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Guard (only run from an agent-deps-v* tag)
+        shell: bash
+        run: |
+          # Run this workflow from a tag ref (Run workflow > Use workflow from > Tags). It never creates a tag.
+          if [ "$GITHUB_REF_TYPE" != "tag" ] || [[ "$GITHUB_REF_NAME" != agent-deps-v* ]]; then
+            echo "Must run on a tag named agent-deps-v*, not $GITHUB_REF_TYPE '$GITHUB_REF_NAME'"; exit 1
+          fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Add the FFmpeg source, merge the configure lines, write SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd release
+          curl -fsSL -O "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg-${FFMPEG_VERSION}.tar.xz" | sha256sum -c -
+          cat configure-line-win.txt configure-line-mac.txt > configure-line.txt
+          rm configure-line-win.txt configure-line-mac.txt
+          sha256sum -- * | grep -v " SHA256SUMS$" > SHA256SUMS
+          ls -l; cat SHA256SUMS
+      - uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: false
+          fail_on_unmatched_files: true
+          body: "LGPL-only FFmpeg ${{ env.FFMPEG_VERSION }} and PyAV ${{ env.AV_VERSION }} wheels (win_amd64, macosx_arm64), a static macOS ffmpeg CLI, the FFmpeg source tarball, the configure lines and SHA256SUMS. Built without --enable-gpl, --enable-nonfree, x264 or x265. Dependency files for agent-release.yml and tools_fetch.py; not an app release."
+          files: |
+            release/*

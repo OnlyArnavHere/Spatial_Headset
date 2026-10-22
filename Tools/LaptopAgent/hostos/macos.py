@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+import paths
+
 from . import _macos_input as inp
 from . import _macos_pure as pure
 from . import _macos_secrets as secrets
@@ -30,6 +32,7 @@ ENCODERS = [
     ("videotoolbox", "h264_videotoolbox", "nv12"),
     ("x264", "libx264", "yuv420p"),
 ]
+FALLBACK_ENCODERS = [("openh264", "libopenh264", "yuv420p")]
 
 _REAPER = Path(__file__).with_name("_reaper.py")
 
@@ -389,7 +392,7 @@ class ChildReaper:
     exits, however it exits."""
 
     def __init__(self) -> None:
-        self._watcher = subprocess.Popen([sys.executable, "-I", str(_REAPER), str(os.getpid())],
+        self._watcher = subprocess.Popen(paths.helper_argv("reaper", _REAPER) + [str(os.getpid())],
                                          stdin=subprocess.PIPE, start_new_session=True)
         try:  # like CreateJobObject failing on Windows: no cleanup, no children
             code = self._watcher.wait(WATCHER_CHECK_S)

@@ -4,7 +4,7 @@ Spatial Launcher's own code is under the MIT License (see `LICENSE`). It depends
 file up to date when adding, removing or upgrading a dependency.
 
 **No GPL code is used in the Unity project.** GPL software (FFmpeg) is used only by the laptop agent in
-`Tools/LaptopAgent`, as a separate program that is downloaded on demand and never committed or built into the app.
+`Tools/LaptopAgent`, as a separate program that is downloaded on demand and never committed or built into the Unity headset app. One exception: the packaged laptop agent bundles PyAV, whose PyPI wheels contain FFmpeg libraries with GPL x264/x265 (see the laptop agent table below). Those builds are published as pre-releases until the LGPL-only PyAV from the `agent-deps` workflow is installed.
 
 ## Unity project (`Packages/manifest.json`)
 
@@ -52,7 +52,14 @@ From the package's `Third Party Notices.md` (full texts there, in `Library/Packa
 |---|---|---|---|
 | MediaMTX | v1.21.2 | MIT | Downloaded by `setup.py` into `bin/` (git-ignored); run as a separate program |
 | FFmpeg, essentials build by gyan.dev | 9.0.2 | GPLv3 (includes x264 and other GPL components) | Downloaded by `setup.py` into `bin/` (git-ignored); run as a separate program, not linked |
+| FFmpeg LGPL builds: Windows by BtbN (9.0.2); macOS the static LGPL 8.1.3 from the `agent-deps` release | 9.0.2 / 8.1.3 | LGPL-2.1-or-later (no x264) | Downloaded on first run by the packaged app, SHA-256 verified, into `%LOCALAPPDATA%\SpatialLauncher\agent\bin` (macOS: `~/Library/Application Support/SpatialLauncher/agent/bin`); run as a separate program, not bundled. On macOS this applies once the `agent-deps` ffmpeg SHA-256 is filled in `tools_fetch.py`; until then the system `ffmpeg` on PATH is used |
+| MediaMTX (packaged app) | v1.21.2 | MIT | Downloaded on first run into the same `bin` folder; not bundled |
+| PyAV (`av`) | 17.1.0 | BSD-3-Clause; its PyPI wheels bundle FFmpeg libraries including GPL x264/x265 | Bundled in packaged builds, so those builds are published as pre-releases until an LGPL-only build replaces it |
+| LGPL-only FFmpeg 8.1 and PyAV wheels (`agent-deps` workflow) | 8.1.3 / 17.1.0 | LGPL-2.1-or-later / BSD-3-Clause | Built from the FFmpeg source tarball with `--disable-everything` and without `--enable-gpl`/`--enable-nonfree`; published with the source, configure lines and SHA256SUMS. The workflow is untested, so packaged builds still use the PyPI wheels. delvewheel (MIT) and delocate (BSD-2-Clause) are build tools only |
+| PyInstaller | 6.22+ | GPL-2.0-or-later with a bootloader exception | Build tool. The exception allows its bootloader and runtime in the packaged app, which is not itself GPL |
 | Python standard library (incl. tkinter) | 3.10+ | PSF License | Runtime |
+
+Each GitHub release of the packaged agent includes `THIRD_PARTY_LICENSES-win.txt` / `THIRD_PARTY_LICENSES-mac.txt`, generated from the bundled Python packages' licence files (it also lists the native components).
 
 `setup.py` pins each download to a version and SHA-256 checksum. If you redistribute the downloaded `bin/` folder,
 include `bin/LICENSE-ffmpeg.txt` and a pointer to FFmpeg's source, as the GPL requires.

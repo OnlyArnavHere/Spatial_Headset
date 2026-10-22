@@ -20,5 +20,5 @@ def fill(namespace: dict, message: str) -> None:
         namespace[name] = make(name)
     namespace["preflight"] = lambda: []
     namespace["check_key_file"] = lambda path: None
-    namespace.update(KILL_SWITCH="", ENCODERS=[], exe_suffix="", ChildReaper=ChildReaper)
+    namespace.update(KILL_SWITCH="", ENCODERS=[], FALLBACK_ENCODERS=[], exe_suffix="", ChildReaper=ChildReaper)
     assert set(CONSTANTS) <= set(namespace)

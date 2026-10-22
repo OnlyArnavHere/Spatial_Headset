@@ -17,6 +17,8 @@ import threading
 import time
 from pathlib import Path
 
+import paths
+
 from . import _linux_pure as pure
 from . import _xlib
 from ._macos_pure import group_kwargs
@@ -27,6 +29,7 @@ log = logging.getLogger("hostos")
 KILL_SWITCH = "Ctrl+Alt+Shift+Q"
 exe_suffix = ""
 ENCODERS = [("x264", "libx264", "yuv420p")]
+FALLBACK_ENCODERS: list = []
 _REAPER = Path(__file__).with_name("_reaper.py")
 _DIALOG = Path(__file__).with_name("_linux_dialog.py")
 FOCUS_WAIT_S = 0.2
@@ -430,7 +433,7 @@ class ChildReaper:
     however it exits."""
 
     def __init__(self) -> None:
-        self._watcher = subprocess.Popen([sys.executable, "-I", str(_REAPER), str(os.getpid())],
+        self._watcher = subprocess.Popen(paths.helper_argv("reaper", _REAPER) + [str(os.getpid())],
                                          stdin=subprocess.PIPE, start_new_session=True)
         try:
             code = self._watcher.wait(0.2)
