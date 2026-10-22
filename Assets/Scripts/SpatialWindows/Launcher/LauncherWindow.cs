@@ -98,6 +98,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<GestureRecognizers>(out _)) gameObject.AddComponent<GestureRecognizers>();
             if (!TryGetComponent<GestureDebugOverlay>(out _)) gameObject.AddComponent<GestureDebugOverlay>();
             if (!TryGetComponent<VoiceTyping>(out _)) gameObject.AddComponent<VoiceTyping>();
+            if (!TryGetComponent<HoloKitCameraFix>(out _)) gameObject.AddComponent<HoloKitCameraFix>();
             if (!TryGetComponent<StereoPassthrough>(out _)) gameObject.AddComponent<StereoPassthrough>();
             if (!TryGetComponent<BackdropBlur>(out _)) gameObject.AddComponent<BackdropBlur>();
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();

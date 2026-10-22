@@ -143,6 +143,11 @@ namespace SpatialLauncher.SpatialWindows
         /// glass.fallback colour, saves the pass's GPU time and a little heat.
         /// </summary>
         public bool glassBlur = true;
+        /// <summary>
+        /// Keep HoloKit's iOS 27 camera compatibility component (<see cref="HoloKitCameraFix"/>). Off removes it, to tell
+        /// whether it is what breaks the camera background on a device.
+        /// </summary>
+        public bool holoKitCameraFix = true;
     }
 
     [Serializable]

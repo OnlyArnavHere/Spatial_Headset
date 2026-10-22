@@ -109,10 +109,18 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             File.WriteAllText(old, "{\"version\":1}");
             Check(SettingsStore.Load(old).performance.glassBlur, "an older settings file without the setting keeps blur on");
             Check(Array.IndexOf(SettingsContent.SectionNames, "Performance") >= 0, "Settings has a Performance section");
+            Check(SettingsStore.Load(old).performance.holoKitCameraFix, "an older settings file keeps the HoloKit camera fix on");
+            Check(HoloKitCameraFix.Decide(false, true, true, true) == "remove", "setting off removes the HoloKit camera fix");
+            Check(HoloKitCameraFix.Decide(true, false, true, true) == "add", "setting on adds it back on iOS 27");
+            Check(HoloKitCameraFix.Decide(true, false, true, false) == null && HoloKitCameraFix.Decide(false, true, false, true) == null,
+                "nothing to do off iOS 27 or without the SDK type");
         }
 
         static void CheckAssets()
         {
+            var feedDepth = new RenderTexture(16, 16, 24, RenderTextureFormat.ARGB32);
+            Check(feedDepth.depth == 24, "a render target for the ARKit background has a depth buffer");
+            UnityEngine.Object.DestroyImmediate(feedDepth);
             var material = Resources.Load<Material>(BackdropBlurPass.MaterialPath);
             Check(material != null && material.shader != null && material.shader.name == "SpatialLauncher/KawaseBlur",
                 "Resources/Materials/BackdropBlur uses the KawaseBlur shader (a Resources material keeps the shader in the build)");

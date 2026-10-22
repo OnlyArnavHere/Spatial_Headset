@@ -45,6 +45,8 @@ namespace SpatialLauncher.SpatialWindows
         readonly Material material;
         readonly RenderTexture full, half, quarter, result;
         RenderTexture mid;   // 480 x 360, only for a material source (the AR background), so its full-size image isn't point-sampled
+        Material pictureCopy; // private copy of the AR background material: the live one is never drawn with
+        CommandBuffer drawCommands;
         readonly CommandBuffer commands;
         readonly CustomSampler sampler;
         readonly Recorder recorder;
@@ -76,9 +78,9 @@ namespace SpatialLauncher.SpatialWindows
             recorder.enabled = true;
         }
 
-        static RenderTexture Target(string name, int width, int height)
+        static RenderTexture Target(string name, int width, int height, int depth = 0)
         {
-            var rt = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default)
+            var rt = new RenderTexture(width, height, depth, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default)
             {
                 name = name,
                 filterMode = FilterMode.Bilinear,
@@ -104,8 +106,17 @@ namespace SpatialLauncher.SpatialWindows
                 if (texture != null) Graphics.Blit(texture, full, material, 0);
                 else
                 {
-                    mid ??= Target("Backdrop Blur 480x360", Width * 2, Height * 2);
-                    Graphics.Blit(null, mid, picture);
+                    // The background shader writes depth, so the target has a depth buffer; a copy of the material, as the
+                    // live one belongs to ARCameraBackground (textures, keywords and display matrix are copied each frame).
+                    mid ??= Target("Backdrop Blur 480x360", Width * 2, Height * 2, 24);
+                    if (pictureCopy == null || pictureCopy.shader != picture.shader)
+                    {
+                        if (pictureCopy != null) Object.DestroyImmediate(pictureCopy);
+                        pictureCopy = new Material(picture) { name = "Backdrop Blur Picture (instance)", hideFlags = HideFlags.HideAndDontSave };
+                    }
+                    pictureCopy.CopyPropertiesFromMaterial(picture);
+                    drawCommands ??= new CommandBuffer { name = SamplerName + " Draw" };
+                    StereoPassthrough.DrawInto(drawCommands, mid, pictureCopy);
                     Graphics.Blit(mid, full, material, 0);
                 }
 
@@ -166,6 +177,8 @@ namespace SpatialLauncher.SpatialWindows
             SwitchOff();
             Shader.SetGlobalTexture(BackdropId, Texture2D.blackTexture);
             commands?.Release();
+            drawCommands?.Release();
+            if (pictureCopy != null) Object.DestroyImmediate(pictureCopy);
             if (recorder != null) recorder.enabled = false;
             DestroyTarget(full);
             DestroyTarget(half);

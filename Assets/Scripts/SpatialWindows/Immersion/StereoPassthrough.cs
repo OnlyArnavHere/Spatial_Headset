@@ -93,6 +93,7 @@ namespace SpatialLauncher.SpatialWindows
         Material feedMaterial, displayMaterial, backdropMaterial;
         GameObject plane, backdrop;
         Mesh mesh, backdropMesh;
+        CommandBuffer copyCommands;
         readonly Vector3[] corners = new Vector3[4];
 
         /// <summary>Shown when switched on, in Stereo, and not fully immersed (at zoom 1).</summary>
@@ -286,7 +287,8 @@ namespace SpatialLauncher.SpatialWindows
             if (feed == null || feed.width != width || feed.height != height)
             {
                 if (feed != null) Destroy(feed);
-                feed = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default)
+                // A depth buffer: ARKit's background shader writes SV_Depth, and with no depth attachment it draws nothing.
+                feed = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default)
                     { name = "Stereo Passthrough Feed" };
                 feed.Create();
                 if (displayMaterial != null) displayMaterial.mainTexture = feed;
@@ -299,7 +301,26 @@ namespace SpatialLauncher.SpatialWindows
             // The feed's textures, keywords and display matrix, then texcoords across the whole image.
             feedMaterial.CopyPropertiesFromMaterial(source);
             if (hasDisplay) feedMaterial.SetMatrix(DisplayTransformId, DisplayOver(display, viewport));
-            Graphics.Blit(null, feed, feedMaterial);
+            copyCommands ??= new CommandBuffer { name = "Stereo Passthrough Copy" };
+            DrawInto(copyCommands, feed, feedMaterial);
+        }
+
+        /// <summary>
+        /// Draws a full-screen pass of <paramref name="material"/> (AR Foundation's background) into
+        /// <paramref name="target"/>, which needs a depth buffer. AR Foundation's documented camera-image copy: a
+        /// CommandBuffer that sets the target, clears it and blits to the current target. The caller owns the buffer, so
+        /// nothing is allocated per call; the previous render target is restored.
+        /// </summary>
+        public static void DrawInto(CommandBuffer commands, RenderTexture target, Material material)
+        {
+            var color = Graphics.activeColorBuffer;
+            var depth = Graphics.activeDepthBuffer;
+            commands.Clear();
+            commands.SetRenderTarget(target.colorBuffer, target.depthBuffer);
+            commands.ClearRenderTarget(true, true, Color.black);
+            commands.Blit((Texture)null, BuiltinRenderTextureType.CurrentActive, material);
+            Graphics.ExecuteCommandBuffer(commands);
+            Graphics.SetRenderTarget(color, depth);
         }
 
         void UpdatePlane(Rect viewport)
@@ -394,6 +415,7 @@ namespace SpatialLauncher.SpatialWindows
             if (backdropMesh != null) Destroy(backdropMesh);
             if (feed != null) Destroy(feed);
             if (feedMaterial != null) Destroy(feedMaterial);
+            copyCommands?.Release();
             if (displayMaterial != null) Destroy(displayMaterial);
             if (backdropMaterial != null) Destroy(backdropMaterial);
         }

@@ -379,6 +379,8 @@ namespace SpatialLauncher.SpatialWindows
             Toggle("Glass blur", () => S.performance.glassBlur, v => SettingsStore.Update(x => x.performance.glassBlur = v));
             Value("Cost", BlurCost);
             Value("Note", () => "Blurs the passthrough behind window glass. Off uses flat dark glass and saves a little GPU and heat.");
+            Toggle("HoloKit iOS 27 camera fix", () => S.performance.holoKitCameraFix, v => SettingsStore.Update(x => x.performance.holoKitCameraFix = v));
+            Value("Camera fix", () => HoloKitCameraFix.State);
         }
 
         static string BlurCost()

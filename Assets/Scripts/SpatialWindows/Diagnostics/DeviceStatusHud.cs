@@ -25,6 +25,8 @@ namespace SpatialLauncher.SpatialWindows
         public string Passthrough;
         /// <summary>The glass blur line: "on 0.12 ms gpu", "off (setting)"...</summary>
         public string Blur;
+        /// <summary>The camera background diagnostics (a few lines, refreshed twice a second), or null.</summary>
+        public string CameraDiagnostics;
         public int Frame;
         public float Fps;
         /// <summary>Vision results per second, measured.</summary>
@@ -57,6 +59,9 @@ namespace SpatialLauncher.SpatialWindows
     public class DeviceStatusHud : MonoBehaviour
     {
         const float Refresh = 0.25f;
+        const float DiagnosticsRefresh = 0.5f;
+        static readonly int TextureYId = Shader.PropertyToID("_textureY");
+        static readonly int TextureCbCrId = Shader.PropertyToID("_textureCbCr");
 
         [SerializeField] bool showOnDevice = true;
         [SerializeField] bool showInEditor;
@@ -81,7 +86,9 @@ namespace SpatialLauncher.SpatialWindows
         List<string> cameraFormats;
         int visionRequestsAt;
         float visionTimeAt, visionHz;
-        float nextText, fps;
+        float nextText, fps, nextDiagnostics;
+        string diagnostics;
+        readonly StringBuilder diagnosticsBuilder = new StringBuilder();
         bool threeFingers;
         GUIStyle style;
         Texture2D backgroundTexture;
@@ -169,6 +176,7 @@ namespace SpatialLauncher.SpatialWindows
                 Input = manager != null ? manager.ActiveInputName : "none",
                 Passthrough = passthrough != null ? passthrough.Status : "not in scene",
                 Blur = BlurLine(),
+                CameraDiagnostics = Diagnostics(),
                 Frame = Time.frameCount,
                 Fps = fps,
                 VisionHz = visionHz,
@@ -225,6 +233,7 @@ namespace SpatialLauncher.SpatialWindows
             text.AppendLine($"Input: {s.Input}{(s.HandInputActive ? "" : " (hand input off)")}");
             text.AppendLine($"Passthrough: {s.Passthrough}");
             if (s.Blur != null) text.AppendLine($"Blur: {s.Blur}");
+            if (s.CameraDiagnostics != null) text.Append(s.CameraDiagnostics);
             // The zoom, what the image spans now, and what one eye (or the screen) shows: below "fits at", all of the
             // camera image is in view.
             text.Append($"Zoom: {DisplaySettings.ZoomLabel(s.Zoom)}   image {Degrees(s.ImageFov)}   " +
@@ -242,6 +251,51 @@ namespace SpatialLauncher.SpatialWindows
                     text.Append(i % 3 == 0 ? "\n  " : ",  ").Append(s.CameraFormats[i]);
             }
             return text.ToString();
+        }
+
+        // The camera background's state, to find out on a device why the feed isn't drawn: iOS version, HoloKit's iOS 27
+        // compatibility component, the background's material and mode, and the two ARKit textures. Rebuilt twice a second.
+        string Diagnostics()
+        {
+            if (diagnostics != null && Time.unscaledTime < nextDiagnostics) return diagnostics;
+            nextDiagnostics = Time.unscaledTime + DiagnosticsRefresh;
+            var b = diagnosticsBuilder;
+            b.Clear();
+#if UNITY_IOS && !UNITY_EDITOR
+            b.Append("iOS ").Append(UnityEngine.iOS.Device.systemVersion);
+#else
+            b.Append("not iOS");
+#endif
+            var compat = cameraManager != null ? HoloKitCameraFix.Get(cameraManager) : null;
+            b.Append("   ").Append(HoloKitCameraFix.TypeName).Append(": ");
+            if (compat == null) b.Append("absent");
+            else b.Append("present, ").Append(compat is Behaviour behaviour && behaviour.enabled ? "enabled" : "disabled");
+            b.Append("   fix setting: ").Append(SettingsStore.Current.performance.holoKitCameraFix ? "on" : "off").Append('\n');
+
+            var background = cameraManager != null ? cameraManager.GetComponent<ARCameraBackground>() : null;
+            if (background == null) b.Append("Background: none");
+            else
+            {
+                var material = background.material;
+                b.Append("Background: ").Append(background.enabled ? "enabled" : "disabled")
+                    .Append(", custom material ").Append(background.useCustomMaterial ? "on" : "off")
+                    .Append(", rendering ").Append(background.backgroundRenderingEnabled ? "on" : "off")
+                    .Append(", mode ").Append(background.currentRenderingMode)
+                    .Append("\nMaterial: ").Append(material != null ? material.name : "null");
+                AppendTexture(b, "\n_textureY", material, TextureYId);
+                AppendTexture(b, "   _textureCbCr", material, TextureCbCrId);
+            }
+            b.Append('\n');
+            diagnostics = b.ToString();
+            return diagnostics;
+        }
+
+        static void AppendTexture(StringBuilder b, string label, Material material, int id)
+        {
+            b.Append(label).Append(": ");
+            var texture = material != null && material.HasProperty(id) ? material.GetTexture(id) : null;
+            if (texture == null) b.Append("null");
+            else b.Append(texture.width).Append('x').Append(texture.height).Append(' ').Append(texture.graphicsFormat);
         }
 
         // "on 0.12 ms gpu" (cpu where the device reports no GPU time for the pass), or "off (why)".
