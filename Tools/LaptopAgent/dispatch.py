@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 import keys
-import winapi
+import hostos
 from streams import Stream, Target
 
 log = logging.getLogger("input")
@@ -225,10 +225,10 @@ class InputDispatcher:
             rect = slot.stream.target.rect() if slot.stream else None
             x, y = (rect.left + rect.width // 2, rect.top + rect.height // 2) if rect else (0, 0)
             for button in list(slot.held):
-                self._inject(lambda b=button: winapi.mouse_button(x, y, b, False), f"{button} up (release)")
+                self._inject(lambda b=button: hostos.mouse_button(x, y, b, False), f"{button} up (release)")
             slot.held.clear()
         for press in list(slot.held_keys.values()):
-            self._inject(lambda p=press: winapi.key(p.vk, False, p.extended), f"key {press.code} up (release)")
+            self._inject(lambda p=press: hostos.key(p.vk, False, p.extended), f"key {press.code} up (release)")
         slot.held_keys.clear()
 
     # --- Input ---------------------------------------------------------------------------------------------------
@@ -320,21 +320,21 @@ class InputDispatcher:
             delta = max(-10.0, min(10.0, delta))
         path = slot.stream.path
         if kind == "move":
-            self._inject(lambda: winapi.mouse_move(x, y), None)
+            self._inject(lambda: hostos.mouse_move(x, y), None)
         elif kind == "down":
             if not self._reachable(target, x, y):
                 return
-            if self._inject(lambda: winapi.mouse_button(x, y, button, True), f"{button} down at ({x}, {y}) in /{path}"):
+            if self._inject(lambda: hostos.mouse_button(x, y, button, True), f"{button} down at ({x}, {y}) in /{path}"):
                 slot.held.add(button)
         elif kind == "up":
             if button not in slot.held:
                 return  # its press was dropped
-            self._inject(lambda: winapi.mouse_button(x, y, button, False), f"{button} up at ({x}, {y}) in /{path}")
+            self._inject(lambda: hostos.mouse_button(x, y, button, False), f"{button} up at ({x}, {y}) in /{path}")
             slot.held.discard(button)
         elif kind == "scroll":
             if not self._reachable(target, x, y):
                 return
-            self._inject(lambda: winapi.mouse_wheel(x, y, delta), f"scroll {delta:+g} at ({x}, {y}) in /{path}")
+            self._inject(lambda: hostos.mouse_wheel(x, y, delta), f"scroll {delta:+g} at ({x}, {y}) in /{path}")
         if self.dry_run and kind != "move":
             self.send_input(slot.index, {"type": "ack", "event": kind, "x": x, "y": y, "button": button, "path": path})
 
@@ -355,8 +355,8 @@ class InputDispatcher:
             return
 
         def press() -> None:
-            winapi.key(action.vk, True, action.extended)
-            winapi.key(action.vk, False, action.extended)
+            hostos.key(action.vk, True, action.extended)
+            hostos.key(action.vk, False, action.extended)
 
         if self._inject(press, f"media {action.action} for /{slot.stream.path}"):
             self._ack(slot, {"event": "media", "action": action.action})
@@ -375,14 +375,14 @@ class InputDispatcher:
                 # A release always goes through (never rate-limited), but only for a key this channel pressed.
                 press = slot.held_keys.pop(event.code, None)
                 if press is not None:
-                    self._inject(lambda: winapi.key(press.vk, False, press.extended), f"key {event.code} up in /{path}")
+                    self._inject(lambda: hostos.key(press.vk, False, press.extended), f"key {event.code} up in /{path}")
                     self._ack(slot, {"event": "key", "code": event.code, "down": False})
                 return
             if event.code in slot.held_keys or len(slot.held_keys) >= keys.MAX_HELD_KEYS:
                 return
             if not self._within_rate(slot, 1) or not self._focus(target):
                 return
-            if self._inject(lambda: winapi.key(event.vk, True, event.extended), f"key {event.code} down in /{path}"):
+            if self._inject(lambda: hostos.key(event.vk, True, event.extended), f"key {event.code} down in /{path}"):
                 slot.held_keys[event.code] = event
                 self._ack(slot, {"event": "key", "code": event.code, "down": True})
             return
@@ -390,7 +390,7 @@ class InputDispatcher:
         text = keys.parse_text(message)
         if text is None or not self._within_rate(slot, len(text)) or not self._focus(target):
             return
-        if self._inject(lambda: winapi.type_text(text), f"text, {len(text)} character(s), in /{path}"):
+        if self._inject(lambda: hostos.type_text(text), f"text, {len(text)} character(s), in /{path}"):
             self._ack(slot, {"event": "text", "text": text})
 
     def _focus(self, target: Target) -> bool:
@@ -398,7 +398,7 @@ class InputDispatcher:
         (Dry runs change nothing on screen.)"""
         if not target.usable():
             return False  # window closed or minimized: drop the key rather than type into whatever is in front
-        if self.dry_run or target.kind != "window" or winapi.focus_window(target.handle):
+        if self.dry_run or target.kind != "window" or hostos.focus_window(target.handle):
             return True
         log.warning("Dropped a key: couldn't bring %s to the front", target.description)
         return False
@@ -408,8 +408,8 @@ class InputDispatcher:
         so a click meant for one window never lands on another. (Dry runs change nothing on screen.)"""
         if self.dry_run or target.kind != "window":
             return True
-        winapi.raise_window(target.handle)
-        if winapi.window_at(x, y) == target.handle:
+        hostos.raise_window(target.handle)
+        if hostos.window_at(x, y) == target.handle:
             return True
         log.warning("Dropped a click at (%d, %d): %s is covered there", x, y, target.description)
         return False
@@ -419,7 +419,13 @@ class InputDispatcher:
         if not target.usable():
             return None  # window closed or minimized: drop input rather than click whatever is behind it
         rect = target.rect()
-        if rect is None or rect.width <= 0 or rect.height <= 0:
+        if rect is None:
+            return None
+        try:
+            rect = hostos.visible_rect(rect)  # macOS streams only the part of the window that is on its display
+        except LookupError:
+            return None
+        if rect.width <= 0 or rect.height <= 0:
             return None
         try:
             nx, ny = float(message["x"]), float(message["y"])

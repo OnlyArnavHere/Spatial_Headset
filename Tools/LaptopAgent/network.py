@@ -11,6 +11,7 @@ selftest_wired.py checks them without a phone.
 import ipaddress
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 
 HOTSPOT_NETWORK = ipaddress.ip_network("172.20.10.0/28")
@@ -169,7 +170,36 @@ def _powershell(script: str, timeout: float = 60.0) -> object:
     return json.loads(result.stdout)
 
 
-def list_interfaces() -> list[Interface]:
+def iphone_usb_devices(hardware_ports: str) -> set[str]:
+    """The device names (en5, ...) that `networksetup -listallhardwareports` reports as "iPhone USB"."""
+    devices, port = set(), ""
+    for line in hardware_ports.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Hardware Port":
+            port = value.strip()
+        elif key.strip() == "Device" and port.lower() == "iphone usb" and value.strip():
+            devices.add(value.strip())
+    return devices
+
+
+def _list_interfaces_ifaddr() -> list[Interface]:
+    """Non-Windows: every IPv4 address with its adapter's name (there is no firewall profile to report). On macOS the
+    iPhone's USB adapter is called "iPhone USB" in the description, which is what the USB hints look for."""
+    import ifaddr
+    usb: set[str] = set()
+    if sys.platform == "darwin":
+        try:
+            usb = iphone_usb_devices(subprocess.run(["networksetup", "-listallhardwareports"], capture_output=True,
+                                                    text=True, timeout=10).stdout)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return [Interface(adapter.nice_name or adapter.name, ip.ip, "iPhone USB" if adapter.name in usb else adapter.name, "")
+            for adapter in ifaddr.get_adapters() for ip in adapter.ips if ip.is_IPv4]
+
+
+def list_interfaces(platform: str | None = None) -> list[Interface]:
+    if (platform or sys.platform) != "win32":
+        return _list_interfaces_ifaddr()
     data = _powershell(_INTERFACES)
     if isinstance(data, dict):
         data = [data]
@@ -195,6 +225,7 @@ class WiredReport:
     commands: list = None
     error: str = ""
     complete: bool = True
+    firewall_checked: bool = True  # False on OSes where the agent doesn't look at a firewall
 
     def lines(self) -> list[str]:
         if self.interface is None:
@@ -202,6 +233,9 @@ class WiredReport:
                     "                   headset iPhone, plug it into this laptop by USB and trust the computer. See Doc/wired.md."]
         i = self.interface
         kind = "USB" if i.usb else "hotspot (not USB: Wi-Fi?)"
+        if not self.firewall_checked:
+            return [f"Wired (USB):       host {i.address}   on {i.alias!r} ({kind})",
+                    "                   No inbound firewall check on this OS (the agent dials out)."]
         out = [f"Wired (USB):       host {i.address}   on {i.alias!r} ({kind}), firewall profile {i.profile}"]
         if self.error:
             out.append(f"                   couldn't read the firewall ({self.error}); if the headset can't connect, run:")
@@ -221,13 +255,16 @@ class WiredReport:
         return out
 
 
-def wired_report() -> WiredReport:
+def wired_report(platform: str | None = None) -> WiredReport:
+    platform = platform or sys.platform  # resolved per call, not frozen at import
     try:
-        interface = pick_hotspot(list_interfaces())
+        interface = pick_hotspot(list_interfaces(platform))
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return WiredReport(None, error=str(error))
     if interface is None:
         return WiredReport(None)
+    if platform != "win32":  # the agent dials out, so there is no inbound rule to check
+        return WiredReport(interface, None, [], [], firewall_checked=False)
     wanted = needs()
     try:
         firewall_on, rules, complete = read_firewall(interface.profile)

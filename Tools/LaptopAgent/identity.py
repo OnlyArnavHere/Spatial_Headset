@@ -1,4 +1,4 @@
-"""The agent's long-term identity: an RSA-2048 key pair kept encrypted for this Windows user (DPAPI).
+"""The agent's long-term identity: an RSA-2048 key pair kept encrypted for this OS user (DPAPI on Windows).
 
 The private key never leaves identity.key in the agent's home folder. The public key is shared as DER
 SubjectPublicKeyInfo (what .NET's ExportSubjectPublicKeyInfo returns) and summarised as a 16-character fingerprint.
@@ -15,10 +15,10 @@ from pathlib import Path
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-import winapi
+import hostos
 
 KEY_FILE = "identity.key"
-ENTROPY = winapi.DPAPI_ENTROPY
+ENTROPY = b"SpatialLauncher.agent.identity.v1"  # the Windows backend uses the same value
 _FP_ALPHABET = re.compile(r"^[A-Z2-7]{16}$")
 
 
@@ -40,8 +40,7 @@ def default_home() -> Path:
     override = os.environ.get("SPATIAL_LAUNCHER_HOME")
     if override:
         return Path(override)
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "SpatialLauncher" / "agent"
+    return hostos.default_home()
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -70,10 +69,11 @@ def load_or_create(home: Path) -> Identity:
     path = Path(home) / KEY_FILE
     if path.exists():
         try:
-            pkcs8 = winapi.dpapi_unprotect(path.read_bytes(), ENTROPY)
+            hostos.check_key_file(path)
+            pkcs8 = hostos.unprotect(path.read_bytes())
             key = serialization.load_der_private_key(pkcs8, password=None)
         except (OSError, ValueError) as e:
-            raise IdentityError(f"{path} can't be read ({e}). It is corrupt or belongs to another Windows user. "
+            raise IdentityError(f"{path} can't be read ({e}). It is corrupt or belongs to another user or machine. "
                                 "Delete it only if you accept re-pairing every headset.") from e
         if not isinstance(key, rsa.RSAPrivateKey):
             raise IdentityError(f"{path} doesn't hold an RSA key.")
@@ -81,7 +81,7 @@ def load_or_create(home: Path) -> Identity:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pkcs8 = key.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8,
                               serialization.NoEncryption())
-    atomic_write(path, winapi.dpapi_protect(pkcs8, ENTROPY))
+    atomic_write(path, hostos.protect(pkcs8))
     return Identity(key, public_der(key))
 
 

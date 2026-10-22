@@ -1,6 +1,6 @@
 # Laptop Agent
 
-Streams a Windows laptop's windows, or its whole desktop, to the Spatial Launcher headset, and, if you allow it, lets
+Streams a laptop's (Windows, macOS, or Linux on X11) windows, or its whole desktop, to the Spatial Launcher headset, and, if you allow it, lets
 the headset move and click the laptop's mouse in them and type into them. The headset's **Laptop** icon opens a picker listing what the
 laptop can stream ("Whole desktop" first, then the open windows); each one picked opens in its own window in the
 headset, and several can be open at once, each with its own video stream and its own input routing.
@@ -24,15 +24,10 @@ started at login, and if `agent.py` is closed or killed, Windows ends ffmpeg and
 
 ## Setup (once)
 
-Requires Windows 10 1903 or later (Windows 11 recommended) and Python 3.10 or later.
-
-```
-cd Tools/LaptopAgent
-python setup.py
-```
-
-This downloads pinned versions of MediaMTX and FFmpeg into `bin/` (git-ignored), verifies their SHA-256 checksums,
-and installs the Python dependencies (`requirements.txt`). Nothing downloaded is committed to the repository.
+Needs Python 3.10 or later, and on Windows Windows 10 1903 or later (Windows 11 recommended). Per-OS setup and permissions (Windows, macOS, Linux X11) are in
+[Doc/connect.md](../../Doc/connect.md#setup-on-the-laptop). On Windows, `python setup.py` downloads pinned versions of
+MediaMTX and FFmpeg into `bin/` (git-ignored), verifies their SHA-256 checksums, and installs the Python dependencies
+(`requirements.txt`). Nothing downloaded is committed to the repository.
 
 ## Use
 
@@ -66,10 +61,11 @@ both sides pin each other's key. `--headset` skips discovery and then needs exac
 not there it keeps retrying. In the headset, tap **Laptop** and pick a window or **Whole desktop**; each pick opens
 its own window, up to `--max-windows`. With USB Personal Hotspot use `--wired` (see Doc/wired.md).
 
-Options: `--monitor N`, `--max-width`, `--max-height` (each picture is scaled down to fit, never padded, so pointer
-positions map 1:1), `--fps`, `--bitrate` (per stream), `--encoder auto|nvenc|qsv|amf|x264`, `--max-windows`, `--headset`, `--pair`,
-`--wired`, `--input`, `--keyboard` (with `--input`), `--cast-only`, `--dry-run-input` (log
-mapped mouse and key events instead of injecting them), `--no-picker`, `--verbose`.
+Options: `--list`, `--window TITLE`, `--monitor N`, `--no-picker`, `--max-width` and `--max-height` (default 1920x1080;
+each picture is scaled down to fit, never padded, so pointer positions map 1:1), `--fps`, `--bitrate` (per stream),
+`--encoder auto|nvenc|qsv|amf|x264`, `--max-windows N` (default 4, 1 to 8), `--headset`, `--pair`, `--pairs`, `--revoke`,
+`--wired`, `--input`, `--keyboard` (with `--input`), `--cast-only`, `--dry-run-input` (log mapped mouse and key events
+instead of injecting them), `--verbose`.
 
 Windows Graphics Capture only delivers a frame when a window changes, so a window nobody is typing in (or one behind
 other windows) would stream nothing. The agent asks each streamed window to repaint twice a second, which keeps it
@@ -96,7 +92,7 @@ gets "busy" for 10 s without a new box. Closing the session or pressing the kill
 **Cast-only media needs no prompt:** with `--cast-only` the headset may play/pause, seek, skip and change the volume,
 and nothing else; no control is ever granted.
 
-**Kill switch:** press **Ctrl+Alt+Shift+Q** on the laptop (it is always registered). It ends every headset session
+**Kill switch:** press **Ctrl+Alt+Shift+Q** on the laptop (**Ctrl+Option+Shift+Q** on a Mac; on Windows it is always registered). It ends every headset session
 (held keys and buttons are released, the peer connection is closed), stops all video, ffmpeg and dialling, and closes an
 open prompt. The agent then sits idle until you restart it.
 
@@ -114,6 +110,37 @@ compare:
 
 `clock.py` also marks and prints where it is clicked, which is handy for checking that injected clicks land where the
 headset pointed.
+
+### macOS (capture and mouse/keyboard input)
+
+On a Mac the agent lists screens and windows and streams them with ffmpeg's `avfoundation` input (cropped to the window)
+and VideoToolbox, with libx264 as the fallback. Mouse, keyboard, text and media keys are posted as Quartz events
+(`hostos/_macos_input.py` holds the key table). The approval prompt is an osascript box, the kill hotkey is
+Ctrl+Option+Shift+Q (heard by a listen-only event tap) and the identity key is wrapped with a key in the login Keychain.
+
+Setup and the three permissions (Screen Recording, Accessibility, Input Monitoring) are in
+[Doc/connect.md](../../Doc/connect.md#macos). At start the agent checks them and prints the System Settings path and a
+shortcut for each missing one.
+
+Ctrl on the headset keyboard acts as Command and Alt as Option; the Mac Control key can't be sent. Only the visible part
+of a window that hangs off the screen is streamed, and clicks map onto that part.
+If the agent crashes while a key is held, macOS can keep Cmd logically down; pressing Cmd once clears it.
+
+Child processes (ffmpeg, MediaMTX) are cleaned up by a small watcher process
+(`hostos/_reaper.py`) when the agent exits, however it exits. One gap: a child started in the instant before the
+agent is killed with `kill -9` can survive; stop it by hand if `--list` or a restart finds one still running.
+
+### Linux X11 (experimental)
+
+Screens (`xrandr --listmonitors`), windows (EWMH properties through libX11 and `ctypes`, no extra Python packages),
+capture (ffmpeg `x11grab` + libx264), the identity key (a file created with mode 0600, refused if group/other-readable or owned
+by someone else) and child cleanup (process groups plus a pidfd watcher). Mouse and keyboard input go through XTest
+(libXtst; keys are mapped through your current keyboard layout, and text characters the layout lacks are skipped and
+logged). The kill switch is Ctrl+Alt+Shift+Q, grabbed on the root window (with NumLock and CapsLock in any state); if
+another program already holds that key the agent warns and you stop it with Ctrl+C. The approval prompt is a `zenity`
+Yes/No box (default No, 30 s), or a `tkinter` window when zenity is missing; with neither, every request is denied and
+the agent warns. Packages, the session checks and the Wayland refusal are in
+[Doc/connect.md](../../Doc/connect.md#linux-x11-experimental).
 
 ### Firewall
 
@@ -162,7 +189,7 @@ cafés and hotels. There is no `--webrtc-port`, `--ice-udp-port` or `--input-por
 
 ## Pairing identity
 
-The agent has one RSA-2048 identity key, created on first use in `%LOCALAPPDATA%\SpatialLauncher\agent\` (override with
+The agent has one RSA-2048 identity key, created on first use in `%LOCALAPPDATA%\SpatialLauncher\agent\` on Windows (override with
 the `SPATIAL_LAUNCHER_HOME` environment variable). It lives outside the repository. `identity.key` holds the private
 key encrypted with Windows DPAPI for your Windows user, so it can't be read by another user or copied to another PC.
 If it is damaged or belongs to another user the agent says so and does not replace it. Paired headsets are kept in
@@ -175,6 +202,11 @@ laptop with `python agent.py --pair` (the exchange itself is in `pair_protocol.p
 network: both sides prove they know it with HMACs under a PBKDF2-stretched key that is bound to both public keys, then
 you confirm on the headset, and then laptop and headset each pin the other's key. A code works once, lasts 120 seconds and
 is dead after 3 wrong tries. There is no QR code.
+
+On a Mac the same files live in the agent's home folder under `~/Library/Application Support` (or `SPATIAL_LAUNCHER_HOME`),
+and `identity.key` is encrypted with a random 32-byte key kept in your login Keychain (service `SpatialLauncher.agent.identity.v1`), so it can't be used on another Mac or user account. A missing or changed Keychain key is reported, never replaced silently.
+
+On Linux the files live in `$XDG_DATA_HOME/SpatialLauncher/agent` (`~/.local/share/SpatialLauncher/agent` if unset, or `SPATIAL_LAUNCHER_HOME`), and `identity.key` is a file the agent creates as 0600; it refuses one that someone else owns or that group or others can access.
 
 ## Risks
 
@@ -209,7 +241,15 @@ Read these before using `--input` or `--keyboard`.
 | `dispatch.py` | The input dispatcher: per-window input channels, the control state machine, cast-only rules, rate limits (protocol documented at the top of the file) |
 | `keys.py` | Key names the protocol accepts, validation of key and text events, the rate limit |
 | `approval.py` | The laptop approval prompt (Yes/No box, one at a time, closed on cancel) and the sanitised headset name |
-| `winapi.py` | Windows calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
+| `hostos/__init__.py`, `hostos/types.py` | Picks the backend by `sys.platform` and re-exports its names; the shared data types (`Rect`, `Monitor`, `Window`) and the list of names every backend must expose |
+| `hostos/_stub.py`, `hostos/_ffmpeg.py` | Fills a backend that isn't implemented with functions that say so; the ffmpeg low-latency settings shared by the backends |
+| `hostos/` | The OS layer every other module calls (`hostos.key(...)` etc.): `windows.py` wraps `winapi.py`; `macos.py` is the macOS backend; `linux_x11.py` is the experimental Linux backend |
+| `hostos/macos.py`, `hostos/_macos_pure.py`, `hostos/_macos_input.py` | macOS capture and input: Quartz screens and windows, the ffmpeg avfoundation arguments and crop maths (pure, tested everywhere), the VK-to-kVK table, click counting and wheel maths (pure, too), the permission rows |
+| `hostos/_reaper.py` | The watcher process that ends child processes when the agent exits (kqueue on macOS, pidfd on Linux) |
+| `hostos/linux_x11.py`, `hostos/_linux_pure.py`, `hostos/_xlib.py` | Linux X11 (experimental): screens, windows, capture, XTest input, the XGrabKey kill hotkey, the zenity prompt, key-file check, session rows (pure parts, the VK-to-keysym table and the dialog commands tested everywhere); the libX11 and libXtst calls through `ctypes` |
+| `hostos/_linux_dialog.py` | The tkinter Yes/No box the Linux prompt falls back to, run as a child process so it can be killed |
+| `hostos/_macos_secrets.py`, `_test_keychain.py` | The macOS identity wrap key (AES-GCM under a Keychain entry, through `keyring`); the test helper that points tests at a throwaway Keychain entry |
+| `winapi.py` | The Windows backend's calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), RSASSA-PKCS1-v1_5 (SHA-256) signatures and public-key fingerprints |
 | `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |
 | `handshake.py` | The signed link handshake for already-paired headsets (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
@@ -219,10 +259,12 @@ Read these before using `--input` or `--keyboard`.
 | `fake_headset.py` | A Python stand-in for the headset (pairing or paired mode) for testing the agent without a phone |
 | `network.py` | The USB-hotspot address and the firewall check for `--wired` (the agent needs no inbound port) |
 | `test_session_e2e.py` | End-to-end tests: real MediaMTX and ffmpeg against the fake headset (x264 and, if present, NVENC), pairing and discovery: `python -m unittest test_session_e2e` |
-| `setup.py` | Downloads MediaMTX and FFmpeg (pinned, checksummed) and installs the Python packages |
+| `setup.py` | Windows: downloads MediaMTX and FFmpeg (pinned, checksummed) and installs the Python packages. macOS: checks Homebrew's tools and installs the packages. Not for Linux yet |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
 | `selftest_wired.py` | Checks wired-mode detection and the firewall logic with made-up adapters and rules: `python selftest_wired.py --no-live` |
 | `test_dispatch.py` | Unit tests for the input dispatcher (no network, no real input): routing per window, the control states, cast-only, rate limits, malformed input, releasing held input: `python -m unittest test_dispatch` |
+| `test_hostos.py`, `test_macos.py`, `test_macos_input.py`, `test_macos_secrets.py`, `test_linux.py`, `test_reaper.py` | Unit tests for the OS layer: every backend exposes the same names, macOS (screens, input, Keychain wrap), Linux (pure parts, key file, rows, dialog commands) and the child watcher: `python -m unittest test_hostos test_macos test_macos_input test_macos_secrets test_linux test_reaper` |
+| `_test_keychain.py` | Not a test: imported first by the test files that create identities, it points the macOS Keychain wrap key at a throwaway entry |
 | `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
 | `test_handshake.py`, `test_pair_protocol.py`, `test_discovery.py` | Unit tests for the link handshake and the code-based pairing exchange (both roles over loopback sockets, with known-answer vectors) and discovery (Bonjour on 127.0.0.1; skipped if multicast is unavailable): `python -m unittest test_handshake test_pair_protocol test_discovery` |
 
@@ -238,6 +280,13 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15.0 | BSD-3-Clause | Python package (`requirements.txt`): WebRTC link to the headset |
 | [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; its wheels bundle LGPL-licensed FFmpeg libraries |
 | [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | 0.151.5 | LGPL-2.1-or-later | Python package (`requirements.txt`): Bonjour discovery. Used as an unmodified, separately installed library |
+| [pyobjc](https://github.com/ronaldoussoren/pyobjc): pyobjc-core, pyobjc-framework-Quartz, -Cocoa, -ApplicationServices | 11.1 | MIT | Python packages (`requirements.txt`, macOS only): screens, windows, Quartz events, permission checks |
+| ffmpeg and mediamtx from Homebrew | | | macOS: installed by you, run as separate programs; an ffmpeg you install is under its own licence |
+| [keyring](https://github.com/jaraco/keyring) | 25.7.0 | MIT | Python package (`requirements.txt`, macOS only): the Keychain wrap key |
+| jaraco.classes, jaraco.functools, jaraco.context, more-itertools | | MIT | keyring dependencies (macOS only) |
+| importlib_metadata, zipp, backports.tarfile | | Apache-2.0, MIT, MIT | keyring dependencies (macOS only, Python < 3.12) |
+| libX11, libXtst, xrandr | | MIT | system libraries and tool the Linux backend calls (`ctypes` / subprocess); not included or installed by the agent |
+| zenity | | LGPL-2.1-or-later | the Linux approval prompt runs it as a separate program if installed; not included or installed by the agent |
 | aioice 0.10.2, pylibsrtp 1.0.0 | | BSD-3-Clause | aiortc dependencies |
 | google-crc32c 1.9.0, pyOpenSSL 26.2.0 | | Apache-2.0 | aiortc dependencies (pyOpenSSL is pinned so `cryptography` stays at 46.0.5) |
 | ifaddr 0.2.0, pyee 15.0.0 | | MIT | aiortc / zeroconf dependencies |

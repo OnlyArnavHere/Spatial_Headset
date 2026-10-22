@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+import _test_keychain  # noqa: F401  (a throwaway Keychain entry on macOS)
 import identity
 import pairing
 

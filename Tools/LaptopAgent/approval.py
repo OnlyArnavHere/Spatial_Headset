@@ -6,7 +6,7 @@ import logging
 import threading
 import unicodedata
 
-import winapi
+import hostos
 
 log = logging.getLogger("approval")
 
@@ -44,7 +44,7 @@ class LaptopApprover:
             return False
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        ident = []
+        prompts = []
         text = prompt_text(info, self.keyboard)
 
         def deliver(kind: str, value) -> None:
@@ -52,9 +52,10 @@ class LaptopApprover:
                 future.set_result((kind, value))
 
         def ask() -> None:
-            ident.append(threading.get_native_id())
             try:
-                answer = ("ok", winapi.ask_yes_no(text, CAPTION, self.timeout_ms))
+                prompt = hostos.open_prompt(text, CAPTION, self.timeout_ms)
+                prompts.append(prompt)
+                answer = ("ok", prompt.wait())
             except BaseException as e:
                 answer = ("error", e)
             finally:
@@ -73,7 +74,7 @@ class LaptopApprover:
         try:
             kind, value = await future
         except asyncio.CancelledError:
-            await self._dismiss(thread, ident)
+            await self._dismiss(thread, prompts)
             raise
         if kind == "error":
             log.warning("The approval prompt failed: %s", value)
@@ -83,11 +84,11 @@ class LaptopApprover:
         return value == "yes"
 
     @staticmethod
-    async def _dismiss(thread: threading.Thread, ident: list) -> None:
+    async def _dismiss(thread: threading.Thread, prompts: list) -> None:
         """Answers No on the box, every 50 ms until its thread is gone (it may not exist yet), for up to 2 s."""
         loop = asyncio.get_running_loop()
         end = loop.time() + DISMISS_WAIT_S
         while thread.is_alive() and loop.time() < end:
-            if ident:
-                winapi.dismiss_prompt(ident[0])
+            if prompts:
+                prompts[0].dismiss()
             await asyncio.sleep(0.05)

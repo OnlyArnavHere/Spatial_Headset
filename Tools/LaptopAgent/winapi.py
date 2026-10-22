@@ -6,10 +6,11 @@ so window and monitor rectangles match what Windows Graphics Capture records and
 import ctypes
 import ctypes.wintypes as wt
 import sys
-from dataclasses import dataclass
 
 if sys.platform != "win32":
     raise SystemExit("The laptop agent runs on Windows only.")
+
+from hostos.types import Monitor, Rect, Window  # noqa: E402  (moved there; re-exported so winapi.Rect still works)
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 dwmapi = ctypes.WinDLL("dwmapi")
@@ -28,39 +29,6 @@ def make_dpi_aware() -> None:
 
 
 # --- Rectangles, monitors and windows --------------------------------------------------------
-
-@dataclass(frozen=True)
-class Rect:
-    left: int
-    top: int
-    right: int
-    bottom: int
-
-    @property
-    def width(self) -> int:
-        return self.right - self.left
-
-    @property
-    def height(self) -> int:
-        return self.bottom - self.top
-
-    def __str__(self) -> str:
-        return f"{self.width}x{self.height} at ({self.left}, {self.top})"
-
-
-@dataclass(frozen=True)
-class Monitor:
-    index: int
-    handle: int
-    rect: Rect
-    primary: bool
-
-
-@dataclass(frozen=True)
-class Window:
-    handle: int
-    title: str
-
 
 class _MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]

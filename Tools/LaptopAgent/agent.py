@@ -28,10 +28,10 @@ from pathlib import Path
 
 import approval
 import discovery
+import hostos
 import identity
 import network
 import pairing
-import winapi
 from session import LinkRunner
 from streams import StreamManager, Target, monitor_target, window_target
 
@@ -44,17 +44,8 @@ log = logging.getLogger("agent")
 # data channel then starves); the selector loop sends straight away.
 LOOP_FACTORY = asyncio.SelectorEventLoop
 
-# Probe order: hardware encoders first, then x264. Each entry: (name, ffmpeg encoder, pixel format).
-ENCODERS = [
-    ("nvenc", "h264_nvenc", "yuv420p"),
-    ("qsv", "h264_qsv", "nv12"),
-    ("amf", "h264_amf", "nv12"),
-    ("x264", "libx264", "yuv420p"),
-]
-
-
 def tool(name: str) -> str:
-    local = BIN / f"{name}.exe"
+    local = BIN / f"{name}{hostos.exe_suffix}"
     if local.exists():
         return str(local)
     found = shutil.which(name)
@@ -78,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-height", type=int, default=1080, help="scale each stream down to at most this height (default 1080)")
     p.add_argument("--fps", type=int, default=30, help="frame rate (default 30)")
     p.add_argument("--bitrate", default="6M", help="video bitrate per stream, e.g. 4M or 8000k (default 6M)")
-    p.add_argument("--encoder", choices=["auto"] + [e[0] for e in ENCODERS], default="auto",
+    p.add_argument("--encoder", choices=["auto"] + [e[0] for e in hostos.ENCODERS], default="auto",
                    help="H.264 encoder (default: first hardware encoder that works, else x264)")
     p.add_argument("--headset", action="append", type=headset_address, metavar="IP[:PORT]",
                    help=f"the headset's address (port {discovery.LINK_PORT} unless given): dialled instead of looking "
@@ -112,26 +103,26 @@ def headset_address(text: str) -> tuple[str, int]:
 
 def list_targets() -> None:
     print("Monitors:")
-    for m in winapi.list_monitors():
+    for m in hostos.list_monitors():
         note = '  (primary: "Whole desktop")' if m.primary else ""
         print(f"  {m.index}: {m.rect}{note}")
     print("\nWindows (the headset's picker lists these; use part of a title with --window):")
-    for w in winapi.list_windows():
-        r = winapi.window_rect(w.handle)
-        state = "  (minimized: not listed)" if winapi.window_is_minimized(w.handle) else f"  {r}" if r else ""
+    for w in hostos.list_windows():
+        r = hostos.window_rect(w.handle)
+        state = "  (minimized: not listed)" if hostos.window_is_minimized(w.handle) else f"  {r}" if r else ""
         print(f"  {w.title[:70]!r}{state}")
 
 
 def pinned_target(args) -> Target | None:
     """The target named on the command line, if any."""
     if args.window:
-        window = winapi.find_window(args.window)
+        window = hostos.find_window(args.window)
         if window is None:
             raise SystemExit(f"No visible window title contains {args.window!r}. Try --list.")
         return window_target(window)
     if args.monitor is None:
         return None
-    monitors = winapi.list_monitors()
+    monitors = hostos.list_monitors()
     if not 0 <= args.monitor < len(monitors):
         raise SystemExit(f"Monitor {args.monitor} doesn't exist. Try --list.")
     return monitor_target(monitors[args.monitor])
@@ -144,7 +135,7 @@ def output_size(width: int, height: int, max_width: int, max_height: int) -> tup
 
 
 def probe_encoder(ffmpeg: str, choice: str) -> tuple[str, str, str]:
-    candidates = ENCODERS if choice == "auto" else [e for e in ENCODERS if e[0] == choice]
+    candidates = hostos.ENCODERS if choice == "auto" else [e for e in hostos.ENCODERS if e[0] == choice]
     for name, codec, pix_fmt in candidates:
         test = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=640x360:r=30",
                 "-frames:v", "5", "-pix_fmt", pix_fmt, "-c:v", codec, "-f", "null", "-"]
@@ -162,22 +153,7 @@ def bitrate_bits(text: str) -> int:
 
 
 def encoder_args(name: str, codec: str, fps: int, bitrate: int) -> list[str]:
-    """Low-latency settings: constant bitrate, a small buffer, no B-frames (WebRTC can't use them),
-    a keyframe every second so a reconnecting headset gets a picture quickly, and the baseline profile.
-    Keyframes go by time, not frame count: a static window delivers only a couple of frames a second."""
-    b, buf, gop = str(bitrate), str(bitrate // 2), str(fps)
-    common = ["-b:v", b, "-maxrate", b, "-bufsize", buf, "-g", gop, "-bf", "0",
-              "-force_key_frames", "expr:gte(t,n_forced*1)"]
-    if name == "nvenc":
-        return ["-c:v", codec, "-preset", "p1", "-tune", "ull", "-rc", "cbr", "-zerolatency", "1",
-                "-profile:v", "baseline", "-forced-idr", "1"] + common
-    if name == "qsv":
-        return ["-c:v", codec, "-preset", "veryfast", "-profile:v", "baseline", "-async_depth", "1",
-                "-look_ahead", "0"] + common
-    if name == "amf":
-        return ["-c:v", codec, "-usage", "ultralowlatency", "-quality", "speed", "-rc", "cbr",
-                "-profile:v", "constrained_baseline"] + common
-    return ["-c:v", codec, "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline"] + common
+    return hostos.encoder_args(name, codec, fps, bitrate)
 
 
 def write_mediamtx_config(rtsp_port: int = RTSP_PORT, directory: Path = RUNTIME) -> Path:
@@ -232,16 +208,15 @@ def wait_for_port(port: int, process: subprocess.Popen, timeout: float) -> None:
     raise SystemExit(f"MediaMTX didn't open port {port} within {timeout:g} s.")
 
 
-def start_mediamtx(args, job: winapi.KillOnExitJob) -> subprocess.Popen:
+def start_mediamtx(args, job: hostos.ChildReaper) -> subprocess.Popen:
     config = write_mediamtx_config()
-    mediamtx = subprocess.Popen([tool("mediamtx"), str(config)], cwd=RUNTIME,
-                                stdout=None if args.verbose else subprocess.DEVNULL, stderr=subprocess.STDOUT)
-    job.add(mediamtx.pid)
+    mediamtx = job.spawn([tool("mediamtx"), str(config)], cwd=RUNTIME,
+                         stdout=None if args.verbose else subprocess.DEVNULL, stderr=subprocess.STDOUT)
     wait_for_port(RTSP_PORT, mediamtx, 10)
     return mediamtx
 
 
-def capture_launcher(args, encoder: tuple[str, str, str], job: winapi.KillOnExitJob, rtsp_port: int = RTSP_PORT):
+def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReaper, rtsp_port: int = RTSP_PORT):
     """Returns launch(target, path): starts ffmpeg capturing the target and publishing it on the path."""
     ffmpeg = tool("ffmpeg")
     name, codec, pix_fmt = encoder
@@ -250,30 +225,57 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: winapi.KillOnExit
         rect = target.rect()
         if rect is None or rect.width < 16 or rect.height < 16:
             raise LookupError("minimized")
+        rect = hostos.visible_rect(rect)
         width, height = output_size(rect.width, rect.height, args.max_width, args.max_height)
-        capture = (f"gfxcapture={target.selector}:max_framerate={args.fps}:capture_cursor=1,"
-                   f"hwdownload,format=bgra,scale={width}:{height}:flags=bilinear,format={pix_fmt}[v]")
-        command = [ffmpeg, "-hide_banner", "-loglevel", "info" if args.verbose else "warning",
-                   "-filter_complex", capture, "-map", "[v]", "-fps_mode", "vfr"]
-        command += encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
+        command = [ffmpeg, "-hide_banner", "-loglevel", "info" if args.verbose else "warning"]
+        command += hostos.capture_input_args(target.selector, args.fps, width, height, pix_fmt, ffmpeg=ffmpeg)
+        command += hostos.encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
         command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{rtsp_port}/{path}"]
         log.debug("ffmpeg: %s", subprocess.list2cmdline(command))
-        process = subprocess.Popen(command, stdin=subprocess.DEVNULL)
-        job.add(process.pid)
+        process = job.spawn(command, stdin=subprocess.DEVNULL)
         return process, (width, height)
 
     return launch
+
+
+def check_permissions(args: argparse.Namespace, rows: list) -> None:
+    """Tells the user which OS permissions are missing (macOS, and the Linux session rows; Windows has none, so rows is
+    empty and nothing prints).
+    Missing Screen Recording stops the agent unless it only lists or pairs; missing Accessibility stops --input and
+    --cast-only; missing Input Monitoring only costs the kill-switch hotkey, so it warns."""
+    lists_only = args.list or args.pairs or args.pair or args.revoke is not None
+    needs_input = args.input or args.cast_only
+    pairing_only = args.pairs or args.pair or args.revoke is not None
+    refused = linux = False
+    for row in rows:
+        if row.ok:
+            continue
+        if row.name in ("Accessibility", "Input") and not needs_input:
+            continue  # nothing in this run injects input or raises windows
+        # Linux (X11, experimental): without an X11 session nothing can be listed or captured, so only pairing still
+        # runs; ffmpeg without x11grab stops everything that captures
+        refuse = (row.name == "Screen Recording" and not lists_only) or (row.name == "Accessibility")
+        refuse = refuse or row.name == "Input"
+        refuse = refuse or (row.name == "X11 session" and not pairing_only) or (
+            row.name == "ffmpeg x11grab" and not lists_only)
+        refused = refused or refuse
+        linux = linux or row.name in ("X11 session", "ffmpeg x11grab", "Input", "Approval prompt")
+        print(("error: " if refuse else "warning: ") + row.text, file=sys.stderr)
+    if refused:
+        raise SystemExit("Fix the problem above and start the agent again." if linux else
+                         "Grant the permission above, restart the app you run this from, and start the agent again.")
 
 
 def watch_kill_switch(runner: LinkRunner) -> None:
     """Ctrl+Alt+Shift+Q ends every session and stops video and dialling for the rest of the run. The hotkey thread hops
     onto the event loop before touching anything."""
     loop = asyncio.get_running_loop()
-    if winapi.watch_kill_switch(lambda: loop.call_soon_threadsafe(runner.kill_switch)):
-        log.info("Kill switch: press %s on this laptop to end every session and stop the video", winapi.KILL_SWITCH)
+    if hostos.watch_kill_switch(lambda: loop.call_soon_threadsafe(runner.kill_switch)):
+        log.info("Kill switch: press %s on this laptop to end every session and stop the video", hostos.KILL_SWITCH)
     else:
-        log.warning("Kill switch %s is taken by another program; stop the agent with Ctrl+C instead",
-                    winapi.KILL_SWITCH)
+        log.warning("Kill switch %s is unavailable (taken by another program, or Input Monitoring is not granted on "
+                    "macOS, or there is no X display or another program holds the key on Linux); stop the agent with Ctrl+C instead",
+                    hostos.KILL_SWITCH)
 
 
 async def supervise(mediamtx: subprocess.Popen, streams: StreamManager, runner: LinkRunner) -> None:
@@ -494,7 +496,8 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
-    winapi.make_dpi_aware()
+    hostos.make_dpi_aware()
+    check_permissions(args, hostos.preflight())
 
     if args.list:
         list_targets()
@@ -520,7 +523,7 @@ def main() -> None:
     store = pairing.PairStore(identity.default_home())
 
     encoder = probe_encoder(tool("ffmpeg"), args.encoder)
-    job = winapi.KillOnExitJob()
+    job = hostos.ChildReaper()
     mediamtx = start_mediamtx(args, job)
     streams = StreamManager(capture_launcher(args, encoder, job), only_pinned=args.no_picker)
     pinned_stream = None
@@ -537,7 +540,7 @@ def main() -> None:
     keyboard = "off (start with --input --keyboard to allow it)"
     if args.keyboard:
         keyboard = ("ON - " + ("DRY RUN, logging only" if args.dry_run_input else "the paired headset can type into streamed windows"))
-    kill_switch = f"{winapi.KILL_SWITCH} ends every headset session and stops the video; restart the agent to reconnect"
+    kill_switch = f"{hostos.KILL_SWITCH} ends every headset session and stops the video; restart the agent to reconnect"
     cast = ("ON - view only; the headset may play/pause, seek, skip and change volume. Every other key, mouse,"
             "\n                    typing and scroll event is dropped" + (" (DRY RUN, logging only)" if args.dry_run_input else "")) \
         if args.cast_only else "off (start with --cast-only for a view-only Cast window)"

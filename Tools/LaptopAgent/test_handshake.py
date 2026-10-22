@@ -14,6 +14,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 import handshake as hs
+import _test_keychain  # noqa: F401  (a throwaway Keychain entry on macOS)
 import identity
 import pairing
 

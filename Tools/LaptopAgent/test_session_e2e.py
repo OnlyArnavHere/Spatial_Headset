@@ -11,6 +11,7 @@ import contextlib
 import json
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -25,10 +26,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import agent
 import fake_headset
 import handshake
+import _test_keychain  # noqa: F401  (a throwaway Keychain entry on macOS)
 import identity
 import pairing
 import session
-import winapi
+import hostos
 from streams import StreamManager, Target
 
 BIN = agent.BIN
@@ -63,7 +65,7 @@ class FakeStreams(StreamManager):
 
     def __init__(self, launch, titles):
         super().__init__(launch)
-        rect = winapi.Rect(0, 0, *SIZE)
+        rect = hostos.Rect(0, 0, *SIZE)
         self._targets = [Target(f"window:{i}", "window", i, title, f"window {title!r}", f"hwnd={i}",
                                 rect=lambda: rect, usable=lambda: True) for i, title in enumerate(titles, 1)]
 
@@ -76,10 +78,10 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
     encoder_choice = "x264"
 
     async def asyncSetUp(self):
-        for exe in ("ffmpeg", "mediamtx"):
-            if not (BIN / f"{exe}.exe").exists():
-                self.skipTest(f"bin/{exe}.exe is missing (run setup.py)")
-        self.ffmpeg = str(BIN / "ffmpeg.exe")
+        try:  # bin/ first, then PATH (Homebrew on a Mac)
+            self.ffmpeg, mediamtx = agent.tool("ffmpeg"), agent.tool("mediamtx")
+        except SystemExit:
+            self.skipTest("ffmpeg or mediamtx is missing (run setup.py)")
         try:
             self.encoder = agent.probe_encoder(self.ffmpeg, self.encoder_choice)
         except SystemExit:
@@ -92,7 +94,7 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
 
         self.rtsp_port = free_port()
         config = agent.write_mediamtx_config(self.rtsp_port, self.tmp)
-        self.start_process([str(BIN / "mediamtx.exe"), str(config)], "mediamtx")
+        self.start_process([mediamtx, str(config)], "mediamtx")
         await until(lambda: self.port_open(self.rtsp_port), 10, "MediaMTX to listen")
 
         self.packs = self.encodes = 0
@@ -279,6 +281,11 @@ class NvencLinkTests(LinkTests):
     encoder_choice = "nvenc"
 
 
+if sys.platform == "darwin":
+    class VideoToolboxLinkTests(LinkTests):
+        encoder_choice = "videotoolbox"
+
+
 class InputLinkTests(LinkTests):
     """Input over the data channels, with the Windows input calls replaced so nothing is ever injected."""
     test_frames_second_slot_and_redial = None
@@ -288,10 +295,10 @@ class InputLinkTests(LinkTests):
         await super().asyncSetUp()
         self.keys: list[tuple] = []
         self.focused: list[int] = []
-        self.enterContext(mock.patch.object(winapi, "key", lambda vk, down, extended: self.keys.append((vk, down, extended))))
-        self.enterContext(mock.patch.object(winapi, "focus_window", lambda handle: self.focused.append(handle) or True))
+        self.enterContext(mock.patch.object(hostos, "key", lambda vk, down, extended: self.keys.append((vk, down, extended))))
+        self.enterContext(mock.patch.object(hostos, "focus_window", lambda handle: self.focused.append(handle) or True))
         for name in ("mouse_move", "mouse_button", "mouse_wheel", "type_text", "raise_window"):
-            self.enterContext(mock.patch.object(winapi, name, lambda *a, **k: None))
+            self.enterContext(mock.patch.object(hostos, name, lambda *a, **k: None))
 
     async def opened_window(self, headset):
         opened = await headset.request({"type": "open", "target": "window:1"}, ("opened", "error"), 15)
@@ -324,7 +331,7 @@ class InputLinkTests(LinkTests):
 
         headset.send_input(0, {"type": "key", "code": "A", "down": True})
         headset.send_input(0, {"type": "key", "code": "A", "down": False})
-        await until(lambda: len(self.keys) == 2, 5, "the key to reach winapi.key")
+        await until(lambda: len(self.keys) == 2, 5, "the key to reach hostos.key")
         self.assertEqual(self.keys, [(0x41, True, False), (0x41, False, False)])
         self.assertEqual(self.focused, [1])
 
