@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using UnityEditor;
 using UnityEngine;
 
@@ -33,6 +34,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 return;
             }
             testName = name;
+            WindowMotion.Instant = playMode;   // Play-mode suites expect windows open and gone at once
             needsPlayMode = playMode;
             passed = failed = 0;
             routines.Push(steps);
@@ -84,6 +86,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         static void Finish(string note)
         {
             EditorApplication.update -= Tick;
+            WindowMotion.Instant = false;
             // Runs any finally blocks in the test (used to restore scene state), innermost first.
             while (routines.Count > 0) (routines.Pop() as IDisposable)?.Dispose();
             Debug.Log($"[{testName}] Done{note}: {passed} passed, {failed} failed -> {(failed == 0 ? "PASS" : "FAIL")}");

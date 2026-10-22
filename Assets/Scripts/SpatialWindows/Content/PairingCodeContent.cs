@@ -1,4 +1,5 @@
 using SpatialLauncher.LaptopLink;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -12,9 +13,10 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class PairingCodeContent : WindowContent
     {
-        static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
-        static readonly Color ButtonColor = new Color(0.20f, 0.55f, 0.35f);
-        static readonly Color DimText = new Color(0.75f, 0.77f, 0.82f);
+        /// <summary>No panel fill: the texts sit on the glass itself (a raised panel dropped them under 4.5:1).</summary>
+        public static readonly Color PanelColor = Color.clear;
+        public static readonly Color ButtonColor = UITheme.AccentFill;
+        const float CodeFontSize = 0.62f;
         const float ButtonHeight = 0.045f, ButtonWidth = 0.16f, Gap = 0.01f;
 
         /// <summary>Content size the screen needs.</summary>
@@ -38,18 +40,19 @@ namespace SpatialLauncher.SpatialWindows
             Attach(window, baseMaterial);
             host = linkHost;
             panel = CreateQuad("Panel", transform, CreateMaterial(PanelColor));
-            title = CreateLabel("Title", transform, "Pair a new laptop", 0.26f, TextAlignmentOptions.Center);
-            codeLabel = CreateLabel("Code", transform, "", 0.62f, TextAlignmentOptions.Center);
+            Round(panel, UITheme.ControlRadius);
+            title = CreateLabel("Title", transform, "Pair a new laptop", TextRole.Title, TextAlignmentOptions.Center);
+            codeLabel = CreateLabel("Code", transform, "", TextRole.LargeTitle, TextAlignmentOptions.Center);
+            codeLabel.fontSize = CodeFontSize; // the code is read from across the room
             codeLabel.richText = false;
-            countdown = CreateLabel("Countdown", transform, "", 0.2f, TextAlignmentOptions.Center);
-            countdown.color = DimText;
-            command = CreateLabel("Command", transform, CommandLines(), 0.2f, TextAlignmentOptions.Center);
+            countdown = CreateLabel("Countdown", transform, "", TextRole.Secondary, TextAlignmentOptions.Center);
+            command = CreateLabel("Command", transform, CommandLines(), TextRole.Body, TextAlignmentOptions.Center);
             command.textWrappingMode = TextWrappingModes.Normal;
             command.richText = false;
-            status = CreateLabel("Status", transform, "", 0.2f, TextAlignmentOptions.Center);
+            status = CreateLabel("Status", transform, "", TextRole.Body, TextAlignmentOptions.Center);
             status.richText = false;
             NewCodeButton = CreateControl<WindowButton>("NewCode", transform, CreateMaterial(ButtonColor));
-            newCodeLabel = CreateLabel("NewCodeLabel", transform, "New code", 0.22f, TextAlignmentOptions.Center);
+            newCodeLabel = CreateLabel("NewCodeLabel", transform, "New code", TextRole.Headline, TextAlignmentOptions.Center);
             NewCodeButton.Clicked += Begin;
             if (host != null)
             {

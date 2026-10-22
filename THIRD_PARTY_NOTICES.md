@@ -44,6 +44,8 @@ From the package's `Third Party Notices.md` (full texts there, in `Library/Packa
 | Asset | License |
 |---|---|
 | Liberation Sans font (`Assets/TextMesh Pro/Fonts`, from TextMesh Pro) | SIL Open Font License 1.1 (`LiberationSans - OFL.txt`) |
+| Inter Regular, Medium, SemiBold (`Assets/Fonts/Inter`), v4.1, https://github.com/rsms/inter/releases/tag/v4.1 | SIL Open Font License 1.1 (`Assets/Fonts/Inter/OFL.txt`) |
+| Material Icons Round (`Assets/Fonts/MaterialIcons`), https://github.com/google/material-design-icons (`font/MaterialIconsRound-Regular.otf`, master at download, Oct 2026) | Apache License 2.0 (`Assets/Fonts/MaterialIcons/LICENSE.txt`) |
 | Sample image and video (`Assets/Samples`) | Generated with FFmpeg's built-in test patterns (mandelbrot, gradients, testsrc2); no third-party content |
 
 ## Laptop agent (`Tools/LaptopAgent`, not part of the Unity project)

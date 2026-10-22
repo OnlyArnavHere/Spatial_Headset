@@ -1,14 +1,16 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// A floating panel: a body quad that holds content, a title bar above it with an options
-    /// button and a close button, and a resize handle in the bottom-right corner. The options button
-    /// opens a strip under the body with the window's curve and aspect preset (<see cref="WindowOptions"/>).
+    /// A floating panel: a body quad that holds content and a title bar above it. Under it sit a grab-bar pill that
+    /// moves the window and round close and options controls; a round resize control sits outside the bottom-right
+    /// corner. The controls fade in while the pointer is over the window (<see cref="SetPointerOver"/>). The options
+    /// button opens a strip under the body with the window's curve and aspect preset (<see cref="WindowOptions"/>).
     /// The window's +Z points away from the viewer, so its quads face the user.
     /// Built at runtime by <see cref="WindowManager"/>; place content under <see cref="ContentRoot"/>.
     ///
@@ -20,21 +22,48 @@ namespace SpatialLauncher.SpatialWindows
     {
         public const float TitleBarHeight = 0.06f;
         public const float TitleBarGap = 0.005f;
-        public const float CloseButtonSize = 0.045f;
-        const float ResizeHandleSize = 0.04f;
-        public const float Margin = 0.008f;
         // Thin, so raycasts agree with what's drawn; a thick box would reach past the 1 cm focus push-forward.
         const float ColliderDepth = 0.001f;
         // Layers in front of the body, towards the viewer (-Z).
         const float DecorationDepth = 0.002f;
         const float ContentDepth = 0.003f;
 
-        // Each part gets a distinct colour so it stays recognisable over any content.
-        static readonly Color BodyColor = new Color(0.10f, 0.10f, 0.12f);         // near-black frame
-        static readonly Color TitleColor = new Color(0.32f, 0.34f, 0.40f);        // slate, unfocused
-        static readonly Color TitleFocusedColor = new Color(0.16f, 0.36f, 0.95f); // bright blue, focused
-        static readonly Color CloseColor = new Color(0.90f, 0.22f, 0.22f);        // red
-        static readonly Color HandleColor = new Color(1.00f, 0.75f, 0.15f);       // amber
+        // The shadow quad sits this far behind the body, so it sorts behind it.
+        const float ShadowDepth = 0.002f;
+        // Render queue of the shadow: before the glass (Transparent-50 = 2950) and every other transparent thing.
+        const int ShadowQueue = 2940;
+        // The title text sits this far in from the left and down from the top of the glass.
+        static readonly float TitleInset = UITheme.PtToMetres(24f);
+        // Height of the glass slab above the body: the gap and the title row.
+        const float SlabExtra = TitleBarGap + TitleBarHeight;
+        // A focused window's rim is this much stronger (same factor as the hover rim in the design spec).
+        const float FocusRimBoost = 1.5f;
+
+        static readonly Color BodyColor = new Color(0.10f, 0.10f, 0.12f);  // only if no glass material is assigned
+        static readonly Color FlatControlColor = new Color(0.32f, 0.34f, 0.40f);  // controls without glass
+
+        // Controls fade in quickly and out slowly (time constants of the exponential approach, seconds).
+        const float RevealTauIn = 0.15f;
+        const float RevealTauOut = 0.6f;
+        // Grab bar: white at this alpha, brighter while the pointer is over the window.
+        const float PillAlpha = 0.45f;
+        const float PillAlphaHover = 0.8f;
+        // The close control's hit area sits one minimum gap (8 mm) left of the grab bar's, the options control's one more to the left.
+        // (The bar itself hangs 12 pt below the slab or the open options strip, see ChromeControl.PillRisePt.)
+
+        static readonly int TintId = Shader.PropertyToID("_Tint");
+        static readonly int FallbackId = Shader.PropertyToID("_Fallback");
+        static readonly int RimTopId = Shader.PropertyToID("_RimTop");
+        static readonly int RimBottomId = Shader.PropertyToID("_RimBottom");
+        static readonly int RimWidthId = Shader.PropertyToID("_RimWidth");
+        static readonly int ShadowColorId = Shader.PropertyToID("_ShadowColor");
+        static readonly int ShadowBlurId = Shader.PropertyToID("_ShadowBlur");
+        static readonly int ShadowOffsetId = Shader.PropertyToID("_ShadowOffset");
+        static readonly int RadiusId = Shader.PropertyToID("_Radius");
+        static readonly int SizeId = Shader.PropertyToID("_Size");
+        static readonly int QuadId = Shader.PropertyToID("_Quad");
+        static readonly int SolidId = Shader.PropertyToID("_Solid");
+        static readonly int ShadowOnlyId = Shader.PropertyToID("_ShadowOnly");
 
         [SerializeField] bool billboard = true;
         [Tooltip("Only rotate around the vertical axis when billboarding, so windows stay upright.")]
@@ -78,8 +107,10 @@ namespace SpatialLauncher.SpatialWindows
             get
             {
                 float top = Size.y * 0.5f + TitleBarGap + TitleBarHeight;
-                float bottom = -Size.y * 0.5f - (Options != null ? Options.ExtraHeight : 0f);
-                return Rect.MinMaxRect(-Size.x * 0.5f, bottom, Size.x * 0.5f, top);
+                float hit = UITheme.PtToMetres(ChromeControl.HitPt);
+                float bottom = -Size.y * 0.5f - (Options != null ? Options.ExtraHeight : 0f) - hit;
+                float left = Mathf.Min(-Size.x * 0.5f, OptionsControlX - hit * 0.5f);
+                return Rect.MinMaxRect(left, bottom, Size.x * 0.5f + hit, top);
             }
         }
 
@@ -97,57 +128,96 @@ namespace SpatialLauncher.SpatialWindows
 
         Transform head;
         Transform visualRoot;
-        Transform body, titleBar, closeButton, resizeHandle;
+        Transform body, slab, shadow, titleBar;
+        ChromeControl closeControl, resizeControl, grabBar;
+        Material chromeMaterial;
+        /// <summary>The glass material the window was built with (null for a plain window); content shapes are drawn with its shader.</summary>
+        public Material GlassMaterial { get; private set; }
+        // Pointers (mouse, each hand) currently over the window; the window counts as hovered while any is.
+        readonly HashSet<object> pointers = new HashSet<object>();
+        static readonly object DefaultPointer = new object();
+        bool alwaysShowControls;
+        float reveal;
         TextMeshPro titleText;
-        Material titleMaterial;
+        MeshRenderer bodyRenderer, slabRenderer, shadowRenderer;
+        MaterialPropertyBlock glassBlock;
+        bool solid;
         readonly List<Material> materials = new List<Material>();
 
         // Focus presentation: how far the visuals sit towards the viewer, and their scale.
         float targetDepth, currentDepth;
         float targetScale = 1f, currentScale = 1f;
+        WindowMotion motion;
 
         // Body-locked pose, relative to the head's yaw frame.
         Vector3 headLocalPosition;
         Quaternion headLocalRotation;
 
         public void Initialize(string title, Vector2 size, Material baseMaterial, Transform headTransform,
-            bool useBillboard, bool useWorldLock)
+            bool useBillboard, bool useWorldLock, Material glassMaterial = null)
         {
             Title = title;
             head = headTransform;
             billboard = useBillboard;
             name = $"Window - {title}";
 
-            Build(baseMaterial);
+            Build(baseMaterial, glassMaterial);
             SetSize(size, keepTopLeft: false);
             FaceHead();
             WorldLocked = useWorldLock;
         }
 
-        void Build(Material baseMaterial)
+        void Build(Material baseMaterial, Material glassMaterial)
         {
             visualRoot = new GameObject("Visual").transform;
             visualRoot.SetParent(transform, false);
 
-            body = CreateQuad("Body", visualRoot, MakeMaterial(baseMaterial, BodyColor), WindowPartType.Content);
-            titleMaterial = MakeMaterial(baseMaterial, TitleColor);
-            titleBar = CreateQuad("TitleBar", visualRoot, titleMaterial, WindowPartType.TitleBar);
-            closeButton = CreateQuad("CloseButton", visualRoot, MakeMaterial(baseMaterial, CloseColor), WindowPartType.CloseButton);
-            resizeHandle = CreateQuad("ResizeHandle", visualRoot, MakeMaterial(baseMaterial, HandleColor), WindowPartType.ResizeHandle);
+            GlassMaterial = glassMaterial;
+            bool glass = glassMaterial != null;
+            body = CreateQuad("Body", visualRoot, glass ? glassMaterial : MakeMaterial(baseMaterial, BodyColor), WindowPartType.Content);
+            if (glass)
+            {
+                glassBlock = new MaterialPropertyBlock();
+                // One glass slab covers the title row and the body; the body keeps its collider and material but isn't drawn.
+                bodyRenderer = body.GetComponent<MeshRenderer>();
+                bodyRenderer.enabled = false;
+                slab = CreateVisualQuad("Glass", glassMaterial, out slabRenderer);
+                var shadowMaterial = new Material(glassMaterial) { name = "SpatialGlass Shadow", renderQueue = ShadowQueue };
+                shadowMaterial.SetFloat("_ZWrite", 0f);
+                materials.Add(shadowMaterial);
+                shadow = CreateVisualQuad("Shadow", shadowMaterial, out shadowRenderer);
+            }
+            // The title band is only a hit area now: the title is drawn as text on the glass.
+            titleBar = CreateQuad("TitleBar", visualRoot, baseMaterial, WindowPartType.TitleBar);
+            titleBar.GetComponent<MeshRenderer>().enabled = false;
 
-            titleText = CreateText("TitleText", visualRoot, Title, 0.3f, TextAlignmentOptions.MidlineLeft);
-            var closeGlyph = CreateText("CloseGlyph", closeButton, "X", 0.3f, TextAlignmentOptions.Center);
-            // The close button quad is scaled; undo it so the glyph keeps its size.
-            closeGlyph.transform.localScale = new Vector3(1f / CloseButtonSize, 1f / CloseButtonSize, 1f);
-            closeGlyph.transform.localPosition = new Vector3(0f, 0f, -0.01f);
-            closeGlyph.rectTransform.sizeDelta = new Vector2(CloseButtonSize, CloseButtonSize);
+            // Round controls reuse the glass shader without depth write (so a hidden one doesn't block anything).
+            if (glass)
+            {
+                chromeMaterial = new Material(glassMaterial) { name = "SpatialGlass Chrome" };
+                chromeMaterial.SetFloat("_ZWrite", 0f);
+                materials.Add(chromeMaterial);
+            }
+            else chromeMaterial = MakeMaterial(baseMaterial, FlatControlColor);
+            var disc = new Vector2(ChromeControl.DiscPt, ChromeControl.DiscPt);
+            var hitSquare = new Vector2(ChromeControl.HitPt, ChromeControl.HitPt);
+            closeControl = new ChromeControl(CreateQuad("CloseButton", visualRoot, baseMaterial, WindowPartType.CloseButton),
+                visualRoot, chromeMaterial, hitSquare, disc, 0f, ChromeControl.DiscFill, true, UIIcons.Close);
+            resizeControl = new ChromeControl(CreateQuad("ResizeHandle", visualRoot, baseMaterial, WindowPartType.ResizeHandle),
+                visualRoot, chromeMaterial, hitSquare, disc, 0f, ChromeControl.DiscFill, true, UIIcons.OpenInFull);
+            grabBar = new ChromeControl(CreateQuad("GrabBar", visualRoot, baseMaterial, WindowPartType.GrabBar),
+                visualRoot, chromeMaterial, new Vector2(ChromeControl.PillHitWidthPt, ChromeControl.HitPt),
+                new Vector2(ChromeControl.PillWidthPt, ChromeControl.PillHeightPt), ChromeControl.PillRisePt, Color.white, false, null);
+            grabBar.OutlinePt = ChromeControl.PillOutlinePt;
+
+            titleText = CreateText("TitleText", visualRoot, Title, TextRole.Title, TextAlignmentOptions.TopLeft);
 
             ContentRoot = new GameObject("Content").transform;
             ContentRoot.SetParent(visualRoot, false);
             ContentRoot.localPosition = new Vector3(0f, 0f, -ContentDepth);
 
             Options = gameObject.AddComponent<WindowOptions>();
-            Options.Build(this, baseMaterial);
+            Options.Build(this, baseMaterial, chromeMaterial);
             gameObject.AddComponent<WindowCurver>();
         }
 
@@ -172,12 +242,167 @@ namespace SpatialLauncher.SpatialWindows
 
         internal void RequestAspect(AspectPreset preset) => AspectRequested?.Invoke(this, preset);
 
+        // A drawn-only quad (no collider) for the glass slab or its shadow.
+        Transform CreateVisualQuad(string quadName, Material material, out MeshRenderer renderer)
+        {
+            var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            quad.name = quadName;
+            quad.transform.SetParent(visualRoot, false);
+            DestroyImmediate(quad.GetComponent<MeshCollider>());
+            renderer = quad.GetComponent<MeshRenderer>();
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            return quad.transform;
+        }
+
+        /// <summary>Metres the shadow quad extends past the body on every side.</summary>
+        public static float ShadowMargin =>
+            UITheme.PtToMetres(UITheme.ShadowBlur) + Mathf.Abs(UITheme.PtToMetres(UITheme.ShadowOffsetY));
+
+        public bool IsSolid => solid;
+
+        /// <summary>
+        /// Makes the window a solid dark panel instead of glass (the consent window, where clarity beats style):
+        /// opaque <c>glass.fallback</c> colour with a 2 pt rim at alpha 0.5, and no shadow.
+        /// </summary>
+        public void SetSolid(bool value)
+        {
+            solid = value;
+            AlwaysShowControls = value;
+            UpdateGlass();
+        }
+
+        /// <summary>Keeps the close, options and resize controls visible even when the pointer is elsewhere (set by <see cref="SetSolid"/>).</summary>
+        public bool AlwaysShowControls
+        {
+            get => alwaysShowControls;
+            set { alwaysShowControls = value; ApplyReveal(); }
+        }
+
+        /// <summary>How far the pointer-over reveal has come, 0 (hidden) to 1 (shown).</summary>
+        public float Reveal => reveal;
+
+        /// <summary>Alpha the round controls are drawn with: 1 when <see cref="AlwaysShowControls"/>, else <see cref="Reveal"/>.</summary>
+        public float ControlsAlpha => alwaysShowControls ? 1f : reveal;
+
+        public bool IsPointerOver => pointers.Count > 0;
+
+        /// <summary>Called by input every frame: true while a pointer is over the window or working on it, false once it leaves.</summary>
+        public void SetPointerOver(bool over) => SetPointerOver(DefaultPointer, over);
+
+        /// <summary>As <see cref="SetPointerOver(bool)"/> for one pointer (the mouse, a hand); the window stays hovered while any pointer is over it.</summary>
+        public void SetPointerOver(object pointer, bool over)
+        {
+            if (over) pointers.Add(pointer);
+            else pointers.Remove(pointer);
+        }
+
+        /// <summary>A pointer is over (or left) one of the chrome controls: lights up the close button, resize handle or grab bar.</summary>
+        public void SetChromeHover(WindowPartType part, object pointer, bool over)
+        {
+            if (this == null) return;
+            var control = part == WindowPartType.CloseButton ? closeControl
+                : part == WindowPartType.ResizeHandle ? resizeControl
+                : part == WindowPartType.GrabBar ? grabBar : null;
+            control?.State.SetHover(pointer, over);
+        }
+
+        /// <summary>A pointer pressed (or let go of) a chrome control: overlay and shrink.</summary>
+        public void SetChromePressed(WindowPartType part, bool pressed)
+        {
+            if (this == null) return;
+            var control = part == WindowPartType.CloseButton ? closeControl
+                : part == WindowPartType.ResizeHandle ? resizeControl
+                : part == WindowPartType.GrabBar ? grabBar : null;
+            control?.State.SetPressed(pressed);
+        }
+
+        public void ClearChromePressed()
+        {
+            if (this == null) return;
+            closeControl?.State.SetPressed(false);
+            resizeControl?.State.SetPressed(false);
+            grabBar?.State.SetPressed(false);
+        }
+
+        /// <summary>Moves <see cref="Reveal"/> towards the pointer state: fast in (150 ms), slow out (600 ms), whatever the frame rate.</summary>
+        public void UpdateReveal(float deltaTime)
+        {
+            float target = IsPointerOver ? 1f : 0f;
+            float tau = target > reveal ? RevealTauIn : RevealTauOut;
+            reveal += (target - reveal) * (1f - Mathf.Exp(-deltaTime / tau));
+            closeControl?.State.Step(deltaTime);
+            resizeControl?.State.Step(deltaTime);
+            grabBar?.State.Step(deltaTime);
+            ApplyReveal();
+        }
+
+        /// <summary>Jumps the reveal to a value (the UI gallery's Hover and Idle shots) and makes the pointer state agree.</summary>
+        public void SetReveal(float value)
+        {
+            reveal = Mathf.Clamp01(value);
+            pointers.Clear();
+            if (reveal >= 0.5f) pointers.Add(DefaultPointer);
+            ApplyReveal();
+        }
+
+        void ApplyReveal()
+        {
+            if (closeControl == null || Options == null || Options.Toggle == null) return;
+            float alpha = ControlsAlpha;
+            closeControl.Apply(alpha);
+            resizeControl.Apply(alpha);
+            Options.Toggle.Apply(alpha);
+            grabBar.Apply(1f, Mathf.Lerp(PillAlpha, PillAlphaHover, reveal));
+        }
+
+        public ChromeControl GrabBarControl => grabBar;
+        public ChromeControl CloseControl => closeControl;
+        public ChromeControl ResizeControl => resizeControl;
+
+        // Pushes the theme values and the current size to the body and shadow renderers.
+        void UpdateGlass()
+        {
+            if (glassBlock == null || slab == null) return;
+            float boost = IsFocused ? FocusRimBoost : 1f;
+            var rimTop = solid ? new Color(1f, 1f, 1f, 0.5f) : UITheme.RimTop;
+            var rimBottom = solid ? rimTop : UITheme.RimBottom;
+            rimTop.a = Mathf.Min(1f, rimTop.a * boost);
+            rimBottom.a = Mathf.Min(1f, rimBottom.a * boost);
+            float margin = ShadowMargin;
+            var size = new Vector4(Size.x, Size.y + SlabExtra, 0f, 0f);
+
+            glassBlock.Clear();
+            glassBlock.SetColor(TintId, UITheme.GlassTint);
+            glassBlock.SetColor(FallbackId, UITheme.GlassFallback);
+            glassBlock.SetColor(RimTopId, rimTop);
+            glassBlock.SetColor(RimBottomId, rimBottom);
+            glassBlock.SetFloat(RimWidthId, solid ? UITheme.PtToMetres(2f) : 0f);
+            glassBlock.SetColor(ShadowColorId, UITheme.Shadow);
+            glassBlock.SetFloat(ShadowBlurId, UITheme.PtToMetres(UITheme.ShadowBlur));
+            glassBlock.SetVector(ShadowOffsetId, new Vector4(0f, UITheme.PtToMetres(UITheme.ShadowOffsetY), 0f, 0f));
+            glassBlock.SetFloat(RadiusId, UITheme.PtToMetres(UITheme.WindowRadius));
+            glassBlock.SetVector(SizeId, size);
+            glassBlock.SetFloat(SolidId, solid ? 1f : 0f);
+
+            glassBlock.SetVector(QuadId, size);
+            glassBlock.SetFloat(ShadowOnlyId, 0f);
+            bodyRenderer.SetPropertyBlock(glassBlock);
+            slabRenderer.SetPropertyBlock(glassBlock);
+
+            glassBlock.SetVector(QuadId, new Vector4(size.x + 2f * margin, size.y + 2f * margin, 0f, 0f));
+            glassBlock.SetFloat(ShadowOnlyId, 1f);
+            shadowRenderer.SetPropertyBlock(glassBlock);
+            shadowRenderer.enabled = !solid;
+        }
+
         Transform CreateQuad(string quadName, Transform parent, Material material, WindowPartType partType)
         {
             var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
             quad.name = quadName;
             quad.transform.SetParent(parent, false);
-            Destroy(quad.GetComponent<MeshCollider>());
+            DestroyImmediate(quad.GetComponent<MeshCollider>());
             var box = quad.AddComponent<BoxCollider>();
             box.size = new Vector3(1f, 1f, ColliderDepth);
             quad.GetComponent<MeshRenderer>().sharedMaterial = material;
@@ -185,16 +410,15 @@ namespace SpatialLauncher.SpatialWindows
             return quad.transform;
         }
 
-        static TextMeshPro CreateText(string textName, Transform parent, string text, float fontSize,
+        static TextMeshPro CreateText(string textName, Transform parent, string text, TextRole role,
             TextAlignmentOptions alignment)
         {
             var go = new GameObject(textName);
             go.transform.SetParent(parent, false);
             var tmp = go.AddComponent<TextMeshPro>();
             tmp.text = text;
-            tmp.fontSize = fontSize;
             tmp.alignment = alignment;
-            tmp.color = Color.white;
+            ThemeApplier.Apply(tmp, role);
             tmp.textWrappingMode = TextWrappingModes.NoWrap;
             tmp.overflowMode = TextOverflowModes.Ellipsis;
             return tmp;
@@ -231,23 +455,49 @@ namespace SpatialLauncher.SpatialWindows
 
             body.localPosition = Vector3.zero;
             body.localScale = new Vector3(w, h, 1f);
+            if (slab != null)
+            {
+                float margin = ShadowMargin, slabHeight = h + SlabExtra, slabY = SlabExtra * 0.5f;
+                slab.localPosition = new Vector3(0f, slabY, 0f);
+                slab.localScale = new Vector3(w, slabHeight, 1f);
+                shadow.localPosition = new Vector3(0f, slabY, ShadowDepth);
+                shadow.localScale = new Vector3(w + 2f * margin, slabHeight + 2f * margin, 1f);
+                UpdateGlass();
+            }
 
             float titleY = h * 0.5f + TitleBarGap + TitleBarHeight * 0.5f;
             titleBar.localPosition = new Vector3(0f, titleY, 0f);
             titleBar.localScale = new Vector3(w, TitleBarHeight, 1f);
 
-            closeButton.localPosition = new Vector3(w * 0.5f - Margin - CloseButtonSize * 0.5f, titleY, -DecorationDepth);
-            closeButton.localScale = new Vector3(CloseButtonSize, CloseButtonSize, 1f);
+            float textWidth = Mathf.Max(0.01f, w - TitleInset * 2f);
+            float textHeight = TitleBarHeight * 0.5f;
+            titleText.rectTransform.sizeDelta = new Vector2(textWidth, textHeight);
+            titleText.transform.localPosition = new Vector3(-w * 0.5f + TitleInset + textWidth * 0.5f,
+                h * 0.5f + SlabExtra - TitleInset - textHeight * 0.5f, -DecorationDepth);
 
-            // Room for the options and close buttons on the right.
-            float textWidth = Mathf.Max(0.01f, w - CloseButtonSize * 2f - Margin * 4f);
-            titleText.rectTransform.sizeDelta = new Vector2(textWidth, TitleBarHeight);
-            titleText.transform.localPosition = new Vector3(-w * 0.5f + Margin + textWidth * 0.5f, titleY, -DecorationDepth);
+            Options.Layout(Size);
+            LayoutChrome();
+        }
 
-            resizeHandle.localPosition = new Vector3(w * 0.5f - ResizeHandleSize * 0.5f, -h * 0.5f + ResizeHandleSize * 0.5f, -DecorationDepth);
-            resizeHandle.localScale = new Vector3(ResizeHandleSize, ResizeHandleSize, 1f);
+        // Centre of the close control; the options control is one step further left.
+        static float CloseControlX => -UITheme.PtToMetres(ChromeControl.PillHitWidthPt * 0.5f + UITheme.MinHitGapMm + ChromeControl.HitPt * 0.5f);
+        static float OptionsControlX => CloseControlX - UITheme.PtToMetres(ChromeControl.HitPt + UITheme.MinHitGapMm);
 
-            Options.Layout(Size, titleY, w * 0.5f - Margin * 2f - CloseButtonSize * 1.5f);
+        /// <summary>
+        /// Places the grab bar and the close and options controls in a row under the slab (or under the open options
+        /// strip), and the resize control outside the bottom-right corner. The hit areas hang from the edge they sit
+        /// under; the drawn shapes sit a little higher, 12 pt below the edge.
+        /// </summary>
+        internal void LayoutChrome()
+        {
+            if (closeControl == null || Size == Vector2.zero) return;
+            float hit = UITheme.PtToMetres(ChromeControl.HitPt);
+            float hitY = -Size.y * 0.5f - Options.ExtraHeight - hit * 0.5f;
+            grabBar.Place(0f, hitY, -DecorationDepth);
+            closeControl.Place(CloseControlX, hitY, -DecorationDepth);
+            Options.Toggle.Place(OptionsControlX, hitY, -DecorationDepth);
+            resizeControl.Place(Size.x * 0.5f + hit * 0.5f, -Size.y * 0.5f - hit * 0.5f, -DecorationDepth);
+            ApplyReveal();
         }
 
         /// <summary>Moves the window. Body-locked windows keep the new offset from the head.</summary>
@@ -270,7 +520,7 @@ namespace SpatialLauncher.SpatialWindows
         public void SetFocused(bool focused)
         {
             IsFocused = focused;
-            titleMaterial.color = focused ? TitleFocusedColor : TitleColor;
+            UpdateGlass();
         }
 
         /// <summary>
@@ -293,8 +543,48 @@ namespace SpatialLauncher.SpatialWindows
         void ApplyPresentation()
         {
             visualRoot.localPosition = new Vector3(0f, 0f, -currentDepth);
-            visualRoot.localScale = new Vector3(currentScale, currentScale, 1f);
+            float scale = currentScale * MotionScale;
+            visualRoot.localScale = new Vector3(scale, scale, 1f);
         }
+
+        /// <summary>Open and close motion (<see cref="WindowMotion"/>), created on first use.</summary>
+        public WindowMotion Motion
+        {
+            get
+            {
+                if (motion == null && !TryGetComponent(out motion)) motion = gameObject.AddComponent<WindowMotion>();
+                return motion;
+            }
+        }
+
+        /// <summary>Scale the open/close motion multiplies into the visuals' scale (1 when idle).</summary>
+        public float MotionScale { get; private set; } = 1f;
+
+        /// <summary>Whole-window alpha from the open/close motion (1 when idle).</summary>
+        public float MotionAlpha => motion != null ? motion.Alpha : 1f;
+
+        internal void SetMotionScale(float scale)
+        {
+            if (Mathf.Approximately(scale, MotionScale)) return;
+            MotionScale = scale;
+            if (visualRoot != null) ApplyPresentation();
+        }
+
+        /// <summary>Starts the open motion: scale 0.92 to 1 and fade in over 250 ms, or only a 120 ms fade for <paramref name="fadeOnly"/> (consent).</summary>
+        public void BeginOpen(bool fadeOnly = false) => Motion.BeginOpen(fadeOnly);
+
+        /// <summary>
+        /// Starts the close motion and turns the colliders off at once; <paramref name="done"/> runs when it has finished
+        /// (the manager destroys the window then).
+        /// </summary>
+        public void BeginClose(Action done)
+        {
+            foreach (var collider in GetComponentsInChildren<Collider>(true)) collider.enabled = false;
+            Motion.BeginClose(done);
+        }
+
+        /// <summary>Jumps the open or close motion to its end (the UI gallery's stills).</summary>
+        public void SnapMotion() { if (motion != null) motion.Snap(); }
 
         void AnimatePresentation()
         {
@@ -309,6 +599,7 @@ namespace SpatialLauncher.SpatialWindows
         void LateUpdate()
         {
             AnimatePresentation();
+            UpdateReveal(Time.unscaledDeltaTime);
             if (head == null) return;
 
             if (!worldLocked)
@@ -351,7 +642,11 @@ namespace SpatialLauncher.SpatialWindows
         {
             curvedWindows.Remove(this);
             foreach (var material in materials)
-                Destroy(material);
+            {
+                // Edit-mode tests and the gallery destroy windows outside Play mode, where Destroy is not allowed.
+                if (Application.isPlaying) Destroy(material);
+                else DestroyImmediate(material);
+            }
             materials.Clear();
         }
     }

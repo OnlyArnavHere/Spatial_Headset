@@ -470,6 +470,7 @@ MonoBehaviour:
   - {fileID: 1123372320}
   activeInput: 0
   windowMaterial: {fileID: 2100000, guid: 1f6ed78432f39034b80d5af080a89367, type: 2}
+  glassMaterial: {fileID: 2100000, guid: 01f679ad0ef0c5b4493715d952403bae, type: 2}
   spawnDistance: 1.5
   cascadeOffset: 0.05
   cascadeSteps: 6

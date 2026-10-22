@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -14,17 +15,38 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class VirtualKeyboardContent : WindowContent
     {
-        static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
-        static readonly Color CharacterColor = new Color(0.24f, 0.25f, 0.30f);
-        static readonly Color SpecialColor = new Color(0.32f, 0.34f, 0.40f);
-        static readonly Color ModifierColor = new Color(0.32f, 0.34f, 0.40f);
-        static readonly Color ModifierOnColor = new Color(0.16f, 0.36f, 0.95f);
-        static readonly Color StatusColor = new Color(0.75f, 0.77f, 0.82f);
-        static readonly Color TalkColor = new Color(0.20f, 0.55f, 0.35f);
-        static readonly Color ListeningColor = new Color(0.85f, 0.25f, 0.25f);
+        /// <summary>No panel behind the keys: the window's glass shows through.</summary>
+        public static readonly Color PanelColor = new Color(0f, 0f, 0f, 0f);
+        public static readonly Color KeyColor = UITheme.KeyFill;
+        public static readonly Color ModifierOnColor = UITheme.AccentFill;
+        public static readonly Color ReturnColor = UITheme.AccentFill;
+        public static readonly Color TalkColor = UITheme.KeyFill;
+        public static readonly Color ListeningColor = UITheme.DestructiveFill;
+
+        /// <summary>Key label size (pt): 17 pt counts as large text, so white on KeyFill needs 4.5:1.</summary>
+        public const float LabelPt = 17f;
+
+        /// <summary>The icon drawn on a key instead of its text (arrows, Home), or null.</summary>
+        public static string KeyIcon(string id)
+        {
+            switch (id)
+            {
+                case "Up": return UIIcons.KeyboardArrowUp;
+                case "Down": return UIIcons.KeyboardArrowDown;
+                case "Left": return UIIcons.KeyboardArrowLeft;
+                case "Right": return UIIcons.KeyboardArrowRight;
+                case "Home": return UIIcons.Home;
+                default: return null;
+            }
+        }
 
         const float StatusHeight = 0.03f;
-        const float KeyGap = 0.004f;
+        /// <summary>Gap between keys (6 pt: the keyboard's exception to the 8 mm rule, ui-design section 9).</summary>
+        public const float KeyGap = 0.006f;
+        /// <summary>Window content size that gives 44 pt keys: 15 key units across and a status line plus five rows.</summary>
+        public static readonly Vector2 PreferredSize = new Vector2(0.79f, 0.32f);
+        /// <summary>The window size for <see cref="PreferredSize"/> content.</summary>
+        public static Vector2 WindowSize => PreferredSize + Vector2.one * (Padding * 2f);
 
         /// <summary>Modifiers that apply to the next key.</summary>
         public KeyModifiers Modifiers { get; private set; }
@@ -50,19 +72,21 @@ namespace SpatialLauncher.SpatialWindows
             target = currentTarget;
             voice = voiceTyping;
 
-            panel = CreateQuad("KeyboardPanel", transform, CreateMaterial(PanelColor));
-            status = CreateLabel("Status", transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
-            status.color = StatusColor;
+            panel = CreateQuad("KeyboardPanel", transform, CreateRounded(PanelColor, UITheme.ControlRadius));
+            status = CreateLabel("Status", transform, "", TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
 
-            var characterMaterial = CreateMaterial(CharacterColor);
-            var specialMaterial = CreateMaterial(SpecialColor);
+            var characterMaterial = CreateRounded(KeyColor, UITheme.ControlRadius);
+            var specialMaterial = CreateRounded(KeyColor, UITheme.ControlRadius);
             foreach (var key in VirtualKeyboardLayout.Keys)
             {
-                var material = key.Kind == VirtualKeyKind.Modifier ? CreateMaterial(ModifierColor)
-                    : key.Kind == VirtualKeyKind.Voice ? talkMaterial = CreateMaterial(TalkColor)
+                var material = key.Kind == VirtualKeyKind.Modifier ? CreateRounded(KeyColor, UITheme.ControlRadius)
+                    : key.Kind == VirtualKeyKind.Voice ? talkMaterial = CreateRounded(TalkColor, UITheme.ControlRadius)
+                    : key.Id == "Enter" ? CreateRounded(ReturnColor, UITheme.ControlRadius)
                     : key.Kind == VirtualKeyKind.Character ? characterMaterial : specialMaterial;
-                var label = CreateLabel($"KeyLabel {key.Id}", transform, key.Id == "Space" ? "Space" : key.Label, 0.18f,
-                    TextAlignmentOptions.Center);
+                var icon = KeyIcon(key.Id);
+                var label = CreateLabel($"KeyLabel {key.Id}", transform, icon ?? (key.Id == "Space" ? "Space" : key.Label),
+                    icon != null ? TextRole.Icon : TextRole.Headline, TextAlignmentOptions.Center);
+                // Labels are large text (Headline, 17 pt); arrows and Home are icons (20 pt) so they fit a one-unit key.
                 WindowControl control;
                 if (key.Kind == VirtualKeyKind.Voice)
                 {
@@ -78,6 +102,7 @@ namespace SpatialLauncher.SpatialWindows
                     button.Clicked += () => Press(pressed);
                     control = button;
                 }
+                control.BindLabel(label);
                 keys.Add((key, control, label, material));
             }
             RefreshKeys();
@@ -134,14 +159,14 @@ namespace SpatialLauncher.SpatialWindows
             bool shift = (Modifiers & KeyModifiers.Shift) != 0;
             foreach (var (key, _, label, material) in keys)
             {
-                if (key.Kind == VirtualKeyKind.Modifier) material.color = (Modifiers & key.Modifier) != 0 ? ModifierOnColor : ModifierColor;
+                if (key.Kind == VirtualKeyKind.Modifier) material.color = (Modifiers & key.Modifier) != 0 ? ModifierOnColor : KeyColor;
                 else if (key.Kind == VirtualKeyKind.Character && key.Id != "Space") label.text = shift ? key.ShiftLabel : key.Label;
             }
         }
 
         protected override void Layout(Vector2 size)
         {
-            panel.localPosition = new Vector3(0f, 0f, -0.001f);
+            panel.localPosition = new Vector3(0f, 0f, -0.0005f);
             panel.localScale = new Vector3(size.x, size.y, 1f);
 
             status.transform.localPosition = new Vector3(0f, size.y * 0.5f - StatusHeight * 0.5f, -0.003f);
@@ -168,7 +193,6 @@ namespace SpatialLauncher.SpatialWindows
                         button.transform.localScale = new Vector3(keySize.x, keySize.y, 1f);
                         label.transform.localPosition = position + new Vector3(0f, 0f, -0.001f);
                         label.rectTransform.sizeDelta = keySize;
-                        label.fontSize = Mathf.Min(0.18f, keySize.y * 4f);
                     }
                     left += width;
                 }

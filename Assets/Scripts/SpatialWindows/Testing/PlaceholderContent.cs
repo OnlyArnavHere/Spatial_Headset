@@ -1,3 +1,4 @@
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -13,7 +14,7 @@ namespace SpatialLauncher.SpatialWindows.Testing
         {
             Attach(window, baseMaterial);
             panel = CreateQuad("Panel", transform, CreateMaterial(color));
-            label = CreateLabel("Label", transform, text, 0.6f, TextAlignmentOptions.Center);
+            label = CreateLabel("Label", transform, text, TextRole.LargeTitle, TextAlignmentOptions.Center);
             label.transform.localPosition = new Vector3(0f, 0f, -0.002f);
             label.textWrappingMode = TextWrappingModes.Normal;
             Relayout();

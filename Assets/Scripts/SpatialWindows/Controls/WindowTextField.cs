@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -14,8 +15,10 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class WindowTextField : WindowControl
     {
-        static readonly Color NormalColor = new Color(0.20f, 0.21f, 0.25f);
-        static readonly Color FocusedColor = new Color(0.16f, 0.30f, 0.60f);
+        /// <summary>The raised glass overlay over the dark fallback, like the round controls.</summary>
+        public static readonly Color NormalColor = UITheme.CompositeOver(UITheme.GlassRaised, UITheme.GlassFallback);
+        /// <summary>The accent over the normal fill, so a focused field stands out from its neighbours.</summary>
+        public static readonly Color FocusedColor = UITheme.CompositeOver(new Color(UITheme.Accent.r, UITheme.Accent.g, UITheme.Accent.b, 0.45f), NormalColor);
 
         /// <summary>The field that has keyboard focus, if any.</summary>
         public static WindowTextField Focused { get; private set; }
@@ -67,6 +70,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Focused == this) return;
             if (Focused != null) Focused.Blur();
             Focused = this;
+            SetFocused(true);
             caretVisible = true;
             caretTimer = 0f;
             if (Keyboard.current != null) Keyboard.current.onTextInput += OnTextInput;
@@ -81,6 +85,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             if (Focused != this) return;
             Focused = null;
+            SetFocused(false);
             if (Keyboard.current != null) Keyboard.current.onTextInput -= OnTextInput;
 #if UNITY_IOS && !UNITY_EDITOR
             if (touchKeyboard != null) touchKeyboard.active = false;
@@ -91,9 +96,18 @@ namespace SpatialLauncher.SpatialWindows
 
         public static void BlurAll() => Focused?.Blur();
 
+        protected override void OnInteractableChanged(bool nowInteractable)
+        {
+            base.OnInteractableChanged(nowInteractable);
+            if (!nowInteractable) Blur();
+        }
+
+        public override void Press(Vector3 worldPoint) => BeginPress();
+
         public override void Release(bool inside)
         {
-            if (inside) Focus();
+            EndPress();
+            if (inside && Interactable) Focus();
         }
 
         void OnTextInput(char character)
@@ -102,8 +116,9 @@ namespace SpatialLauncher.SpatialWindows
             SetText(Text + character);
         }
 
-        void Update()
+        protected override void Update()
         {
+            base.Update();
             if (Focused != this) return;
 
             caretTimer += Time.unscaledDeltaTime;
@@ -152,7 +167,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Text.Length == 0 && !focused)
             {
                 label.text = placeholder;
-                label.color = new Color(0.55f, 0.57f, 0.62f);
+                label.color = UITheme.TextSecondary;
             }
             else
             {

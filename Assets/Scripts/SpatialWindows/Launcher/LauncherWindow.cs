@@ -1,3 +1,4 @@
+using SpatialLauncher.SpatialWindows.Theme;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Video;
@@ -65,7 +66,6 @@ namespace SpatialLauncher.SpatialWindows
         [Header("Launcher")]
         [SerializeField] bool openOnStart = true;
         [SerializeField] Key openKey = Key.H;
-        [SerializeField] Vector2 launcherSize = new Vector2(0.5f, 0.3f);
         [Tooltip("Width of the media shown in Image and Video windows, in metres.")]
         [SerializeField] float mediaWidth = 0.6f;
 
@@ -98,7 +98,9 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<GestureRecognizers>(out _)) gameObject.AddComponent<GestureRecognizers>();
             if (!TryGetComponent<GestureDebugOverlay>(out _)) gameObject.AddComponent<GestureDebugOverlay>();
             if (!TryGetComponent<VoiceTyping>(out _)) gameObject.AddComponent<VoiceTyping>();
+            if (!TryGetComponent<HoloKitCameraFix>(out _)) gameObject.AddComponent<HoloKitCameraFix>();
             if (!TryGetComponent<StereoPassthrough>(out _)) gameObject.AddComponent<StereoPassthrough>();
+            if (!TryGetComponent<BackdropBlur>(out _)) gameObject.AddComponent<BackdropBlur>();
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
             if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
@@ -117,7 +119,7 @@ namespace SpatialLauncher.SpatialWindows
 
         void OnHiddenChanged(bool isHidden)
         {
-            if (LauncherContent != null) LauncherContent.SetEntryText(HideEntry, isHidden ? "Show all" : "Hide all", isHidden ? "SHOW" : "HIDE");
+            if (LauncherContent != null) LauncherContent.SetEntryText(HideEntry, isHidden ? "Show all" : "Hide all", isHidden ? UIIcons.Visibility : UIIcons.VisibilityOff);
         }
 
         /// <summary>Hides every window but the launcher, or brings them back.</summary>
@@ -148,22 +150,22 @@ namespace SpatialLauncher.SpatialWindows
                 return Launcher;
             }
 
-            Launcher = manager.Spawn("Home", launcherSize);
+            Launcher = manager.Spawn("Home", LauncherContent.WindowSize);
             if (Launcher == null) return null;
 
             LauncherContent = new GameObject().AddComponent<LauncherContent>();
             LauncherContent.Init(Launcher, manager.WindowMaterial, new[]
             {
-                new LauncherContent.Entry { Label = "Image", Glyph = "IMG", Color = ImageIconColor, Open = () => OpenImageWindow() },
-                new LauncherContent.Entry { Label = "Video", Glyph = "VID", Color = VideoIconColor, Open = () => OpenVideoWindow() },
-                new LauncherContent.Entry { Label = "Blank", Glyph = "+", Color = BlankIconColor, Open = () => OpenBlankWindow() },
-                new LauncherContent.Entry { Label = "Laptop", Glyph = "PC", Color = LaptopIconColor, Open = () => OpenLaptopWindow() },
-                new LauncherContent.Entry { Label = "Void", Glyph = "VOID", Color = VoidIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Void) },
-                new LauncherContent.Entry { Label = "Cinema", Glyph = "CIN", Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
-                new LauncherContent.Entry { Label = "Sky", Glyph = "SKY", Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
-                new LauncherContent.Entry { Label = "Settings", Glyph = "SET", Color = SettingsIconColor, Open = () => OpenSettings() },
-                new LauncherContent.Entry { Label = "Hide all", Glyph = "HIDE", Color = HideIconColor, Open = ToggleHideAll },
-                new LauncherContent.Entry { Label = "Cast", Glyph = "CAST", Color = CastIconColor, Open = () => OpenCastPicker() },
+                new LauncherContent.Entry { Label = "Image", Icon = UIIcons.Image, Color = ImageIconColor, Open = () => OpenImageWindow() },
+                new LauncherContent.Entry { Label = "Video", Icon = UIIcons.Movie, Color = VideoIconColor, Open = () => OpenVideoWindow() },
+                new LauncherContent.Entry { Label = "Blank", Icon = UIIcons.CheckBoxOutlineBlank, Color = BlankIconColor, Open = () => OpenBlankWindow() },
+                new LauncherContent.Entry { Label = "Laptop", Icon = UIIcons.Laptop, Color = LaptopIconColor, Open = () => OpenLaptopWindow() },
+                new LauncherContent.Entry { Label = "Void", Icon = UIIcons.DarkMode, Color = VoidIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Void) },
+                new LauncherContent.Entry { Label = "Cinema", Icon = UIIcons.Theaters, Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
+                new LauncherContent.Entry { Label = "Sky", Icon = UIIcons.WbSunny, Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
+                new LauncherContent.Entry { Label = "Settings", Icon = UIIcons.Settings, Color = SettingsIconColor, Open = () => OpenSettings() },
+                new LauncherContent.Entry { Label = "Hide all", Icon = UIIcons.VisibilityOff, Color = HideIconColor, Open = ToggleHideAll },
+                new LauncherContent.Entry { Label = "Cast", Icon = UIIcons.Cast, Color = CastIconColor, Open = () => OpenCastPicker() },
             });
             OnHiddenChanged(manager.WindowsHidden);
             return Launcher;

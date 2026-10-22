@@ -93,6 +93,7 @@ namespace SpatialLauncher.SpatialWindows
             s.windows ??= new WindowSettings();
             s.immersion ??= new ImmersionSettings();
             s.voice ??= new VoiceSettings();
+            s.performance ??= new PerformanceSettings();
 
             s.display.brightness = Mathf.Clamp(s.display.brightness, 0.1f, 1f);
             s.display.ipdMm = Mathf.Clamp(s.display.ipdMm, 54f, 74f);
