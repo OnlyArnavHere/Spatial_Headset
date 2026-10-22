@@ -100,6 +100,29 @@ Then run `agent.py`. The flags that matter here:
 
 Run `python agent.py --help` for the rest (`--window`, `--monitor`, `--fps`, `--bitrate`, `--encoder`). More detail is in [Tools/LaptopAgent/README.md](../Tools/LaptopAgent/README.md).
 
+## Using the app
+
+The packaged agent is a desktop app, so you don't need Python or the command line. The CLI above still works and is unchanged.
+
+**Download.** Get the latest build from the repository's GitHub Releases page: on Windows the installer (`SpatialLauncherAgent-<version>-setup.exe`) or the zip; on macOS (Apple Silicon) the zipped `.app`. Releases are marked pre-release for now. The README has the SmartScreen and Gatekeeper steps for unsigned builds.
+
+**First run.** The app doesn't ship the ffmpeg program or MediaMTX (the PyAV libraries inside the app are separate). On first start it downloads pinned, checksum-verified copies into its data folder and does nothing the second time:
+
+- Windows: `%LOCALAPPDATA%\SpatialLauncher\agent\bin`
+- macOS: `~/Library/Application Support/SpatialLauncher/agent/bin`
+
+**The status window** shows the agent's state and a log. In it:
+
+- **Pair new headset...** opens the pair dialog. Type the code the headset shows and press Pair. Pairing works only while the dialog is open, for 2 minutes at most.
+- **Allow control** (off by default) lets the headset use the mouse and keyboard, and you are still asked at each grant. **Cast only** allows media keys only. The two exclude each other.
+- **Start when I log in** is available in the installed app.
+- **Headset address** dials a fixed address (empty means find headsets over Bonjour). **Wired** also looks for the USB Personal Hotspot (see [wired.md](wired.md)).
+- **Stop all** ends every session now. The kill hotkey (Ctrl+Alt+Shift+Q on Windows and Linux, Ctrl+Option+Shift+Q on macOS) does the same from anywhere.
+
+**Closing the window** keeps the agent running in the background: the tray icon on Windows, the Dock on macOS. Use the tray menu or the app's Quit to stop it. Launching the app again shows the window.
+
+**macOS permissions** are asked for at the moment they're first needed, once per run: Screen Recording when the first stream starts, Accessibility when you turn on Allow control or Cast only, and Input Monitoring only if you press Enable hotkey (it is just for the kill hotkey). The window's macOS permissions section has an **Open Settings** button for each. On macOS 15 and later, the first connection to a headset also triggers the Local Network prompt; if it's denied, turn the app on under Privacy & Security > Local Network. Microphone access is never requested.
+
 ## Pairing by code
 
 Do this once per laptop.
@@ -166,12 +189,12 @@ Measured on Windows 11 on this project's laptop:
 
 ## Dependencies and licences
 
-From `Tools/LaptopAgent/requirements.txt`. None is GPL. ffmpeg is a separate program, not a Python package; see the README's licence table.
+From `Tools/LaptopAgent/requirements.txt`. No Python package's own licence is GPL, but the PyPI `av` wheels bundle FFmpeg libraries that include GPL x264/x265 (see the av row), so the packaged app is a pre-release for now. ffmpeg itself is a separate program, not a Python package; see the README's licence table.
 
 | Package | Version | Licence |
 |---|---|---|
 | aiortc | 1.15.0 | BSD-3-Clause |
-| av | 17.1.0 | BSD-3-Clause (its wheels bundle LGPL FFmpeg libraries) |
+| av | 17.1.0 | BSD-3-Clause (the PyPI wheels bundle FFmpeg libraries including GPL x264/x265; an LGPL-only build is planned) |
 | zeroconf | 0.151.5 | LGPL-2.1-or-later |
 | cryptography | 46.0.5 | Apache-2.0 OR BSD-3-Clause |
 | aioice | 0.10.2 | BSD-3-Clause |

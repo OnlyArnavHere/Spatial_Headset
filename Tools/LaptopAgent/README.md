@@ -10,6 +10,24 @@ headset, and several can be open at once, each with its own video stream and its
 > Prototype. It has been tested with the agent and the Unity editor on the same Windows machine, not yet with an
 > iPhone over Wi-Fi. Read **Risks** before using `--input` or `--keyboard`.
 
+## Download
+
+Packaged builds are on the repository's GitHub Releases page (tags `agent-vX.Y.Z`): the Windows installer or zip, and a zipped `.app` for macOS on Apple Silicon. They are marked pre-release until the app ships an LGPL-only PyAV build, because the PyPI `av` wheels bundle GPL x264/x265. The app is unsigned. Using it is covered in [Doc/connect.md](../../Doc/connect.md#using-the-app).
+
+- **Windows:** SmartScreen may say "Windows protected your PC". Choose **More info > Run anyway**, once, for the installer or for the exe from the zip. The installer is per user and needs no admin.
+- **macOS:** unzip, move `Spatial Launcher Agent.app` to `/Applications`, and open it. The first launch is blocked: go to System Settings > Privacy & Security and choose **Open Anyway**. If macOS says the app is "damaged", run `xattr -dr com.apple.quarantine "/Applications/Spatial Launcher Agent.app"` and open it again.
+- **After each update on macOS**, permissions have to be granted again (unsigned builds get a new identity): remove the old Spatial Launcher Agent entries under Screen Recording and Accessibility (and Input Monitoring if you use the hotkey) and add the new app.
+
+## Building from source
+
+`packaging/build_win.ps1` makes a venv in `build/venv`, installs `requirements.txt` plus PyInstaller and pip-licenses, runs the unit tests, generates `THIRD_PARTY_LICENSES.txt`, builds `dist/SpatialLauncherAgent`, zips it, compiles the installer if Inno Setup's `iscc` is on PATH, and smoke-tests the exe (`--version`, `--selftest`). `packaging/build_mac.sh` does the same steps with `ditto`; it is **untested** (written without a Mac).
+
+## Releases
+
+Push a tag `agent-vX.Y.Z` and the `agent-release` workflow builds Windows and macOS, then publishes a GitHub release with the installer, both zips and `THIRD_PARTY_LICENSES-win.txt` / `THIRD_PARTY_LICENSES-mac.txt`. The release is marked pre-release until the app ships an LGPL-only PyAV build.
+
+**LGPL dependency builds (untested).** The `agent-deps` workflow (manual run, or a tag `agent-deps-vN`) builds a minimal LGPL-only FFmpeg 8.1 (no `--enable-gpl`, no x264/x265, only what PyAV needs to read RTSP and H.264 packets), PyAV 17.1.0 wheels against it for Windows (MSYS2 with the MSVC toolchain, `delvewheel`) and macOS arm64 (`delocate`), and a static macOS ffmpeg CLI. It publishes them, the FFmpeg source tarball, the configure lines and `SHA256SUMS` to a separate release. To use them, put that release's wheel URLs and SHA-256 values into the `AV_WHEEL_*` variables at the top of `agent-release.yml`, and the macOS ffmpeg URL, version and SHA-256 into `tools_fetch.py`. `agent-release` then installs the wheels over the PyPI `av` and drops the pre-release flag only when every one of those values is filled in. **The `agent-deps` workflow has never run; expect to fix it on its first real run.** Note that the macOS ffmpeg it builds has no software fallback encoder: the agent's macOS fallback is libopenh264, which this CLI does not include, so capture relies on `h264_videotoolbox` working.
+
 ## What runs
 
 | Piece | Role | Listens on |
@@ -19,8 +37,8 @@ headset, and several can be open at once, each with its own video stream and its
 | `session.py` | Dials the headset (found over Bonjour, or `--headset`), runs the signed handshake, and then one WebRTC session: a control data channel, one input channel and one video track per window slot. The headset opens its own listening socket; the laptop dials out | outbound TCP to the headset (port 47810 unless given); media goes over WebRTC (UDP) between the two |
 | `dispatch.py` | Turns the headset's input messages (from the per-window `input-k` data channels) into mouse and keyboard input, and runs the control state machine (view only until you allow it). Only with `--input` does it inject mouse input, and with `--keyboard` also keyboard input, into the window of the channel it arrived on | nothing: it reads the DTLS data channel of the existing session |
 
-`agent.py` starts and stops all of them. They run only while `agent.py` runs: nothing is installed as a service or
-started at login, and if `agent.py` is closed or killed, Windows ends ffmpeg and MediaMTX with it.
+`agent.py` starts and stops all of them. They run only while `agent.py` runs: nothing is installed as a service,
+and it only starts at login if you turn on "Start when I log in" in the installed app. If `agent.py` is closed or killed, Windows ends ffmpeg and MediaMTX with it.
 
 ## Setup (once)
 
@@ -270,7 +288,7 @@ Read these before using `--input` or `--keyboard`.
 
 ## Licenses
 
-The agent's own code is MIT, like the rest of the repository. It uses, but does not include:
+The agent's own code is MIT, like the rest of the repository. When run from source it uses the components below and includes none of them. The **packaged builds bundle** the Python runtime, the PyInstaller bootloader, tkinter and the Python packages from `requirements.txt`, including PyAV and the FFmpeg libraries inside its wheel (the PyPI wheels include GPL x264/x265). They do **not** bundle ffmpeg or MediaMTX, which are downloaded on first run.
 
 | Component | Version | License | How it's used |
 |---|---|---|---|
@@ -278,9 +296,11 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | [FFmpeg](https://ffmpeg.org), essentials build by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) | 9.0.2 | GPLv3 (the build includes x264 and other GPL components) | downloaded by `setup.py`, run as a separate program |
 | [cryptography](https://github.com/pyca/cryptography) | 46.0.5 | Apache-2.0 OR BSD-3-Clause | Python package (`requirements.txt`): RSA key and signatures |
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15.0 | BSD-3-Clause | Python package (`requirements.txt`): WebRTC link to the headset |
-| [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; its wheels bundle LGPL-licensed FFmpeg libraries |
+| [PyAV](https://github.com/PyAV-Org/PyAV) (`av`) | 17.1.0 | BSD-3-Clause | Python package (`requirements.txt`): video frames for aiortc; the PyPI wheels bundle FFmpeg libraries that include GPL x264/x265, so a packaged build stays a pre-release until an LGPL-only build lands |
 | [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | 0.151.5 | LGPL-2.1-or-later | Python package (`requirements.txt`): Bonjour discovery. Used as an unmodified, separately installed library |
 | [pyobjc](https://github.com/ronaldoussoren/pyobjc): pyobjc-core, pyobjc-framework-Quartz, -Cocoa, -ApplicationServices | 11.1 | MIT | Python packages (`requirements.txt`, macOS only): screens, windows, Quartz events, permission checks |
+| [FFmpeg](https://ffmpeg.org) LGPL builds: Windows from [BtbN](https://github.com/BtbN/FFmpeg-Builds) (9.0.2); macOS the static LGPL 8.1.3 from the `agent-deps` release | 9.0.2 / 8.1.3 | LGPL-2.1-or-later (no x264) | the packaged app downloads it on first run into `%LOCALAPPDATA%\SpatialLauncher\agent\bin` (macOS: `~/Library/Application Support/SpatialLauncher/agent/bin`), checksum-verified, run as a separate program. On macOS this applies once the `agent-deps` ffmpeg SHA-256 is filled in `tools_fetch.py`; until then the packaged app uses the system `ffmpeg` on PATH |
+| [PyInstaller](https://pyinstaller.org) | 6.22+ | GPL-2.0-or-later with a bootloader exception | build tool; the exception lets the bundled bootloader and runtime ship in a non-GPL app |
 | ffmpeg and mediamtx from Homebrew | | | macOS: installed by you, run as separate programs; an ffmpeg you install is under its own licence |
 | [keyring](https://github.com/jaraco/keyring) | 25.7.0 | MIT | Python package (`requirements.txt`, macOS only): the Keychain wrap key |
 | jaraco.classes, jaraco.functools, jaraco.context, more-itertools | | MIT | keyring dependencies (macOS only) |
@@ -291,6 +311,6 @@ The agent's own code is MIT, like the rest of the repository. It uses, but does 
 | google-crc32c 1.9.0, pyOpenSSL 26.2.0 | | Apache-2.0 | aiortc dependencies (pyOpenSSL is pinned so `cryptography` stays at 46.0.5) |
 | ifaddr 0.2.0, pyee 15.0.0 | | MIT | aiortc / zeroconf dependencies |
 
-FFmpeg's GPL applies to FFmpeg itself. The agent only starts it as a separate process and doesn't link to it, and
+FFmpeg's GPL applies to FFmpeg itself. The agent only starts the ffmpeg program as a separate process and doesn't link to it (PyAV, however, links the FFmpeg libraries in-process, which is why the PyPI wheel's GPL x264/x265 matter for packaged builds), and
 nothing from FFmpeg goes into the Unity project. If you redistribute `bin/` (for example in a zip for a friend),
 include `bin/LICENSE-ffmpeg.txt` and point to the FFmpeg source, as the GPL requires.
