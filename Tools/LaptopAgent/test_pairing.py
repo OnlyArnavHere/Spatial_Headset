@@ -175,7 +175,8 @@ class StoreTests(unittest.TestCase):
         doc = json.loads((self.home / "pairs.json").read_text(encoding="utf-8"))
         self.assertEqual(doc["version"], 1)
         (entry,) = doc["pairs"]
-        self.assertEqual(sorted(entry), ["added", "fingerprint", "name", "public_key"])
+        self.assertEqual(sorted(entry), ["added", "always_allow", "fingerprint", "name", "public_key"])
+        self.assertIs(entry["always_allow"], False)
         self.assertEqual(entry["added"], "2026-01-02T03:04:05Z")
         self.assertEqual(entry["fingerprint"], identity.fingerprint(KEY_A))
         self.assertEqual(len(entry["fingerprint"]), 16)

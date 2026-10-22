@@ -85,7 +85,8 @@ Then run `agent.py`. The flags that matter here:
 |---|---|
 | `--list` | List monitors and windows, then exit |
 | `--pairs` | List paired headsets, then exit |
-| `--revoke <name>` | Forget one paired headset, then exit |
+| `--revoke <name>` | Forget one paired headset, then exit (this also ends its always-allow) |
+| `--revoke-always <name>` | Keep the pair, but ask again on the laptop before it takes control |
 | `--pair` | Pair a new headset: type the code it shows, confirm there, exit |
 | `--headset ip[:port]` | Dial this address (port 47810 unless given) instead of looking over Bonjour. Repeatable |
 | `--input` | Allow the headset to move and click the mouse, once you approve |
@@ -159,6 +160,8 @@ Measured on Windows 11 on this project's laptop:
 
 - Sessions start view-only. Tapping Connect is the consent to view.
 - Control needs all three: the agent run with `--input`, approval on the headset's consent prompt, and Yes on the laptop's prompt. The laptop prompt defaults to No and is refused after 30 s. Nothing is injected before both approvals.
+- **Always allow:** the laptop prompt can also say "Always allow this headset for control" (a checkbox on Windows, a button on macOS and Linux; never the default). After that, that one paired headset, recognised by its full public key, gets control without the laptop prompt. `--input` and the headset's own consent prompt are still needed. Each such grant is logged, the run banner lists the always-allowed headsets, and `--pairs` and the app's Paired headsets list mark them. To ask again, use **Stop always allowing** in the app or `--revoke-always <name>`; removing the pair (`--revoke <name>`) also ends it, and a re-paired headset starts without it.
+- The laptop shell (search, dock or taskbar, launching apps, window actions) needs exactly the same as control: a session that is view only or cast only gets every shell request refused.
 - Cast-only mode allows media keys only, from a fixed list, with no laptop prompt. Control requests are refused.
 - Kill hotkey on the laptop: Ctrl+Alt+Shift+Q (Windows, Linux) or Ctrl+Option+Shift+Q (macOS). It closes every session, stops video, and stops reconnecting until the agent restarts.
 - On the headset, a LIVE indicator shows while a session runs. Panic ends the session and cancels a waiting connection: F8 in the editor, the cross-sweep gesture, or touch Stop.
@@ -168,7 +171,7 @@ Measured on Windows 11 on this project's laptop:
 - **Encryption:** DTLS-SRTP for video and DTLS for the data channels.
 - **Mutual pinning:** each side has an RSA-2048 identity key. The laptop's is kept in DPAPI on Windows, encrypted under a login Keychain key on macOS, and in a 0600 file on Linux; the headset's in the iOS Keychain. Signatures are RSASSA-PKCS1-v1_5 with SHA-256 over a transcript that binds both keys, both nonces and the DTLS fingerprints. A man in the middle can't swap certificates.
 - **Pairing code:** it is bound with PBKDF2-HMAC-SHA256 (100,000 iterations) and HMAC. The headset proves nothing derived from the code to an unverified laptop. The laptop sends its code proof first.
-- **Two approvals for control**, and the kill hotkey.
+- **Two approvals for control** (the laptop's can be made permanent per headset with always allow, and revoked), and the kill hotkey.
 - **Limits before authentication** on the headset listener: 64 KiB frames, 5 s until the laptop is verified, 5 attempts per minute per IP, one at a time.
 
 ## What is NOT protected

@@ -109,20 +109,24 @@ class _Prompt:
     """A Yes/No box. wait() shows it and blocks the calling thread until it is answered, dismissed or times out;
     dismiss() may be called from any other thread (False until wait() has started on its thread)."""
 
-    def __init__(self, text: str, caption: str, timeout_ms: int) -> None:
+    def __init__(self, text: str, caption: str, timeout_ms: int, always: str | None = None) -> None:
         self._args = (text, caption, timeout_ms)
+        self._always = always
         self._thread_id = None
 
     def wait(self) -> str:
+        """"yes", "no", "timeout", or "always" (Yes with the always-allow box ticked; only when `always` was given)."""
         self._thread_id = threading.get_native_id()
+        if self._always:
+            return _w.ask_yes_no(*self._args, always=self._always)
         return _w.ask_yes_no(*self._args)
 
     def dismiss(self) -> bool:
         return self._thread_id is not None and _w.dismiss_prompt(self._thread_id)
 
 
-def open_prompt(text: str, caption: str, timeout_ms: int) -> _Prompt:
-    return _Prompt(text, caption, timeout_ms)
+def open_prompt(text: str, caption: str, timeout_ms: int, always: str | None = None) -> _Prompt:
+    return _Prompt(text, caption, timeout_ms, always)
 
 
 def visible_rect(rect):

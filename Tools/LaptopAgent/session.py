@@ -312,9 +312,12 @@ class LinkSession:
         if channel is not None and channel.readyState == "open":
             channel.send(json.dumps(message, separators=(",", ":")))
 
-    def set_headset(self, name: str, fingerprint: str) -> None:
-        """Who is on the other end, for the approver."""
+    def set_headset(self, name: str, fingerprint: str, spki: bytes | None = None) -> None:
+        """Who is on the other end, for the approver: the name and fingerprint it shows, and the full public key from
+        the signed handshake, which is what an always-allow mark is looked up by."""
         self.dispatcher.headset = {"name": name, "fingerprint": fingerprint}
+        if spki:
+            self.dispatcher.headset["spki"] = bytes(spki)
 
     def _on_control_open(self) -> None:
         if self._welcomed:
@@ -736,7 +739,8 @@ class LinkRunner:
             await session.close()
             return "ignored", ""
         self.active, self.active_spki = session, result.headset_spki
-        session.set_headset(result.name, identity.format_fp(identity.fingerprint(result.headset_spki)))
+        session.set_headset(result.name, identity.format_fp(identity.fingerprint(result.headset_spki)),
+                            result.headset_spki)
         if self.revoked:
             session.dispatcher.revoke("kill switch")  # pressed while the handshake ran
         self._idle.clear()

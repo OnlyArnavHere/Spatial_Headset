@@ -228,24 +228,31 @@ def kill_masks() -> list[int]:
 # --- Approval dialog -------------------------------------------------------------------------------
 
 EXIT_YES, EXIT_NO, EXIT_TIMEOUT = 0, 1, 5  # zenity's codes; the tkinter fallback script uses the same
+EXIT_ALWAYS = 2  # the tkinter fallback's "Always allow"; zenity says it by printing the button's label
+ALWAYS_BUTTON = "Always allow"
 
 
 def timeout_seconds(timeout_ms: int) -> int:
     return max(1, math.ceil(timeout_ms / 1000))
 
 
-def zenity_argv(text: str, caption: str, timeout_s: int) -> list[str]:
+def zenity_argv(text: str, caption: str, timeout_s: int, always: bool = False) -> list[str]:
     """Text and title are single argv items (never a shell string); the default button is No."""
     return ["zenity", "--question", "--no-markup", "--default-cancel", f"--timeout={timeout_s}",
-            "--ok-label=Yes", "--cancel-label=No", f"--title={caption}", f"--text={text}"]
+            "--ok-label=Yes", "--cancel-label=No", *([f"--extra-button={ALWAYS_BUTTON}"] if always else []),
+            f"--title={caption}", f"--text={text}"]
 
 
-def tk_argv(script: str, text: str, caption: str, timeout_s: int) -> list[str]:
+def tk_argv(script: str, text: str, caption: str, timeout_s: int, always: bool = False) -> list[str]:
+    extra = ["always"] if always else []
     if getattr(sys, "frozen", False):
-        return [sys.executable, "--_linux_dialog", text, caption, str(timeout_s)]
-    return [sys.executable, "-I", script, text, caption, str(timeout_s)]
+        return [sys.executable, "--_linux_dialog", text, caption, str(timeout_s), *extra]
+    return [sys.executable, "-I", script, text, caption, str(timeout_s), *extra]
 
 
-def answer_for(returncode: int | None) -> str:
-    """"yes", "no" or "timeout" from a dialog's exit code. Anything unexpected (a kill, an error) is "no"."""
+def answer_for(returncode: int | None, stdout: str = "", always: bool = False) -> str:
+    """"yes", "always", "no" or "timeout" from a dialog's exit code (and, for zenity's extra button, what it printed).
+    Anything unexpected (a kill, an error) is "no"; "always" only when the box offered it."""
+    if always and (returncode == EXIT_ALWAYS or (returncode == EXIT_NO and (stdout or "").strip() == ALWAYS_BUTTON)):
+        return "always"
     return {EXIT_YES: "yes", EXIT_TIMEOUT: "timeout"}.get(returncode, "no")

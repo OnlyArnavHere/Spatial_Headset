@@ -68,6 +68,7 @@ python agent.py                                 # normal run: finds a paired hea
 python agent.py --headset 192.168.1.5[:PORT]    # dial this paired headset directly (repeatable; first to answer wins)
 python agent.py --pairs                         # list paired headsets, then exit
 python agent.py --revoke NAME                   # forget one, then exit
+python agent.py --revoke-always NAME            # keep it, but ask again before it may take control
 ```
 
 **Pairing (once per headset):** on the headset open Laptop > Pair new laptop; it shows a code. Run
@@ -106,6 +107,15 @@ wants to control this laptop's mouse[ and keyboard]. Allow?` The default button 
 No (the headset sees "timeout"). The box doesn't take focus by itself, so typing elsewhere shouldn't answer it; if Windows does activate it, typing "y" answers Yes, while Enter and Space choose the default, No. The
 headset's name is shown as plain, shortened text. Only one box is open at a time. After a No or a timeout the headset
 gets "busy" for 10 s without a new box. Closing the session or pressing the kill switch closes the box.
+
+**Always allow:** the box also offers "Always allow this headset for control": a checkbox on Windows (a task
+dialog; if that can't open, the plain Yes/No box is shown and always allow isn't offered), an "Always allow" button on
+macOS and Linux. It is never the default, and only counts together with Yes. The mark is stored on that pair in
+`pairs.json` and matched on the headset's full public key from the signed handshake. Later control requests from that
+headset get no box: each grant is logged as `CONTROL ALLOWED WITHOUT ASKING`, and the run banner lists always-allowed
+headsets. `--input` and the headset's own consent prompt are still needed, and the kill switch and the headset's
+panic stop work as before. Undo it with **Stop always allowing** in the app's Paired headsets, `--revoke-always NAME`,
+or by forgetting the pair; a re-paired headset starts without it.
 
 **Cast-only media needs no prompt:** with `--cast-only` the headset may play/pause, seek, skip and change the volume,
 and nothing else; no control is ever granted.

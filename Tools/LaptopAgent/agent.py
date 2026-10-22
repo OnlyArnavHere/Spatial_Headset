@@ -9,6 +9,7 @@
   python agent.py --headset 192.168.1.5           dial this paired headset directly instead of finding it over Bonjour
   python agent.py --pairs                         list paired headsets (name, fingerprint, date), then exit
   python agent.py --revoke NAME                   forget a paired headset, then exit
+  python agent.py --revoke-always NAME            keep the pair, but ask again before it may take control
   python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
   python agent.py --cast-only                     view only, plus play/pause, seek, next/previous and volume (Cast)
   python agent.py --wired                         print the USB Personal Hotspot address and dial the headset over it
@@ -69,6 +70,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--list", action="store_true", help="list monitors and windows, then exit")
     p.add_argument("--pairs", action="store_true", help="list paired headsets, then exit")
     p.add_argument("--revoke", metavar="NAME", help="forget the paired headset called NAME, then exit")
+    p.add_argument("--revoke-always", metavar="NAME",
+                   help="stop always allowing the paired headset called NAME to take control (ask again), then exit")
     p.add_argument("--max-width", type=int, default=1920, help="scale each stream down to at most this width (default 1920)")
     p.add_argument("--max-height", type=int, default=1080, help="scale each stream down to at most this height (default 1080)")
     p.add_argument("--fps", type=int, default=30, help="frame rate (default 30)")
@@ -248,9 +251,9 @@ def check_permissions(args: argparse.Namespace, rows: list) -> None:
     empty and nothing prints).
     Missing Screen Recording stops the agent unless it only lists or pairs; missing Accessibility stops --input and
     --cast-only; missing Input Monitoring only costs the kill-switch hotkey, so it warns."""
-    lists_only = args.list or args.pairs or args.pair or args.revoke is not None
+    lists_only = args.list or args.pairs or args.pair or args.revoke is not None or getattr(args, "revoke_always", None) is not None
     needs_input = args.input or args.cast_only
-    pairing_only = args.pairs or args.pair or args.revoke is not None
+    pairing_only = args.pairs or args.pair or args.revoke is not None or getattr(args, "revoke_always", None) is not None
     refused = linux = False
     for row in rows:
         if row.ok:
@@ -317,11 +320,18 @@ def _pairs_command(args: argparse.Namespace) -> int:
             return 0
         print(f"no pair named {args.revoke}")
         return 1
+    if getattr(args, "revoke_always", None) is not None:
+        if store.set_always_allow(args.revoke_always, False):
+            print(f"{args.revoke_always} has to be allowed again before each control session.")
+            return 0
+        print(f"no pair named {args.revoke_always}")
+        return 1
     pairs = store.list()
     if not pairs:
         print("no paired headsets")
     for p in pairs:
-        print(f"{p.name}  {identity.format_fp(p.fingerprint)}  {p.added}")
+        always = "  ALWAYS ALLOWED for control (--revoke-always NAME to ask again)" if p.always_allow else ""
+        print(f"{p.name}  {identity.format_fp(p.fingerprint)}  {p.added}{always}")
     return 0
 
 
@@ -507,7 +517,7 @@ def main() -> None:
     if args.list:
         list_targets()
         return
-    if args.pairs or args.revoke is not None:
+    if args.pairs or args.revoke is not None or getattr(args, "revoke_always", None) is not None:
         sys.exit(pairs_command(args))
     if args.pair:
         sys.exit(pair_main(args))
@@ -540,7 +550,7 @@ def main() -> None:
     runner = LinkRunner(ident, store, streams, RTSP_PORT, max_windows=args.max_windows,
                         input_enabled=args.input, keyboard_enabled=args.keyboard, cast_only=args.cast_only,
                         dry_run=args.dry_run_input, pinned=args.headset,
-                        approver=approval.LaptopApprover(keyboard=args.keyboard) if args.input and not args.cast_only else None, discover=not args.headset)
+                        approver=approval.LaptopApprover(keyboard=args.keyboard, store=store) if args.input and not args.cast_only else None, discover=not args.headset)
 
     keyboard = "off (start with --input --keyboard to allow it)"
     if args.keyboard:
@@ -556,6 +566,12 @@ def main() -> None:
         link = "dialling " + ", ".join(f"{h}:{p}" for h, p in args.headset)
     else:
         link = "looking for headsets over Bonjour (_spatiallauncher._tcp)" + (" and the USB hotspot" if wired is not None else "")
+    try:
+        always = [p.name for p in store.list() if p.always_allow]
+    except (ValueError, OSError):
+        always = []
+    always_line = (f"\n Always allowed:    {', '.join(always)} (no Yes/No box; --revoke-always NAME to ask again)"
+                   if always and args.input and not args.cast_only else "")
     started = (f"\n Streaming now:     {pinned_stream.target.description} on /{pinned_stream.path}"
                f"   ({pinned_stream.size[0]}x{pinned_stream.size[1]})") if pinned_stream else ""
     print(f"""
@@ -567,7 +583,7 @@ def main() -> None:
                     up to {args.max_windows} windows at once; this laptop is {identity.format_fp(ident.fingerprint)}
  Mouse input:       {'ON - ' + ('DRY RUN, logging only' if args.dry_run_input else 'the paired headset can move and click your mouse, once you click Yes on this laptop') if args.input else 'off (start with --input to allow it)'}
  Keyboard input:    {keyboard}
- Cast only:         {cast}
+ Cast only:         {cast}{always_line}
  Kill switch:       {kill_switch}{wired_lines}
 
  Press Ctrl+C to stop.
