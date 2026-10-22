@@ -22,6 +22,8 @@ Control channel (JSON text, at most 16 KiB per message; anything bigger ends the
   headset -> agent  {"type":"control-request","consent":"full control"}, {"type":"control-release"}, {"type":"stop"}
                     agent -> headset {"type":"control-granted"|"control-denied"|"control-revoked",...}: see dispatch.py
   headset -> agent  {"type":"stop"} ends the session ("headset stopped"), after revoking control and releasing input
+  headset -> agent  apps.*, window.*, search.query: the laptop shell, see shell.py. Refused unless control is GRANTED
+                    (with --input, not cast-only). The welcome's "shell" says {"os","available"}.
 The input channels carry the mouse, key, text and media messages described in dispatch.py, which are checked there; the
 agent has no other way in for input.
 
@@ -52,6 +54,7 @@ import dispatch
 import handshake
 import identity
 import pairing
+import shell
 from streams import Stream, StreamManager
 
 log = logging.getLogger("session")
@@ -59,6 +62,7 @@ log = logging.getLogger("session")
 PROTOCOL_VERSION = 5
 MAX_CONTROL_MESSAGE = 16 * 1024
 MAX_PENDING_REQUESTS = 8      # control requests handled at once; more are dropped
+MAX_SHELL_TASKS = 32          # shell requests in flight; more are answered "busy"
 MAX_TARGETS = 100             # windows listed in one `targets` message
 PLAYER_RETRY_S = 5.0          # how long to wait for ffmpeg to start publishing
 DISCONNECTED_LIMIT_S = 10.0   # a session ends after this long in "disconnected"
@@ -177,7 +181,8 @@ def open_player(url: str) -> MediaPlayer:
 class LinkSession:
     def __init__(self, streams: StreamManager, rtsp_port: int, *, max_windows: int = 4, input_enabled: bool = False,
                  keyboard_enabled: bool = False, cast_only: bool = False, dry_run: bool = False,
-                 approver: dispatch.Approver | None = None, revoked: bool = False):
+                 approver: dispatch.Approver | None = None, revoked: bool = False,
+                 shell_backend: "shell.ShellBackend | None" = None):
         self.streams = streams
         self.rtsp_port = rtsp_port
         self.max_windows = max_windows
@@ -198,6 +203,21 @@ class LinkSession:
         self._welcomed = False
         self._oversize = False
         self._end_reason: str | None = None
+        self._shell_tasks: set[asyncio.Task] = set()
+        self.shell = shell.ShellService(shell_backend or shell.default_backend(), self._send, self._shell_gate,
+                                        dry_run=dry_run)
+
+    def _shell_gate(self) -> str | None:
+        """Shell requests need exactly what control needs: --input, not cast-only, and GRANTED control right now."""
+        if self.cast_only:
+            return "cast only"
+        if not self.input_enabled:
+            return "input off"
+        if self.dispatcher.state is dispatch.ControlState.REVOKED:
+            return "stopped"
+        if self.dispatcher.state is not dispatch.ControlState.GRANTED:
+            return "view only"
+        return None
 
     # --- Setup ---------------------------------------------------------------------------------------------------
 
@@ -268,10 +288,11 @@ class LinkSession:
             return
         self.closed = True
         self.dispatcher.close()  # never leave a button or key held down after the headset goes away
-        for task in list(self._requests):
+        for task in list(self._requests) + list(self._shell_tasks):
             task.cancel()
-        if self._requests:
-            await asyncio.gather(*self._requests, return_exceptions=True)
+        if self._requests or self._shell_tasks:
+            await asyncio.gather(*self._requests, *self._shell_tasks, return_exceptions=True)
+        self.shell.close()
         for slot in self.slots:
             await self._close_window(slot)
         if self.pc is not None:
@@ -303,7 +324,8 @@ class LinkSession:
                     "slots": [{"slot": s.index, "mid": s.mid} for s in self.slots],
                     "input": self.input_enabled, "keyboard": self.input_enabled and self.keyboard_enabled,
                     "cast_only": self.cast_only, "media": self.dispatcher.media_enabled, "dry_run": self.dry_run,
-                    "control": "revoked" if self.dispatcher.state is dispatch.ControlState.REVOKED else "view-only"})
+                    "control": "revoked" if self.dispatcher.state is dispatch.ControlState.REVOKED else "view-only",
+                    "shell": self.shell.info})
 
     def _on_control_close(self) -> None:
         self.control_closed = True
@@ -340,7 +362,19 @@ class LinkSession:
             self._send({"type": "pong", "id": message.get("id"), "t": message.get("t"),
                         "agent_ms": time.time() * 1000.0})
             return
-        if len(self._requests) >= MAX_PENDING_REQUESTS or self.closed:
+        if self.closed:
+            return
+        if self.shell.accepts(kind):
+            if len(self._shell_tasks) >= MAX_SHELL_TASKS:
+                rid = message.get("rid")
+                self._send({"type": "shell.error", **({"rid": rid} if isinstance(rid, int) and not isinstance(rid, bool)
+                                                      and 0 <= rid < 2 ** 31 else {}), "request": kind, "reason": "busy"})
+                return
+            task = asyncio.ensure_future(self.shell.handle(kind, message))
+            self._shell_tasks.add(task)
+            task.add_done_callback(self._shell_tasks.discard)
+            return
+        if len(self._requests) >= MAX_PENDING_REQUESTS:
             return
         task = asyncio.ensure_future(self._request(kind, message))
         self._requests.add(task)
@@ -510,7 +544,7 @@ class LinkRunner:
     def __init__(self, ident: identity.Identity, store: pairing.PairStore,
                  streams: StreamManager, rtsp_port: int, *, max_windows: int = 4, input_enabled: bool = False,
                  keyboard_enabled: bool = False, cast_only: bool = False, dry_run: bool = False,
-                 approver: dispatch.Approver | None = None,
+                 approver: dispatch.Approver | None = None, shell_backend: "shell.ShellBackend | None" = None,
                  pinned: list[tuple[str, int]] | None = None, discover: bool = False,
                  browse: Callable = discovery.browse, wired: Callable = discovery.wired_candidates,
                  on_connect_failed: Callable[[str, int, bool], None] | None = None):
@@ -521,7 +555,7 @@ class LinkRunner:
         self.rtsp_port = rtsp_port
         self.options = dict(max_windows=max_windows, input_enabled=input_enabled,
                             keyboard_enabled=keyboard_enabled, cast_only=cast_only, dry_run=dry_run,
-                            approver=approver)
+                            approver=approver, shell_backend=shell_backend)
         self.revoked = False  # the kill switch was pressed: it holds for the rest of the run
         self.stopped = False  # ...and so does this: no dialling, no new workers
         self._shutdown_task: asyncio.Task | None = None
