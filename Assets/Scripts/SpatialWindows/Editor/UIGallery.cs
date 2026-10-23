@@ -308,6 +308,8 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     return BuildShell(rig, manager, LaptopShell.ShellOs.Windows, null, true);
                 case "shell_app_windows":
                     return BuildShell(rig, manager, LaptopShell.ShellOs.Windows, null, false, "Browser");
+                case "switcher":
+                    return BuildSwitcher(rig, manager);
                 default:
                     Debug.LogWarning($"[UIGallery] No builder for '{id}'.");
                     return null;
@@ -339,6 +341,31 @@ namespace SpatialLauncher.SpatialWindows.Editor
                 agent.Settle();
                 content.Rebuild();
             }
+            return window;
+        }
+
+        // The switcher's overview: a few headset windows, then a made-up laptop's windows with its icons.
+        static SpatialWindow BuildSwitcher(Rig rig, WindowManager manager)
+        {
+            var window = Open(manager, "Switch windows", Switcher.SwitcherContent.WindowSize);
+            var agent = new Testing.Editor.ShellFixture.FakeAgent(LaptopShell.ShellOs.MacOS);
+            agent.Client.SetAvailable(true, LaptopShell.ShellOs.MacOS);
+            agent.Settle();
+            var entries = new List<Switcher.SwitcherEntry>();
+            foreach (var title in new[] { "Video", "Home", "Settings", "Laptop apps" })
+                entries.Add(new Switcher.SwitcherEntry { Title = title, Detail = "In the headset", Glyph = Switcher.SwitcherModel.GlyphFor(title, false) });
+            foreach (var app in agent.Client.Running)
+                foreach (var w in app.Windows)
+                    entries.Add(new Switcher.SwitcherEntry
+                    {
+                        Client = agent.Client, LaptopWindowId = w.Id, IconId = w.Id, Title = w.Title,
+                        Detail = $"{app.Name} on Studio laptop", Glyph = Theme.UIIcons.Laptop,
+                    });
+            foreach (var e in entries) if (e.IconId != null) agent.Client.Icon(e.IconId);
+            agent.Settle();
+            var content = AddContent<Switcher.SwitcherContent>(rig);
+            content.Init(window, rig.WindowMaterial);
+            content.Show(entries, 1, Switcher.AppSwitcher.TriggerHint);
             return window;
         }
 

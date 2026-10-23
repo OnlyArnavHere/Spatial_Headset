@@ -31,6 +31,7 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color SettingsIconColor = new Color(0.45f, 0.47f, 0.52f);
         static readonly Color HideIconColor = new Color(0.35f, 0.30f, 0.45f);
         static readonly Color CastIconColor = new Color(0.62f, 0.38f, 0.16f);
+        static readonly Color SwitchIconColor = new Color(0.25f, 0.45f, 0.55f);
         const int HideEntry = 8;
 
         [SerializeField] WindowManager manager;
@@ -106,6 +107,8 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
             if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
             if (!TryGetComponent<LaptopLink.LinkService>(out _)) gameObject.AddComponent<LaptopLink.LinkService>();
+            if (!TryGetComponent<Switcher.AppSwitcher>(out var switcher)) switcher = gameObject.AddComponent<Switcher.AppSwitcher>();
+            switcher.Manager = manager;
         }
 
         void OnEnable()
@@ -167,6 +170,7 @@ namespace SpatialLauncher.SpatialWindows
                 new LauncherContent.Entry { Label = "Settings", Icon = UIIcons.Settings, Color = SettingsIconColor, Open = () => OpenSettings() },
                 new LauncherContent.Entry { Label = "Hide all", Icon = UIIcons.VisibilityOff, Color = HideIconColor, Open = ToggleHideAll },
                 new LauncherContent.Entry { Label = "Cast", Icon = UIIcons.Cast, Color = CastIconColor, Open = () => OpenCastPicker() },
+                new LauncherContent.Entry { Label = "Switch", Icon = UIIcons.SwitchWindows, Color = SwitchIconColor, Open = () => GetComponent<Switcher.AppSwitcher>()?.OpenOverview() },
             });
             OnHiddenChanged(manager.WindowsHidden);
             return Launcher;

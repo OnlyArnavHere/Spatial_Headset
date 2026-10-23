@@ -23,6 +23,10 @@ namespace SpatialLauncher.LaptopShell
         public static readonly Vector2 PreferredSize = new Vector2(0.70f, 0.50f);
         public static Vector2 WindowSize => PreferredSize + Vector2.one * (Padding * 2f);
 
+        static readonly List<LaptopShellContent> open = new List<LaptopShellContent>();
+        /// <summary>Every Laptop Shell window that is open (the app switcher lists their laptops' windows).</summary>
+        public static IReadOnlyList<LaptopShellContent> Open => open;
+
         public const int MaxBarSlots = 12;
         public const int MaxGridTiles = 21;
         public const int MaxResultRows = 6;
@@ -177,6 +181,7 @@ namespace SpatialLauncher.LaptopShell
             Attach(window, baseMaterial);
             Session = session ?? throw new ArgumentNullException(nameof(session));
             Session.ShellWindow = window;
+            if (!open.Contains(this)) open.Add(this);
             Build();
             var client = Session.Client;
             client.Changed += MarkDirty;
@@ -948,6 +953,7 @@ namespace SpatialLauncher.LaptopShell
 
         protected override void OnDestroy()
         {
+            open.Remove(this);
             if (Session != null)
             {
                 var client = Session.Client;

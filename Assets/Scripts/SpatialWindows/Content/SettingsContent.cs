@@ -289,6 +289,8 @@ namespace SpatialLauncher.SpatialWindows
             Choice("Zoom preset", DisplaySettings.ZoomPresetNames, () => DisplaySettings.ZoomPresetIndex(S.display.passthroughZoom),
                 i => SettingsStore.Update(x => x.display.passthroughZoom = DisplaySettings.ZoomPresets[i]));
             Value("Field of view", PassthroughView);
+            Choice("TRIGGER button", new[] { "Zoom", "Switcher" }, () => S.display.triggerSwitcher ? 1 : 0,
+                i => SettingsStore.Update(x => x.display.triggerSwitcher = i == 1));
         }
 
         string PassthroughView()
@@ -331,6 +333,7 @@ namespace SpatialLauncher.SpatialWindows
             Toggle("Palm push/pull", () => S.hands.palmPush, v => SettingsStore.Update(x => x.hands.palmPush = v));
             Toggle("Two-hand stretch", () => S.hands.twoHandStretch, v => SettingsStore.Update(x => x.hands.twoHandStretch = v));
             Toggle("Cross to hide all", () => S.hands.crossSweepHide, v => SettingsStore.Update(x => x.hands.crossSweepHide = v));
+            Toggle("Pinch and hold to switch", () => S.hands.pinchHoldSwitcher, v => SettingsStore.Update(x => x.hands.pinchHoldSwitcher = v));
             Toggle("Debug overlay", () => S.hands.debugOverlay, v => SettingsStore.Update(x => x.hands.debugOverlay = v));
             Value("Note", () => "While a remote screen is live, cross and sweep always stops it (panic stop), even when off here.");
         }

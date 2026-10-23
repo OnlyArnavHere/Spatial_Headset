@@ -57,6 +57,7 @@ namespace SpatialLauncher.SpatialWindows
                 case "Hide all": return UIIcons.VisibilityOff;
                 case "Show all": return UIIcons.Visibility;
                 case "Cast": return UIIcons.Cast;
+                case "Switch": return UIIcons.SwitchWindows;
                 default: return UIIcons.Apps;
             }
         }

@@ -272,6 +272,62 @@ namespace SpatialLauncher.SpatialWindows
     }
 
     /// <summary>
+    /// (5) A pinch held for <see cref="GestureConfig.pinchHoldTime"/> while that hand points at no window, with the other
+    /// hand not pinching (so it never competes with a click, a drag or a two-hand stretch), opens the app switcher's
+    /// overview (<see cref="Switcher.AppSwitcher"/>), or closes it again. Fires once per pinch.
+    /// </summary>
+    public sealed class PinchHoldRecognizer : GestureRecognizer
+    {
+        readonly bool[] fired = new bool[2];
+        float cooldownUntil;
+
+        public override string Name => "Pinch and hold";
+
+        /// <summary>What the gesture does when it fires (default: toggles the switcher's overview). Test seam.</summary>
+        public System.Action Fire = () => Switcher.AppSwitcher.Current?.ToggleOverview();
+
+        public override void Tick(in GestureFrame frame)
+        {
+            var c = Config;
+            State = "Idle";
+            foreach (var hand in GestureRecognizers.Hands)
+            {
+                var h = frame.Get(hand);
+                var other = frame.Get(hand == Handedness.Left ? Handedness.Right : Handedness.Left);
+                if (!h.Tracked || !h.Pinched)
+                {
+                    fired[(int)hand] = false;
+                    continue;
+                }
+                if (fired[(int)hand] || frame.Time < cooldownUntil || (other.Tracked && other.Pinched)) continue;
+                if (Host.Owner(hand) != null && Host.Owner(hand) != this) continue;
+                if (PointsAtWindow(hand)) continue;
+                State = $"Holding {h.PinchFor:F2} / {c.pinchHoldTime:F2} s ({hand})";
+                if (h.PinchFor < c.pinchHoldTime) continue;
+                fired[(int)hand] = true;
+                cooldownUntil = frame.Time + c.pinchHoldCooldown;
+                Fire?.Invoke();
+                Event($"switcher ({hand.ToString().ToLowerInvariant()})");
+            }
+        }
+
+        bool PointsAtWindow(Handedness hand)
+        {
+            var hands = Host.HandInput;
+            if (hands == null) return false;
+            if (hands.GetActiveWindow(hand) != null) return true;
+            return Host.PickWindow(hands.GetPointerRay(hand)) != null;
+        }
+
+        public override void Cancel()
+        {
+            fired[0] = fired[1] = false;
+            cooldownUntil = float.NegativeInfinity;
+            State = "Idle";
+        }
+    }
+
+    /// <summary>
     /// (4) Crossing the wrists (left wrist right of the right one, at about the same height) for
     /// <see cref="GestureConfig.crossHoldTime"/>, then sweeping them apart by <see cref="GestureConfig.sweepDistance"/>
     /// within <see cref="GestureConfig.sweepTime"/>, hides every window but the launcher; the same gesture (or the

@@ -84,6 +84,12 @@ namespace SpatialLauncher.SpatialWindows
         public float stretchStartWindow = 0.6f;
         [Tooltip("A pinch may drop for this long without ending the stretch.")]
         public float pinchReleaseGrace = 0.15f;
+
+        [Header("Pinch and hold (app switcher)")]
+        [Tooltip("A pinch held this long while pointing at no window opens the app switcher.")]
+        public float pinchHoldTime = 0.8f;
+        [Tooltip("After it opens, the gesture waits this long before it can fire again.")]
+        public float pinchHoldCooldown = 1f;
         [Tooltip("Hand separation components below this count as this, so the aspect can't explode.")]
         public float stretchMinComponent = 0.05f;
         [Tooltip("The aspect changes by at most this factor either way in one stretch.")]

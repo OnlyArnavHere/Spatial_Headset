@@ -121,6 +121,7 @@ namespace SpatialLauncher.SpatialWindows
                 gestures.PalmPush.Enabled = s.hands.palmPush;
                 gestures.Stretch.Enabled = s.hands.twoHandStretch;
                 gestures.CrossSweep.Enabled = s.hands.crossSweepHide;
+                gestures.PinchHold.Enabled = s.hands.pinchHoldSwitcher;
             }
             if (TryGetComponent<GestureDebugOverlay>(out var overlay)) overlay.Visible = s.hands.debugOverlay;
             if (TryGetComponent<StereoPassthrough>(out var passthrough)) passthrough.Zoom = s.display.passthroughZoom;

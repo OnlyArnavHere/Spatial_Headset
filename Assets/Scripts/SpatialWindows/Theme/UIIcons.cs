@@ -41,5 +41,7 @@ namespace SpatialLauncher.SpatialWindows.Theme
         public const string WebAsset = "\uE069";
         public const string ChevronLeft = "\uE5CB";
         public const string ChevronRight = "\uE5CC";
+        /// <summary>Stacked cards (view_carousel): the app switcher.</summary>
+        public const string SwitchWindows = "\uE8EB";
     }
 }
