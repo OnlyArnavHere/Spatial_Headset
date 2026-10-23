@@ -33,5 +33,13 @@ namespace SpatialLauncher.SpatialWindows.Theme
         public const string KeyboardArrowLeft = "\uE314";
         public const string KeyboardArrowRight = "\uE315";
         public const string Home = "\uE88A";
+        public const string Mic = "\uE029";
+        public const string Keyboard = "\uE312";
+        /// <summary>A minus bar: minimize a laptop window.</summary>
+        public const string Remove = "\uE15B";
+        /// <summary>A window outline: a laptop window in the shell's results.</summary>
+        public const string WebAsset = "\uE069";
+        public const string ChevronLeft = "\uE5CB";
+        public const string ChevronRight = "\uE5CC";
     }
 }

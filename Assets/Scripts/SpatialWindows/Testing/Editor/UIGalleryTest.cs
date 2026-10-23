@@ -27,9 +27,10 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             var shots = UIGalleryShots.All();
 
             // Every window appears, in the order of the list, and the nine required types are all there.
-            foreach (var id in new[] { "home", "image", "video", "remote_stream", "laptop_picker", "pairing_code", "settings", "consent", "keyboard" })
+            foreach (var id in new[] { "home", "image", "video", "remote_stream", "laptop_picker", "pairing_code", "settings", "consent", "keyboard",
+                                       "shell_windows", "shell_macos", "shell_search", "shell_locked", "shell_app_windows" })
                 Check(System.Array.IndexOf(UIGalleryShots.Windows, id) >= 0, $"{id} is in the window list");
-            Check(UIGalleryShots.Windows.Length == 9, "nine window types");
+            Check(UIGalleryShots.Windows.Length == 14, "fourteen window types (nine, plus the Laptop Shell five ways)");
 
             // Every window has an idle and a focused shot; hover and pressed only where it has controls.
             foreach (var id in UIGalleryShots.Windows)

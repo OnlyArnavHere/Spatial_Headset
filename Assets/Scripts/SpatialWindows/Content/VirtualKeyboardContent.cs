@@ -143,7 +143,9 @@ namespace SpatialLauncher.SpatialWindows
             if (talkMaterial != null) talkMaterial.color = listening ? ListeningColor : TalkColor;
             var stream = target?.Invoke();
             string text;
+            var field = WindowTextField.Focused;
             if (listening) text = $"{voice.Status}: {voice.Partial}";
+            else if (field != null) text = field.Window != null ? $"Typing into the text field in {field.Window.Title}" : "Typing into the text field";
             else if (stream == null) text = "Open a laptop window to type into it";
 #if SPATIAL_LAUNCHER_WEBRTC
             else if (stream.IsLinked && !stream.IsActive) text = $"Typing into: {stream.Window.Title} (not connected)";

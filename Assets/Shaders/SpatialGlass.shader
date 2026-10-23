@@ -24,6 +24,8 @@ Shader "SpatialLauncher/SpatialGlass"
         [MainTexture] _MainTex ("Texture (flat shapes)", 2D) = "white" {}
         [MainColor] _Color ("Fill (flat shapes)", Color) = (1, 1, 1, 1)
         _UseTex ("Use texture", Float) = 0
+        // 1 also takes the texture's alpha (app icons with transparent corners); 0 keeps photos and video opaque.
+        _TexAlpha ("Use texture alpha", Float) = 0
         _Flat ("Flat shape", Float) = 0
         // Control states (Doc/ui-design.md section 7): overlay colour over the fill, focus ring band inside the edge, press shrink, disabled fade.
         _Overlay ("State overlay", Color) = (1, 1, 1, 0)
@@ -56,6 +58,7 @@ Shader "SpatialLauncher/SpatialGlass"
         half4 _Color;
         float4 _MainTex_ST;
         float _UseTex;
+        float _TexAlpha;
         float _Flat;
         half4 _Overlay;
         half4 _FocusRing;
@@ -152,7 +155,12 @@ Shader "SpatialLauncher/SpatialGlass"
         if (_Flat > 0.5)
         {
             half4 fill = _Color;
-            if (_UseTex > 0.5) fill.rgb *= SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv * _MainTex_ST.xy + _MainTex_ST.zw).rgb;
+            if (_UseTex > 0.5)
+            {
+                half4 texel = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv * _MainTex_ST.xy + _MainTex_ST.zw);
+                fill.rgb *= texel.rgb;
+                fill.a *= lerp(1.0h, texel.a, (half)_TexAlpha);
+            }
             half4 shaped = ApplyState(fill, d, aa);
             return half4(shaped.rgb, shaped.a * cover);
         }

@@ -298,10 +298,48 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     window = Open(manager, "Keyboard", VirtualKeyboardContent.WindowSize);
                     AddContent<VirtualKeyboardContent>(rig).Init(window, mat, strokes => false, () => null);
                     return window;
+                case "shell_windows":
+                    return BuildShell(rig, manager, LaptopShell.ShellOs.Windows, null, false);
+                case "shell_macos":
+                    return BuildShell(rig, manager, LaptopShell.ShellOs.MacOS, null, false);
+                case "shell_search":
+                    return BuildShell(rig, manager, LaptopShell.ShellOs.MacOS, "o", false);
+                case "shell_locked":
+                    return BuildShell(rig, manager, LaptopShell.ShellOs.Windows, null, true);
+                case "shell_app_windows":
+                    return BuildShell(rig, manager, LaptopShell.ShellOs.Windows, null, false, "Browser");
                 default:
                     Debug.LogWarning($"[UIGallery] No builder for '{id}'.");
                     return null;
             }
+        }
+
+        // The Laptop Shell against a made-up laptop (Testing.Editor.ShellFixture): apps, icons and windows arrive at once.
+        static SpatialWindow BuildShell(Rig rig, WindowManager manager, LaptopShell.ShellOs os, string query, bool locked,
+                                        string windowsOf = null)
+        {
+            var window = Open(manager, "Laptop apps", LaptopShell.LaptopShellContent.WindowSize);
+            var agent = new Testing.Editor.ShellFixture.FakeAgent(os);
+            var session = new Testing.Editor.ShellFixture.FakeSession(agent.Client)
+            {
+                Lock = locked ? LaptopShell.ShellLock.NeedsControl : LaptopShell.ShellLock.None,
+            };
+            agent.Client.SetAvailable(!locked, os);
+            var content = AddContent<LaptopShell.LaptopShellContent>(rig);
+            content.Init(window, rig.WindowMaterial, session);
+            if (query != null) content.SearchField.SetText(query);
+            for (int i = 0; i < 4; i++)
+            {
+                agent.Settle();
+                content.Rebuild();
+            }
+            if (windowsOf != null)
+            {
+                content.ShowWindows(agent.Client.Find(agent.App(windowsOf).Id));
+                agent.Settle();
+                content.Rebuild();
+            }
+            return window;
         }
 
         static LauncherContent.Entry Icon(string label, string unused, float r, float g, float b) =>

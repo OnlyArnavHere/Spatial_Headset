@@ -33,6 +33,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
         public static readonly string[] Windows =
         {
             "home", "image", "video", "remote_stream", "laptop_picker", "pairing_code", "settings", "consent", "keyboard",
+            "shell_windows", "shell_macos", "shell_search", "shell_locked", "shell_app_windows",
         };
 
         /// <summary>

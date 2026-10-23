@@ -12,6 +12,7 @@ namespace SpatialLauncher.SpatialWindows
     /// Ctrl+V pastes, Tab moves to the next field of the same group, Enter submits, Esc leaves the field.
     /// On iOS focusing opens the on-screen keyboard (usable in Mono mode, where the screen can be touched).
     /// While any field has focus, <see cref="IsTyping"/> is true so single-key shortcuts elsewhere can stand down.
+    /// The virtual keyboard types into the focused field too (<see cref="ApplyStroke"/>), like voice typing does.
     /// </summary>
     public class WindowTextField : WindowControl
     {
@@ -95,6 +96,34 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         public static void BlurAll() => Focused?.Blur();
+
+        /// <summary>
+        /// One virtual-keyboard stroke typed into this field: text is added, Backspace deletes, Enter submits, Esc leaves
+        /// the field. Other keys (arrows, Ctrl or Alt shortcuts) do nothing here.
+        /// </summary>
+        public void ApplyStroke(KeyStroke stroke)
+        {
+            if (!Interactable) return;
+            if (stroke.Kind == KeyStroke.Type.Text)
+            {
+                SetText(Text + stroke.Value);
+                return;
+            }
+            if (stroke.Kind != KeyStroke.Type.Down) return;
+            switch (stroke.Value)
+            {
+                case "Backspace":
+                    if (Text.Length > 0) SetText(Text.Substring(0, Text.Length - 1));
+                    break;
+                case "Enter":
+                    Blur();
+                    Submitted?.Invoke(this);
+                    break;
+                case "Escape":
+                    Blur();
+                    break;
+            }
+        }
 
         protected override void OnInteractableChanged(bool nowInteractable)
         {

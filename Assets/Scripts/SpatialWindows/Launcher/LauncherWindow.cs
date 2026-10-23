@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using SpatialLauncher.SpatialWindows.Theme;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -240,9 +241,41 @@ namespace SpatialLauncher.SpatialWindows
             content.Init(window, manager.WindowMaterial, () => OpenPairing());
 #if SPATIAL_LAUNCHER_WEBRTC
             content.OpenLinked = (session, opened, target) => OpenLinkedStream(session, opened, target, cast);
+            if (!cast) content.OpenShell = session => OpenLaptopShell(session);
 #endif
             return window;
         }
+
+#if SPATIAL_LAUNCHER_WEBRTC
+        readonly Dictionary<LinkSession, SpatialWindow> shellWindows = new Dictionary<LinkSession, SpatialWindow>();
+
+        /// <summary>
+        /// The Laptop Shell for a connected laptop: its apps, search and dock or taskbar (LaptopShell.LaptopShellContent).
+        /// One per session; asking again brings it to the front. Windows it opens become linked stream windows.
+        /// </summary>
+        public SpatialWindow OpenLaptopShell(LinkSession session)
+        {
+            if (session == null || session.IsEnded) return null;
+            var ended = new List<LinkSession>();
+            foreach (var pair in shellWindows)
+                if (pair.Key.IsEnded || pair.Value == null) ended.Add(pair.Key);
+            foreach (var key in ended) shellWindows.Remove(key);
+            if (shellWindows.TryGetValue(session, out var open))
+            {
+                manager.Focus(open);
+                return open;
+            }
+            var window = manager.Spawn("Laptop apps", LaptopShell.LaptopShellContent.WindowSize);
+            if (window == null) return null;
+            var link = new LaptopShell.LaptopShellLink(session);
+            link.OpenLinked = (s, opened, target) => OpenLinkedStream(s, opened, target, false);
+            var content = new GameObject().AddComponent<LaptopShell.LaptopShellContent>();
+            content.Init(window, manager.WindowMaterial, link);
+            content.KeyboardRequested += () => OpenKeyboard();
+            shellWindows[session] = window;
+            return window;
+        }
+#endif
 
 #if SPATIAL_LAUNCHER_WEBRTC
         /// <summary>A stream window on one slot of the link session (view-only until control is requested; Cast: media only).</summary>

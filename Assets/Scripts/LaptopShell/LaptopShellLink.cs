@@ -13,7 +13,7 @@ namespace SpatialLauncher.LaptopShell
     /// stream window uses, so the laptop's own approval (or its always-allow) and the LIVE indicator apply unchanged.
     /// Call <see cref="Tick"/> every frame; <see cref="Dispose"/> unhooks everything.
     /// </summary>
-    public sealed class LaptopShellLink : IRemoteSession, IDisposable
+    public sealed class LaptopShellLink : IRemoteSession, IShellSession
     {
         readonly HashSet<string> requestedOpens = new HashSet<string>();
         readonly Dictionary<string, string> titles = new Dictionary<string, string>();
@@ -29,6 +29,7 @@ namespace SpatialLauncher.LaptopShell
         public bool AwaitingConsent => asking;
         public bool IsDisposed { get; private set; }
 
+        public string LaptopName => Session.LaptopName;
         public string SourceName => Session.LaptopName;
         public string Address => Session.Address;
         public string ModeLabel => "full control";
@@ -56,6 +57,26 @@ namespace SpatialLauncher.LaptopShell
             var control = Session.Control;
             Client.SetAvailable(control.ShellUsable, LaptopShellClient.ParseOs(control.ShellOs));
         }
+
+        /// <summary>Why the shell can't be used now, from the session and its control state.</summary>
+        public ShellLock Lock
+        {
+            get
+            {
+                var control = Session.Control;
+                if (IsDisposed || Session.IsEnded || Session.IsEnding || control.State == LinkSessionState.Ended) return ShellLock.Ended;
+                if (control.State == LinkSessionState.Waiting || control.State == LinkSessionState.Connecting) return ShellLock.Connecting;
+                if (!control.ShellOffered) return control.ShellOs == "linux" ? ShellLock.Unsupported : ShellLock.NotOffered;
+                if (control.CastOnly) return ShellLock.CastOnly;
+                if (control.State == LinkSessionState.Revoked) return ShellLock.Stopped;
+                if (!control.InputAllowed) return ShellLock.InputOff;
+                if (control.State == LinkSessionState.Control) return ShellLock.None;
+                if (control.State == LinkSessionState.Requested || asking) return ShellLock.Asking;
+                return ShellLock.NeedsControl;
+            }
+        }
+
+        public bool RequestControl() => RequestControl(ConsentGate.Current);
 
         /// <summary>
         /// Asks the wearer (ConsentGate, "full control") and then the laptop for control, so the shell can be used.

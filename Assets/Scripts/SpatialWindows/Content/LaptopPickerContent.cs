@@ -22,6 +22,9 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color WindowEntryColor = new Color(0.22f, 0.27f, 0.38f);
         static readonly Color DesktopEntryColor = new Color(0.30f, 0.42f, 0.70f);
         static readonly Color MoreColor = new Color(0.32f, 0.34f, 0.40f);
+        static readonly Color ShellEntryColor = new Color(0.20f, 0.45f, 0.62f);
+        /// <summary>The first entry of a connected laptop's list when the launcher can open the Laptop Shell.</summary>
+        public const string ShellEntryLabel = "Laptop apps: search, dock and all apps";
 
         /// <summary>Entries shown at once; "More" pages through the rest.</summary>
         public const int RowsPerPage = 6;
@@ -54,6 +57,8 @@ namespace SpatialLauncher.SpatialWindows
 #if SPATIAL_LAUNCHER_WEBRTC
         /// <summary>Opens a stream window for an opened target on a slot of the session (set by the launcher).</summary>
         public Action<LinkSession, OpenedWindow, LaptopTarget> OpenLinked;
+        /// <summary>Opens the Laptop Shell for the connected session (set by the launcher; not for Cast).</summary>
+        public Action<LinkSession> OpenShell;
         LinkSession linkSession;
         LinkAnswerer answerer;
 #endif
@@ -263,6 +268,11 @@ namespace SpatialLauncher.SpatialWindows
         void RebuildTargetItems()
         {
             items.Clear();
+            if (OpenShell != null && linkSession != null)
+            {
+                var session = linkSession;
+                items.Add(new Item(ShellEntryLabel, ShellEntryColor, () => OpenShell?.Invoke(session)));
+            }
             foreach (var target in linkTargets)
             {
                 var t = target;

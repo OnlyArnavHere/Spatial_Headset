@@ -144,6 +144,22 @@ To remove a laptop: Settings > Laptop > Paired laptops > Remove on the headset, 
 
 Discovery uses Bonjour/mDNS (`_spatiallauncher._tcp`, with a random name each time). If it fails, pass the address: `python agent.py --headset <ip>`. In the Unity editor use `python agent.py --headset 127.0.0.1:47810`.
 
+### Laptop apps (the Laptop Shell)
+
+Once connected, the picker's first entry is **Laptop apps**. It opens a window with the laptop's apps: a search field, the
+laptop's pinned and running apps with their own icons, and all its apps. It is styled after the laptop: a centred
+taskbar and a Start-style panel (Pinned, All apps) for a Windows laptop, a floating dock and a large search over
+Applications for a Mac. It uses our own shapes, Inter and Material Icons, no OS logos or fonts.
+
+- **Search:** tap the field and type (virtual keyboard, the keyboard button, or a physical keyboard), or hold the mic
+  button and speak. Results list apps and open windows; Enter opens the best match.
+- **Tap an app** to open its window as a stream window (a minimized window is restored first), or to launch it if it
+  isn't running. An app with several windows lists them; **hold** a bar icon to list one app's windows. Each listed
+  window can be opened, minimized or restored, and closed (the app can still ask to save).
+- It needs control, like typing: until control is allowed the window shows **Allow control**, which asks on the
+  headset and then on the laptop (unless the laptop always allows this headset). A cast-only or view-only agent, a
+  stopped session or an old agent shows why instead. The LIVE indicator and the panic stop are unchanged.
+
 ### Wired
 
 Turn on Personal Hotspot and plug in the USB cable. The agent dials 172.20.10.1. No inbound firewall rule is needed. See [wired.md](wired.md).
