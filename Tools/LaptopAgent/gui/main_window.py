@@ -49,7 +49,8 @@ def permission_text(row) -> str:
 
 
 def pair_text(pair) -> str:
-    return f"{pair.name}   {pair.fingerprint}   {pair.added}"
+    always = "   ALWAYS ALLOWED" if getattr(pair, "always_allow", False) else ""
+    return f"{pair.name}   {pair.fingerprint}   {pair.added}{always}"
 
 
 def next_toggles(changed: str, value: bool, current: settings_mod.Settings) -> settings_mod.Settings:
@@ -130,11 +131,13 @@ class MainWindow:
         pairs.grid(row=1, column=0, sticky="ew", pady=(PAD, 0))
         pairs.columnconfigure(0, weight=1)
         self.pair_list = tk.Listbox(pairs, height=4, activestyle="none", exportselection=False)
-        self.pair_list.grid(row=0, column=0, rowspan=2, sticky="ew")
+        self.pair_list.grid(row=0, column=0, rowspan=3, sticky="ew")
         ttk.Button(pairs, text="Pair new headset...", command=self.open_pair_dialog).grid(
             row=0, column=1, padx=(8, 0), sticky="ew")
         ttk.Button(pairs, text="Remove", command=self.remove_selected).grid(
             row=1, column=1, padx=(8, 0), pady=(6, 0), sticky="ew")
+        ttk.Button(pairs, text="Stop always allowing", command=self.stop_always_selected).grid(
+            row=2, column=1, padx=(8, 0), pady=(6, 0), sticky="ew")
 
         options = ttk.LabelFrame(outer, text="Settings", padding=PAD)
         options.grid(row=2, column=0, sticky="ew", pady=(PAD, 0))
@@ -233,6 +236,18 @@ class MainWindow:
         if messagebox.askyesno("Remove headset", f"Forget {name}? It will have to pair again.", parent=self.root):
             self.controller.revoke(name)
             self.refresh_pairs()
+
+    def stop_always_selected(self) -> None:
+        """The selected headset keeps its pair but needs a Yes on this laptop again before it takes control."""
+        selection = self.pair_list.curselection()
+        if not selection or selection[0] >= len(self._pair_names):
+            return
+        name = self._pair_names[selection[0]]
+        try:
+            self.controller.stop_always_allowing(name)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("Paired headsets", f"Couldn't change {name}: {e}", parent=self.root)
+        self.refresh_pairs()
 
     def open_pair_dialog(self) -> None:
         if self.dialog is None:

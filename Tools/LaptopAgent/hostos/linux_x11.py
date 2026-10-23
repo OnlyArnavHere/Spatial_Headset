@@ -341,9 +341,10 @@ class _Prompt:
     dismiss() may be called from any thread, before or after wait() starts: a dismissal that comes first stops the box
     from ever opening."""
 
-    def __init__(self, text: str, caption: str, timeout_ms: int) -> None:
+    def __init__(self, text: str, caption: str, timeout_ms: int, always: str | None = None) -> None:
         self._timeout_s = pure.timeout_seconds(timeout_ms)
         self._text, self._caption = text, caption
+        self._always = bool(always)
         self._lock = threading.Lock()
         self._proc = None
         self._cancelled = False
@@ -351,9 +352,9 @@ class _Prompt:
     def _argv(self) -> list[str] | None:
         program = _dialog_program()
         if program == "zenity":
-            return pure.zenity_argv(self._text, self._caption, self._timeout_s)
+            return pure.zenity_argv(self._text, self._caption, self._timeout_s, self._always)
         if program == "tkinter":
-            return pure.tk_argv(str(_DIALOG), self._text, self._caption, self._timeout_s)
+            return pure.tk_argv(str(_DIALOG), self._text, self._caption, self._timeout_s, self._always)
         log.warning("no approval dialog is available (install zenity or python3-tk): denying the request")
         return None
 
@@ -364,8 +365,9 @@ class _Prompt:
             if argv is None:
                 return "no"
             try:
-                process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                           stderr=subprocess.DEVNULL)
+                process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE if self._always else subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
             except OSError as e:
                 log.warning("can't start the approval dialog (%s): denying the request", e)
                 return "no"
@@ -375,14 +377,18 @@ class _Prompt:
                 _prompt_atexit = True
                 atexit.register(_kill_live_prompts)
         try:
-            process.wait(self._timeout_s + 5)
+            if self._always:
+                out, _ = process.communicate(timeout=self._timeout_s + 5)  # zenity prints the extra button's label
+            else:
+                process.wait(self._timeout_s + 5)
+                out = ""
         except subprocess.TimeoutExpired:  # the dialog hung past its own give-up time
             process.kill()
             process.wait()
             return "timeout"
         finally:
             _live_prompts.discard(process)
-        return pure.answer_for(process.returncode)
+        return pure.answer_for(process.returncode, out or "", self._always)
 
     def dismiss(self) -> bool:
         with self._lock:
@@ -399,8 +405,9 @@ class _Prompt:
             return True
 
 
-def open_prompt(text: str, caption: str, timeout_ms: int) -> _Prompt:
-    return _Prompt(text, caption, timeout_ms)
+def open_prompt(text: str, caption: str, timeout_ms: int, always: str | None = None) -> _Prompt:
+    """With `always`, the box has a third button, "Always allow", which answers "always"."""
+    return _Prompt(text, caption, timeout_ms, always)
 
 
 # --- Secrets: identity.key is a plain file the OS keeps private (mode 0600) -------------------------

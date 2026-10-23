@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -265,9 +266,9 @@ namespace SpatialLauncher.SpatialWindows
             Surface = CreateSurface("RemoteScreen", transform, Source);
             Surface.EmptyColor = PlaceholderColor;
 
-            statusLabel = CreateLabel("Status", transform, "", 0.4f, TextAlignmentOptions.Center);
+            statusLabel = CreateLabel("Status", transform, "", TextRole.Title, TextAlignmentOptions.Center);
             statusLabel.transform.localPosition = new Vector3(0f, 0f, -0.002f);
-            statusLabel.color = new Color(0.75f, 0.77f, 0.82f);
+            statusLabel.color = UITheme.TextSecondary;
             statusLabel.textWrappingMode = TextWrappingModes.Normal;
 
             Source.Changed += RefreshStatus;
@@ -279,11 +280,11 @@ namespace SpatialLauncher.SpatialWindows
         void BuildPanel()
         {
             panel = CreateQuad("ConnectPanel", transform, CreateMaterial(PanelColor));
-            badgeLabel = CreateLabel("Badge", transform, "", 0.22f, TextAlignmentOptions.MidlineLeft);
+            badgeLabel = CreateLabel("Badge", transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
             badgeLabel.richText = false;
 
             ConnectButton = CreateControl<WindowButton>("ConnectButton", transform, CreateMaterial(ConnectColor));
-            connectLabel = CreateLabel("ConnectLabel", transform, "Request control", 0.22f, TextAlignmentOptions.Center);
+            connectLabel = CreateLabel("ConnectLabel", transform, "Request control", TextRole.Headline, TextAlignmentOptions.Center);
             ConnectButton.Clicked += () =>
             {
 #if SPATIAL_LAUNCHER_WEBRTC
@@ -292,7 +293,7 @@ namespace SpatialLauncher.SpatialWindows
             };
 
             KeysButton = CreateControl<WindowButton>("KeysButton", transform, CreateMaterial(KeysColor));
-            keysLabel = CreateLabel("KeysLabel", transform, "Keys", 0.22f, TextAlignmentOptions.Center);
+            keysLabel = CreateLabel("KeysLabel", transform, "Keys", TextRole.Headline, TextAlignmentOptions.Center);
             KeysButton.Clicked += () => KeyboardRequested?.Invoke();
             if (IsCast)
             {
@@ -303,15 +304,14 @@ namespace SpatialLauncher.SpatialWindows
                 {
                     string action = RemoteInputEncoding.MediaActions[i];
                     var button = CreateControl<WindowButton>($"Media {action}", transform, CreateMaterial(MediaColor));
-                    var label = CreateLabel($"MediaLabel {action}", transform, MediaLabels[i], 0.18f, TextAlignmentOptions.Center);
+                    var label = CreateLabel($"MediaLabel {action}", transform, MediaLabels[i], TextRole.Body, TextAlignmentOptions.Center);
                     button.Clicked += () => SendMedia(action);
                     mediaButtons[action] = button;
                     mediaLabels.Add(label);
                 }
             }
 
-            statusLine = CreateLabel("StatusLine", transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
-            statusLine.color = new Color(0.75f, 0.77f, 0.82f);
+            statusLine = CreateLabel("StatusLine", transform, "", TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
         }
 
         /// <summary>Cast mode: sends a media control (a media button does this). False if it couldn't be sent.</summary>

@@ -438,9 +438,9 @@ class _Prompt:
     dismiss() may be called from any thread, before or after wait() starts: a dismissal that comes first stops the box
     from ever opening."""
 
-    def __init__(self, text: str, caption: str, timeout_ms: int) -> None:
+    def __init__(self, text: str, caption: str, timeout_ms: int, always: str | None = None) -> None:
         self._timeout_s = pure.timeout_seconds(timeout_ms)
-        self._argv = pure.osascript_argv(text, caption, self._timeout_s)
+        self._argv = pure.osascript_argv(text, caption, self._timeout_s, always=bool(always))
         self._lock = threading.Lock()
         self._proc = None
         self._cancelled = False
@@ -488,8 +488,9 @@ class _Prompt:
             return True
 
 
-def open_prompt(text: str, caption: str, timeout_ms: int) -> _Prompt:
-    return _Prompt(text, caption, timeout_ms)
+def open_prompt(text: str, caption: str, timeout_ms: int, always: str | None = None) -> _Prompt:
+    """With `always`, the box has a third button, "Always allow", which answers "always"."""
+    return _Prompt(text, caption, timeout_ms, always)
 
 
 # --- Kill switch: Ctrl+Option+Shift+Q, heard by a listen-only event tap (needs Input Monitoring) --------

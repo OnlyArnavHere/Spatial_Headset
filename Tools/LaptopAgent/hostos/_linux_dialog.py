@@ -1,5 +1,6 @@
-"""The tkinter approval dialog, run as a child process (python -I _linux_dialog.py TEXT TITLE SECONDS) so it can be
-killed. Exit codes match zenity: 0 yes, 1 no (the default), 5 timeout."""
+"""The tkinter approval dialog, run as a child process (python -I _linux_dialog.py TEXT TITLE SECONDS [always]) so it
+can be killed. Exit codes match zenity: 0 yes, 1 no (the default), 5 timeout; 2 for "Always allow", which is only
+shown when the fourth argument is "always"."""
 import sys
 
 
@@ -18,6 +19,8 @@ def main(argv: list[str]) -> int:
     tkinter.Label(root, text=text, justify="left", wraplength=480, padx=20, pady=16).pack()
     row = tkinter.Frame(root)
     row.pack(pady=(0, 14))
+    if len(argv) > 4 and argv[4] == "always":
+        tkinter.Button(row, text="Always allow", width=12, command=lambda: finish(2)).pack(side="left", padx=6)
     no = tkinter.Button(row, text="No", width=10, command=lambda: finish(1))
     no.pack(side="left", padx=6)
     tkinter.Button(row, text="Yes", width=10, command=lambda: finish(0)).pack(side="left", padx=6)

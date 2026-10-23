@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using SpatialLauncher.LaptopLink;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 
@@ -14,25 +15,27 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class SettingsContent : WindowContent
     {
-        static readonly Color PanelColor = new Color(0.13f, 0.14f, 0.17f);
-        static readonly Color TabColor = new Color(0.22f, 0.23f, 0.28f);
-        static readonly Color SelectedColor = new Color(0.16f, 0.36f, 0.95f);
-        static readonly Color ControlColor = new Color(0.32f, 0.34f, 0.40f);
-        static readonly Color TrackColor = new Color(0.24f, 0.25f, 0.30f);
-        static readonly Color FieldColor = new Color(0.20f, 0.21f, 0.25f);
-        static readonly Color OnColor = new Color(0.20f, 0.55f, 0.35f);
-        static readonly Color DimText = new Color(0.70f, 0.72f, 0.78f);
+        /// <summary>No opaque panel behind the rows: the window's glass shows through.</summary>
+        public static readonly Color PanelColor = new Color(0f, 0f, 0f, 0f);
+        /// <summary>An unselected sidebar row or segment is transparent; the selected one is AccentFill.</summary>
+        public static readonly Color TabColor = new Color(1f, 1f, 1f, 0f);
+        public static readonly Color SelectedColor = UITheme.AccentFill;
+        public static readonly Color TrackColor = UITheme.GlassRaised;
+        public static readonly Color FieldColor = WindowTextField.NormalColor;
+        public static readonly Color OnColor = UITheme.AccentFill;
+        public static readonly Color RemoveColor = UITheme.DestructiveFill;
 
-        const float TabWidth = 0.15f;
-        const float RowHeight = 0.036f;
+        /// <summary>Sidebar rows are 160 x 44 pt capsules; every control row is 44 pt high.</summary>
+        public const float TabWidth = 0.16f, TabHeight = 0.044f, RowHeight = 0.044f;
+        /// <summary>The on/off switch: 52 x 32 pt with a 28 pt knob.</summary>
+        public const float SwitchWidth = 0.052f, SwitchHeight = 0.032f, SwitchKnob = 0.028f;
         const float Gap = 0.008f;
         const float LabelWidth = 0.17f;
         const float HeaderHeight = 0.045f;
         /// <summary>Paired laptops listed in Settings > Laptop (each with a Remove button); more show as "+N more".</summary>
         public const int PairedSlots = 3;
-        static readonly Color RemoveColor = new Color(0.60f, 0.25f, 0.25f);
 
-        public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "About" };
+        public static readonly string[] SectionNames = { "Laptop", "Display", "Hands", "Gestures", "Windows", "Immersion", "Voice", "Performance", "About" };
 
         /// <summary>Content size the window needs.</summary>
         public static readonly Vector2 PreferredSize = new Vector2(0.86f, 0.66f);
@@ -43,6 +46,8 @@ namespace SpatialLauncher.SpatialWindows
             public GameObject Root;
             public Action<float, float, float> Layout; // (centre y, left x, width)
             public Action Refresh;
+            /// <summary>Height of the row for a width, when it is taller than <see cref="RowHeight"/> (wrapped text); null for one line.</summary>
+            public Func<float, float> Height;
             /// <summary>Clickable parts by name ("Slider", "On", an option's text...), for tests and tools.</summary>
             public readonly Dictionary<string, WindowControl> Controls = new Dictionary<string, WindowControl>();
         }
@@ -75,16 +80,18 @@ namespace SpatialLauncher.SpatialWindows
         {
             Attach(window, baseMaterial);
             Service = service;
-            panel = CreateQuad("SettingsPanel", transform, CreateMaterial(PanelColor));
-            header = CreateLabel("Header", transform, "", 0.3f, TextAlignmentOptions.MidlineLeft);
+            panel = CreateQuad("SettingsPanel", transform, CreateRounded(PanelColor, UITheme.ControlRadius));
+            header = CreateLabel("Header", transform, "", TextRole.Title, TextAlignmentOptions.MidlineLeft);
 
             foreach (var name in SectionNames)
             {
                 var section = new Section { Name = name, Root = new GameObject($"Section {name}") };
                 section.Root.transform.SetParent(transform, false);
-                section.TabMaterial = CreateMaterial(TabColor);
+                section.TabMaterial = CreateRounded(TabColor, TabHeight * 500f);
                 section.Tab = CreateControl<WindowButton>($"Tab {name}", transform, section.TabMaterial);
-                section.TabLabel = CreateLabel($"TabLabel {name}", transform, name, 0.22f, TextAlignmentOptions.Center);
+                Round(section.Tab.transform, 0f, true);
+                section.TabLabel = CreateLabel($"TabLabel {name}", transform, name, TextRole.Headline, TextAlignmentOptions.Center);
+                section.Tab.BindLabel(section.TabLabel);
                 int index = sections.Count;
                 section.Tab.Clicked += () => Select(index);
                 sections.Add(section);
@@ -98,7 +105,8 @@ namespace SpatialLauncher.SpatialWindows
             BuildWindows(sections[4]);
             BuildImmersion(sections[5]);
             BuildVoice(sections[6]);
-            BuildAbout(sections[7]);
+            BuildPerformance(sections[7]);
+            BuildAbout(sections[8]);
 
             var pairs = LinkService.Current != null && LinkService.Current.Host != null ? LinkService.Current.Host : null;
             if (pairs != null)
@@ -130,10 +138,11 @@ namespace SpatialLauncher.SpatialWindows
         {
             const float buttonWidth = 0.1f;
             var row = NewRow(slot == 0 ? "Paired laptops" : "Paired #" + (slot + 1));
-            var text = CreateLabel("Value", row.Root.transform, "", 0.17f, TextAlignmentOptions.MidlineLeft);
+            var text = CreateLabel("Value", row.Root.transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
             text.richText = false; // laptop names are shown as typed, never as markup
-            var button = CreateControl<WindowButton>("Remove", row.Root.transform, CreateMaterial(RemoveColor));
-            var buttonText = CreateLabel("RemoveLabel", row.Root.transform, "Remove", 0.17f, TextAlignmentOptions.Center);
+            var button = CreateControl<WindowButton>("Remove", row.Root.transform, CreateRounded(RemoveColor, UITheme.ControlRadius));
+            var buttonText = CreateLabel("RemoveLabel", row.Root.transform, "Remove", TextRole.Headline, TextAlignmentOptions.Center);
+            button.BindLabel(buttonText);
             row.Controls["Remove"] = button;
             string current = null;
             button.Clicked += () =>
@@ -280,6 +289,8 @@ namespace SpatialLauncher.SpatialWindows
             Choice("Zoom preset", DisplaySettings.ZoomPresetNames, () => DisplaySettings.ZoomPresetIndex(S.display.passthroughZoom),
                 i => SettingsStore.Update(x => x.display.passthroughZoom = DisplaySettings.ZoomPresets[i]));
             Value("Field of view", PassthroughView);
+            Choice("TRIGGER button", new[] { "Zoom", "Switcher" }, () => S.display.triggerSwitcher ? 1 : 0,
+                i => SettingsStore.Update(x => x.display.triggerSwitcher = i == 1));
         }
 
         string PassthroughView()
@@ -322,6 +333,7 @@ namespace SpatialLauncher.SpatialWindows
             Toggle("Palm push/pull", () => S.hands.palmPush, v => SettingsStore.Update(x => x.hands.palmPush = v));
             Toggle("Two-hand stretch", () => S.hands.twoHandStretch, v => SettingsStore.Update(x => x.hands.twoHandStretch = v));
             Toggle("Cross to hide all", () => S.hands.crossSweepHide, v => SettingsStore.Update(x => x.hands.crossSweepHide = v));
+            Toggle("Pinch and hold to switch", () => S.hands.pinchHoldSwitcher, v => SettingsStore.Update(x => x.hands.pinchHoldSwitcher = v));
             Toggle("Debug overlay", () => S.hands.debugOverlay, v => SettingsStore.Update(x => x.hands.debugOverlay = v));
             Value("Note", () => "While a remote screen is live, cross and sweep always stops it (panic stop), even when off here.");
         }
@@ -335,6 +347,7 @@ namespace SpatialLauncher.SpatialWindows
             presets.AddRange(AspectPresets.All);
             Choice("Default aspect", presets.ConvertAll(AspectPresets.Label).ToArray(), () => presets.IndexOf(S.windows.defaultAspect),
                 i => SettingsStore.Update(x => x.windows.defaultAspect = presets[i]));
+            Toggle("Reduce motion", () => S.windows.reduceMotion, v => SettingsStore.Update(x => x.windows.reduceMotion = v));
             Value("Note", () => "Defaults apply to new windows. Each window's ... button changes its own curve and aspect.");
         }
 
@@ -363,6 +376,23 @@ namespace SpatialLauncher.SpatialWindows
             Value("Note", () => "Voice typing: hold Talk on the keyboard (iPhone). Speech stays on the phone when the language supports it.");
         }
 
+        void BuildPerformance(Section s)
+        {
+            building = s;
+            Toggle("Glass blur", () => S.performance.glassBlur, v => SettingsStore.Update(x => x.performance.glassBlur = v));
+            Value("Cost", BlurCost);
+            Value("Note", () => "Blurs the passthrough behind window glass. Off uses flat dark glass and saves a little GPU and heat.");
+            Toggle("HoloKit iOS 27 camera fix", () => S.performance.holoKitCameraFix, v => SettingsStore.Update(x => x.performance.holoKitCameraFix = v));
+            Value("Camera fix", () => HoloKitCameraFix.State);
+        }
+
+        static string BlurCost()
+        {
+            var blur = BackdropBlur.Current;
+            if (blur == null || !blur.On) return S.performance.glassBlur ? "Off for now (no passthrough)" : "Off";
+            return $"{blur.Ms:0.00} ms per frame";
+        }
+
         void BuildAbout(Section s)
         {
             building = s;
@@ -381,8 +411,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             var row = new Row { Label = label, Root = new GameObject($"Row {label}") };
             row.Root.transform.SetParent(building.Root.transform, false);
-            var title = CreateLabel("Label", row.Root.transform, label, 0.2f, TextAlignmentOptions.MidlineLeft);
-            title.color = DimText;
+            var title = CreateLabel("Label", row.Root.transform, label, TextRole.Secondary, TextAlignmentOptions.MidlineLeft);
             row.Layout = (y, left, width) => Place(title.transform, title, left + LabelWidth * 0.5f, y, LabelWidth, RowHeight);
             building.Rows.Add(row);
             return row;
@@ -391,23 +420,37 @@ namespace SpatialLauncher.SpatialWindows
         void Value(string label, Func<string> value)
         {
             var row = NewRow(label);
-            var text = CreateLabel("Value", row.Root.transform, "", 0.19f, TextAlignmentOptions.MidlineLeft);
+            var text = CreateLabel("Value", row.Root.transform, "", TextRole.Body, TextAlignmentOptions.TopLeft);
+            text.textWrappingMode = TextWrappingModes.Normal; // long sentences wrap and grow the row instead of ending in "..."
+            text.overflowMode = TextOverflowModes.Overflow;
+            float lastHeight = RowHeight;
+            row.Height = width => Mathf.Max(RowHeight, text.GetPreferredValues(text.text, width - LabelWidth - Gap, 0f).y);
             var layoutLabel = row.Layout;
             row.Layout = (y, left, width) =>
             {
                 layoutLabel(y, left, width);
-                Place(text.transform, text, left + LabelWidth + Gap + (width - LabelWidth - Gap) * 0.5f, y, width - LabelWidth - Gap, RowHeight);
+                float h = row.Height(width), top = y + RowHeight * 0.5f;
+                bool wrapped = h > RowHeight + 1e-4f;
+                text.alignment = wrapped ? TextAlignmentOptions.TopLeft : TextAlignmentOptions.MidlineLeft;
+                // A wrapped value starts level with the row's title.
+                float inset = wrapped ? (RowHeight - text.fontSize / ThemeApplier.TmpWorldScale * UITheme.LineHeight) * 0.5f : 0f;
+                Place(text.transform, text, left + LabelWidth + Gap + (width - LabelWidth - Gap) * 0.5f, top - h * 0.5f - inset, width - LabelWidth - Gap, h);
             };
-            row.Refresh = () => SetText(text, value());
+            row.Refresh = () =>
+            {
+                SetText(text, value());
+                if (row.Height != null && Mathf.Abs(row.Height(lastWidth) - lastHeight) > 1e-4f) { lastHeight = row.Height(lastWidth); Relayout(); }
+            };
         }
 
         void Slider(string label, float min, float max, Func<float> get, Action<float> set, Func<float, string> format)
         {
             const float valueWidth = 0.12f;
             var row = NewRow(label);
-            var slider = CreateControl<WindowSlider>("Slider", row.Root.transform, CreateMaterial(TrackColor));
-            var fill = CreateQuad("Fill", row.Root.transform, CreateMaterial(SelectedColor));
-            var text = CreateLabel("Value", row.Root.transform, "", 0.19f, TextAlignmentOptions.MidlineRight);
+            var slider = CreateControl<WindowSlider>("Slider", row.Root.transform, CreateRounded(TrackColor, 0f));
+            var fill = CreateQuad("Fill", row.Root.transform, CreateRounded(SelectedColor, 0f), FillLayer);
+            Round(fill, 0f, true);
+            var text = CreateLabel("Value", row.Root.transform, "", TextRole.Body, TextAlignmentOptions.MidlineRight);
             slider.ValueChanged += t => { set(Mathf.Lerp(min, max, t)); row.Refresh(); };
             row.Controls["Slider"] = slider;
             var layoutLabel = row.Layout;
@@ -436,11 +479,16 @@ namespace SpatialLauncher.SpatialWindows
         {
             var row = NewRow(label);
             var buttons = new List<(WindowButton button, Material material, TextMeshPro text)>();
+            // One raised capsule track; the selected option is an AccentFill capsule segment on it.
+            var track = CreateQuad("Track", row.Root.transform, CreateRounded(TrackColor, 0f));
+            Round(track, 0f, true);
             for (int i = 0; i < options.Length; i++)
             {
-                var material = CreateMaterial(ControlColor);
+                var material = CreateRounded(TabColor, 0f);
                 var button = CreateControl<WindowButton>($"Option {options[i]}", row.Root.transform, material);
-                var text = CreateLabel($"OptionLabel {options[i]}", row.Root.transform, options[i], 0.17f, TextAlignmentOptions.Center);
+                Round(button.transform, 0f, true);
+                var text = CreateLabel($"OptionLabel {options[i]}", row.Root.transform, options[i], TextRole.Body, TextAlignmentOptions.Center);
+                button.BindLabel(text);
                 int index = i;
                 button.Clicked += () => { set(index); row.Refresh(); };
                 row.Controls[options[i]] = button;
@@ -452,6 +500,8 @@ namespace SpatialLauncher.SpatialWindows
                 layoutLabel(y, left, width);
                 float area = width - LabelWidth - Gap;
                 float cell = (area - Gap * (buttons.Count - 1)) / buttons.Count;
+                track.localPosition = new Vector3(left + LabelWidth + Gap + area * 0.5f, y, -0.0005f);
+                track.localScale = new Vector3(area, RowHeight, 1f);
                 for (int i = 0; i < buttons.Count; i++)
                 {
                     float x = left + LabelWidth + Gap + cell * (i + 0.5f) + Gap * i;
@@ -463,42 +513,58 @@ namespace SpatialLauncher.SpatialWindows
             row.Refresh = () =>
             {
                 int current = get();
-                for (int i = 0; i < buttons.Count; i++) buttons[i].material.color = i == current ? SelectedColor : ControlColor;
+                for (int i = 0; i < buttons.Count; i++) buttons[i].material.color = i == current ? SelectedColor : TabColor;
             };
         }
 
         void Toggle(string label, Func<bool> get, Action<bool> set)
         {
-            const float width = 0.1f;
             var row = NewRow(label);
-            var material = CreateMaterial(ControlColor);
-            var button = CreateControl<WindowButton>("Toggle", row.Root.transform, material);
-            var text = CreateLabel("ToggleLabel", row.Root.transform, "", 0.18f, TextAlignmentOptions.Center);
+            // The hit area is a clear 52 x 44 button; the switch (track and knob) is drawn over it.
+            var button = CreateControl<WindowButton>("Toggle", row.Root.transform, CreateRounded(TabColor, 0f));
+            var trackMaterial = CreateRounded(TrackColor, 0f);
+            var track = CreateQuad("SwitchTrack", row.Root.transform, trackMaterial, ControlLayer);
+            Round(track, 0f, true);
+            var knob = CreateQuad("SwitchKnob", row.Root.transform, CreateRounded(Color.white, 0f), FillLayer);
+            Round(knob, 0f, true);
+            var text = CreateLabel("ToggleLabel", row.Root.transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
+            // The switch itself shows the state; the clear hit area behind it doesn't.
+            button.OwnShapeReacts = false;
+            button.BindRenderer(track.GetComponent<MeshRenderer>());
+            button.BindRenderer(knob.GetComponent<MeshRenderer>());
+            button.BindLabel(text);
             button.Clicked += () => { set(!get()); row.Refresh(); };
             row.Controls["On"] = button;
             var layoutLabel = row.Layout;
             row.Layout = (y, left, rowWidth) =>
             {
                 layoutLabel(y, left, rowWidth);
-                float x = left + LabelWidth + Gap + width * 0.5f;
+                float x = left + LabelWidth + Gap + SwitchWidth * 0.5f;
                 button.transform.localPosition = new Vector3(x, y, -0.001f);
-                button.transform.localScale = new Vector3(width, RowHeight, 1f);
-                Place(text.transform, text, x, y, width, RowHeight);
+                button.transform.localScale = new Vector3(SwitchWidth, RowHeight, 1f);
+                track.localPosition = new Vector3(x, y, -0.0015f);
+                track.localScale = new Vector3(SwitchWidth, SwitchHeight, 1f);
+                knob.localScale = new Vector3(SwitchKnob, SwitchKnob, 1f);
+                Place(text.transform, text, x + SwitchWidth * 0.5f + Gap + 0.03f, y, 0.06f, RowHeight);
+                row.Refresh();
             };
             row.Refresh = () =>
             {
                 bool on = get();
                 SetText(text, on ? "On" : "Off");
-                material.color = on ? OnColor : ControlColor;
+                trackMaterial.color = on ? OnColor : TrackColor;
+                float travel = (SwitchWidth - SwitchKnob) * 0.5f - 0.002f;
+                var t = track.localPosition;
+                knob.localPosition = new Vector3(t.x + (on ? travel : -travel), t.y, -0.002f);
             };
         }
 
         void Field(string label, Func<string> get, Action<string> set, bool masked, bool digits, string placeholder)
         {
             var row = NewRow(label);
-            var material = CreateMaterial(FieldColor);
+            var material = CreateRounded(FieldColor, UITheme.ControlRadius);
             var field = CreateControl<WindowTextField>("Field", row.Root.transform, material);
-            var text = CreateLabel("FieldText", row.Root.transform, "", 0.19f, TextAlignmentOptions.MidlineLeft);
+            var text = CreateLabel("FieldText", row.Root.transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
             field.Init(text, material, placeholder);
             field.Masked = masked;
             field.DigitsOnly = digits;
@@ -523,13 +589,14 @@ namespace SpatialLauncher.SpatialWindows
 
         void Buttons(string label, params (string name, Action click, Func<string> text)[] buttons)
         {
-            const float width = 0.14f;
+            const float minWidth = 0.14f, padding = 0.016f; // 16 pt of padding on each side of a label
             var row = NewRow(label);
             var made = new List<(WindowButton button, TextMeshPro text, Func<string> caption)>();
             foreach (var (name, click, caption) in buttons)
             {
-                var button = CreateControl<WindowButton>($"Button {name}", row.Root.transform, CreateMaterial(OnColor));
-                var text = CreateLabel($"ButtonLabel {name}", row.Root.transform, name, 0.2f, TextAlignmentOptions.Center);
+                var button = CreateControl<WindowButton>($"Button {name}", row.Root.transform, CreateRounded(OnColor, UITheme.ControlRadius));
+                var text = CreateLabel($"ButtonLabel {name}", row.Root.transform, name, TextRole.Headline, TextAlignmentOptions.Center);
+                button.BindLabel(text);
                 button.Clicked += () => { click(); row.Refresh(); };
                 row.Controls[name] = button;
                 made.Add((button, text, caption));
@@ -538,9 +605,12 @@ namespace SpatialLauncher.SpatialWindows
             row.Layout = (y, left, rowWidth) =>
             {
                 layoutLabel(y, left, rowWidth);
+                float used = 0f;
                 for (int i = 0; i < made.Count; i++)
                 {
-                    float x = left + LabelWidth + Gap + width * (i + 0.5f) + Gap * i;
+                    float width = Mathf.Max(minWidth, made[i].text.GetPreferredValues(made[i].text.text).x + padding * 2f);
+                    float x = left + LabelWidth + Gap + used + width * 0.5f;
+                    used += width + Gap;
                     made[i].button.transform.localPosition = new Vector3(x, y, -0.001f);
                     made[i].button.transform.localScale = new Vector3(width, RowHeight, 1f);
                     Place(made[i].text.transform, made[i].text, x, y, width, RowHeight);
@@ -552,6 +622,8 @@ namespace SpatialLauncher.SpatialWindows
                     if (caption != null) SetText(text, caption());
             };
         }
+
+        float lastWidth = 0.6f; // width the rows were last laid out at
 
         static void Place(Transform t, TextMeshPro text, float x, float y, float width, float height)
         {
@@ -573,12 +645,12 @@ namespace SpatialLauncher.SpatialWindows
 
         protected override void Layout(Vector2 size)
         {
-            panel.localPosition = new Vector3(0f, 0f, -0.0005f);
+            panel.localPosition = new Vector3(0f, 0f, -0.0003f);
             panel.localScale = new Vector3(size.x, size.y, 1f);
 
             float top = size.y * 0.5f;
             float left = -size.x * 0.5f;
-            float tabHeight = Mathf.Min(RowHeight * 1.3f, (size.y - Gap * (sections.Count + 1)) / sections.Count);
+            float tabHeight = Mathf.Min(TabHeight, (size.y - Gap * (sections.Count + 1)) / sections.Count);
             for (int i = 0; i < sections.Count; i++)
             {
                 float y = top - Gap - tabHeight * (i + 0.5f) - Gap * i;
@@ -597,8 +669,10 @@ namespace SpatialLauncher.SpatialWindows
                 float y = rowTop - RowHeight * 0.5f;
                 foreach (var row in section.Rows)
                 {
+                    lastWidth = panelWidth;
                     row.Layout(y, panelLeft, panelWidth);
-                    y -= RowHeight + Gap;
+                    float extra = row.Height != null ? Mathf.Max(0f, row.Height(panelWidth) - RowHeight) : 0f;
+                    y -= RowHeight + extra + Gap;
                 }
             }
         }

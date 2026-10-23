@@ -192,8 +192,8 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             yield return Settle;
             var window = launcher.SettingsWindow;
             var settings = window != null ? window.GetComponentInChildren<SettingsContent>() : null;
-            Check(settings != null && manager.FocusedWindow == window && settings.Tabs.Count == SettingsContent.SectionNames.Length && settings.Tabs.Count == 8,
-                "the Settings icon opens the Settings window with 8 sections (Gestures split from Hands)");
+            Check(settings != null && manager.FocusedWindow == window && settings.Tabs.Count == SettingsContent.SectionNames.Length && settings.Tabs.Count == 9,
+                "the Settings icon opens the Settings window with 9 sections (Gestures split from Hands)");
             if (settings == null) yield break;
 
             Click(mouse, cam, settings.Tabs[2].transform.position);

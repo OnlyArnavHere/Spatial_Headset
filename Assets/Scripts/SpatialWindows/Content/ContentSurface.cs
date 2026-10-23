@@ -59,6 +59,9 @@ namespace SpatialLauncher.SpatialWindows
             return new Vector2(Mathf.Clamp01(local.x + 0.5f), Mathf.Clamp01(local.y + 0.5f));
         }
 
+        // The video / stream picture is never tinted by hover or press.
+        protected override bool DrawsState => false;
+
         IContentInput Input => Source?.Input;
 
         // Release carries no point (the pointer may have left the quad), so it reports the last one seen.

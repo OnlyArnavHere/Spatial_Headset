@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Video;
@@ -29,6 +31,7 @@ namespace SpatialLauncher.SpatialWindows
         static readonly Color SettingsIconColor = new Color(0.45f, 0.47f, 0.52f);
         static readonly Color HideIconColor = new Color(0.35f, 0.30f, 0.45f);
         static readonly Color CastIconColor = new Color(0.62f, 0.38f, 0.16f);
+        static readonly Color SwitchIconColor = new Color(0.25f, 0.45f, 0.55f);
         const int HideEntry = 8;
 
         [SerializeField] WindowManager manager;
@@ -65,7 +68,6 @@ namespace SpatialLauncher.SpatialWindows
         [Header("Launcher")]
         [SerializeField] bool openOnStart = true;
         [SerializeField] Key openKey = Key.H;
-        [SerializeField] Vector2 launcherSize = new Vector2(0.5f, 0.3f);
         [Tooltip("Width of the media shown in Image and Video windows, in metres.")]
         [SerializeField] float mediaWidth = 0.6f;
 
@@ -98,11 +100,15 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<GestureRecognizers>(out _)) gameObject.AddComponent<GestureRecognizers>();
             if (!TryGetComponent<GestureDebugOverlay>(out _)) gameObject.AddComponent<GestureDebugOverlay>();
             if (!TryGetComponent<VoiceTyping>(out _)) gameObject.AddComponent<VoiceTyping>();
+            if (!TryGetComponent<HoloKitCameraFix>(out _)) gameObject.AddComponent<HoloKitCameraFix>();
             if (!TryGetComponent<StereoPassthrough>(out _)) gameObject.AddComponent<StereoPassthrough>();
+            if (!TryGetComponent<BackdropBlur>(out _)) gameObject.AddComponent<BackdropBlur>();
             if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
             if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
             if (!TryGetComponent<LaptopLink.LinkService>(out _)) gameObject.AddComponent<LaptopLink.LinkService>();
+            if (!TryGetComponent<Switcher.AppSwitcher>(out var switcher)) switcher = gameObject.AddComponent<Switcher.AppSwitcher>();
+            switcher.Manager = manager;
         }
 
         void OnEnable()
@@ -117,7 +123,7 @@ namespace SpatialLauncher.SpatialWindows
 
         void OnHiddenChanged(bool isHidden)
         {
-            if (LauncherContent != null) LauncherContent.SetEntryText(HideEntry, isHidden ? "Show all" : "Hide all", isHidden ? "SHOW" : "HIDE");
+            if (LauncherContent != null) LauncherContent.SetEntryText(HideEntry, isHidden ? "Show all" : "Hide all", isHidden ? UIIcons.Visibility : UIIcons.VisibilityOff);
         }
 
         /// <summary>Hides every window but the launcher, or brings them back.</summary>
@@ -148,22 +154,23 @@ namespace SpatialLauncher.SpatialWindows
                 return Launcher;
             }
 
-            Launcher = manager.Spawn("Home", launcherSize);
+            Launcher = manager.Spawn("Home", LauncherContent.WindowSize);
             if (Launcher == null) return null;
 
             LauncherContent = new GameObject().AddComponent<LauncherContent>();
             LauncherContent.Init(Launcher, manager.WindowMaterial, new[]
             {
-                new LauncherContent.Entry { Label = "Image", Glyph = "IMG", Color = ImageIconColor, Open = () => OpenImageWindow() },
-                new LauncherContent.Entry { Label = "Video", Glyph = "VID", Color = VideoIconColor, Open = () => OpenVideoWindow() },
-                new LauncherContent.Entry { Label = "Blank", Glyph = "+", Color = BlankIconColor, Open = () => OpenBlankWindow() },
-                new LauncherContent.Entry { Label = "Laptop", Glyph = "PC", Color = LaptopIconColor, Open = () => OpenLaptopWindow() },
-                new LauncherContent.Entry { Label = "Void", Glyph = "VOID", Color = VoidIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Void) },
-                new LauncherContent.Entry { Label = "Cinema", Glyph = "CIN", Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
-                new LauncherContent.Entry { Label = "Sky", Glyph = "SKY", Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
-                new LauncherContent.Entry { Label = "Settings", Glyph = "SET", Color = SettingsIconColor, Open = () => OpenSettings() },
-                new LauncherContent.Entry { Label = "Hide all", Glyph = "HIDE", Color = HideIconColor, Open = ToggleHideAll },
-                new LauncherContent.Entry { Label = "Cast", Glyph = "CAST", Color = CastIconColor, Open = () => OpenCastPicker() },
+                new LauncherContent.Entry { Label = "Image", Icon = UIIcons.Image, Color = ImageIconColor, Open = () => OpenImageWindow() },
+                new LauncherContent.Entry { Label = "Video", Icon = UIIcons.Movie, Color = VideoIconColor, Open = () => OpenVideoWindow() },
+                new LauncherContent.Entry { Label = "Blank", Icon = UIIcons.CheckBoxOutlineBlank, Color = BlankIconColor, Open = () => OpenBlankWindow() },
+                new LauncherContent.Entry { Label = "Laptop", Icon = UIIcons.Laptop, Color = LaptopIconColor, Open = () => OpenLaptopWindow() },
+                new LauncherContent.Entry { Label = "Void", Icon = UIIcons.DarkMode, Color = VoidIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Void) },
+                new LauncherContent.Entry { Label = "Cinema", Icon = UIIcons.Theaters, Color = CinemaIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Cinema) },
+                new LauncherContent.Entry { Label = "Sky", Icon = UIIcons.WbSunny, Color = SkyIconColor, Open = () => SelectEnvironment(ImmersiveEnvironment.Sky) },
+                new LauncherContent.Entry { Label = "Settings", Icon = UIIcons.Settings, Color = SettingsIconColor, Open = () => OpenSettings() },
+                new LauncherContent.Entry { Label = "Hide all", Icon = UIIcons.VisibilityOff, Color = HideIconColor, Open = ToggleHideAll },
+                new LauncherContent.Entry { Label = "Cast", Icon = UIIcons.Cast, Color = CastIconColor, Open = () => OpenCastPicker() },
+                new LauncherContent.Entry { Label = "Switch", Icon = UIIcons.SwitchWindows, Color = SwitchIconColor, Open = () => GetComponent<Switcher.AppSwitcher>()?.OpenOverview() },
             });
             OnHiddenChanged(manager.WindowsHidden);
             return Launcher;
@@ -238,9 +245,41 @@ namespace SpatialLauncher.SpatialWindows
             content.Init(window, manager.WindowMaterial, () => OpenPairing());
 #if SPATIAL_LAUNCHER_WEBRTC
             content.OpenLinked = (session, opened, target) => OpenLinkedStream(session, opened, target, cast);
+            if (!cast) content.OpenShell = session => OpenLaptopShell(session);
 #endif
             return window;
         }
+
+#if SPATIAL_LAUNCHER_WEBRTC
+        readonly Dictionary<LinkSession, SpatialWindow> shellWindows = new Dictionary<LinkSession, SpatialWindow>();
+
+        /// <summary>
+        /// The Laptop Shell for a connected laptop: its apps, search and dock or taskbar (LaptopShell.LaptopShellContent).
+        /// One per session; asking again brings it to the front. Windows it opens become linked stream windows.
+        /// </summary>
+        public SpatialWindow OpenLaptopShell(LinkSession session)
+        {
+            if (session == null || session.IsEnded) return null;
+            var ended = new List<LinkSession>();
+            foreach (var pair in shellWindows)
+                if (pair.Key.IsEnded || pair.Value == null) ended.Add(pair.Key);
+            foreach (var key in ended) shellWindows.Remove(key);
+            if (shellWindows.TryGetValue(session, out var open))
+            {
+                manager.Focus(open);
+                return open;
+            }
+            var window = manager.Spawn("Laptop apps", LaptopShell.LaptopShellContent.WindowSize);
+            if (window == null) return null;
+            var link = new LaptopShell.LaptopShellLink(session);
+            link.OpenLinked = (s, opened, target) => OpenLinkedStream(s, opened, target, false);
+            var content = new GameObject().AddComponent<LaptopShell.LaptopShellContent>();
+            content.Init(window, manager.WindowMaterial, link);
+            content.KeyboardRequested += () => OpenKeyboard();
+            shellWindows[session] = window;
+            return window;
+        }
+#endif
 
 #if SPATIAL_LAUNCHER_WEBRTC
         /// <summary>A stream window on one slot of the link session (view-only until control is requested; Cast: media only).</summary>

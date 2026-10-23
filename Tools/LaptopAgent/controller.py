@@ -100,7 +100,8 @@ class AgentController:
         self._kill_switch = kill_switch or hostos.watch_kill_switch
         self._load_identity = load_identity or (lambda: identity.load_or_create(identity.default_home()))
         self._store_factory = store_factory or (lambda: pairing.PairStore(identity.default_home()))
-        self._approver_factory = approver_factory or (lambda keyboard: approval.LaptopApprover(keyboard=keyboard))
+        self._approver_factory = approver_factory or (
+            lambda keyboard: approval.LaptopApprover(keyboard=keyboard, store=self._store or self._store_factory()))
         self._watch_s = watch_s
         self._pair_command = pair_command or agent.pair_command
         self._fetch = fetch or tools_fetch.ensure
@@ -180,6 +181,10 @@ class AgentController:
 
     def revoke(self, name: str) -> bool:
         return (self._store or self._store_factory()).revoke(name)
+
+    def stop_always_allowing(self, name: str) -> bool:
+        """The pair stays; its control requests get the laptop's Yes/No box again."""
+        return (self._store or self._store_factory()).set_always_allow(name, False)
 
     # Pairing: the dialog calls these from the GUI thread; pair_command runs on the agent loop. Progress arrives as
     # events: {"type": "pair_say", "text"}, {"type": "pair_prompt", "text"}, {"type": "pair_done", "ok", "text"}.

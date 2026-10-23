@@ -413,10 +413,149 @@ user32.MessageBoxW.restype = ctypes.c_int
 _FLAGS = _MB_YESNO | _MB_ICONWARNING | _MB_DEFBUTTON2 | _MB_TOPMOST  # no MB_SETFOREGROUND: the box doesn't take focus itself
 
 
-def ask_yes_no(text: str, caption: str, timeout_ms: int) -> str:
-    """A top-most Yes/No box (default No) that blocks the calling thread: "yes", "no" or "timeout".
+# A task dialog (comctl32 v6) adds the always-allow checkbox. Python's own manifest doesn't ask for comctl32 v6, so the
+# dialog is created inside an activation context made from a small manifest that does.
+_COMCTL6_MANIFEST = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"><dependency><dependentAssembly>'
+    '<assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" '
+    'processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>'
+    '</dependentAssembly></dependency></assembly>')
+_TDF_ALLOW_DIALOG_CANCELLATION, _TDF_CALLBACK_TIMER = 0x0008, 0x0800
+_TDCBF_YES_BUTTON, _TDCBF_NO_BUTTON = 0x2, 0x4
+_TD_WARNING_ICON = 0xFFFF  # MAKEINTRESOURCEW(-1)
+_TDN_CREATED, _TDN_TIMER = 0, 4
+_TDM_CLICK_BUTTON = 0x0400 + 102
+_HWND_TOPMOST = -1
+_SWP_NOSIZE_NOMOVE_NOACTIVATE = 0x0001 | 0x0002 | 0x0010
+_TDCALLBACK = ctypes.WINFUNCTYPE(ctypes.c_long, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM, ctypes.c_ssize_t)
+
+
+class _TASKDIALOGCONFIG(ctypes.Structure):
+    _pack_ = 1  # commctrl.h declares it packed
+    _fields_ = [("cbSize", wt.UINT), ("hwndParent", wt.HWND), ("hInstance", wt.HINSTANCE), ("dwFlags", ctypes.c_int),
+                ("dwCommonButtons", ctypes.c_int), ("pszWindowTitle", wt.LPCWSTR), ("pszMainIcon", ctypes.c_void_p),
+                ("pszMainInstruction", wt.LPCWSTR), ("pszContent", wt.LPCWSTR), ("cButtons", wt.UINT),
+                ("pButtons", ctypes.c_void_p), ("nDefaultButton", ctypes.c_int), ("cRadioButtons", wt.UINT),
+                ("pRadioButtons", ctypes.c_void_p), ("nDefaultRadioButton", ctypes.c_int),
+                ("pszVerificationText", wt.LPCWSTR), ("pszExpandedInformation", wt.LPCWSTR),
+                ("pszExpandedControlText", wt.LPCWSTR), ("pszCollapsedControlText", wt.LPCWSTR),
+                ("pszFooterIcon", ctypes.c_void_p), ("pszFooter", wt.LPCWSTR), ("pfCallback", _TDCALLBACK),
+                ("lpCallbackData", ctypes.c_ssize_t), ("cxWidth", wt.UINT)]
+
+
+class _ACTCTXW(ctypes.Structure):
+    _fields_ = [("cbSize", wt.ULONG), ("dwFlags", wt.DWORD), ("lpSource", wt.LPCWSTR),
+                ("wProcessorArchitecture", wt.USHORT), ("wLangId", wt.USHORT), ("lpAssemblyDirectory", wt.LPCWSTR),
+                ("lpResourceName", ctypes.c_void_p), ("lpApplicationName", wt.LPCWSTR), ("hModule", wt.HMODULE)]
+
+
+_task_dialog = None  # (activation context, TaskDialogIndirect) once loaded; False if it can't be
+
+
+def _load_task_dialog():
+    """TaskDialogIndirect from comctl32 v6, and the activation context to call it in. None if unavailable."""
+    global _task_dialog
+    if _task_dialog is not None:
+        return _task_dialog or None
+    import os
+    import tempfile
+    _task_dialog = False
+    kernel32.CreateActCtxW.argtypes = [ctypes.POINTER(_ACTCTXW)]
+    kernel32.CreateActCtxW.restype = wt.HANDLE
+    kernel32.ActivateActCtx.argtypes = [wt.HANDLE, ctypes.POINTER(ctypes.c_size_t)]
+    kernel32.ActivateActCtx.restype = wt.BOOL
+    kernel32.DeactivateActCtx.argtypes = [wt.DWORD, ctypes.c_size_t]
+    kernel32.LoadLibraryW.argtypes = [wt.LPCWSTR]
+    kernel32.LoadLibraryW.restype = wt.HMODULE
+    kernel32.GetProcAddress.argtypes = [wt.HMODULE, ctypes.c_char_p]
+    kernel32.GetProcAddress.restype = ctypes.c_void_p
+    fd, path = tempfile.mkstemp(suffix=".manifest")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(_COMCTL6_MANIFEST)
+        context = _ACTCTXW(cbSize=ctypes.sizeof(_ACTCTXW), lpSource=path)
+        handle = kernel32.CreateActCtxW(ctypes.byref(context))
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if not handle or handle == ctypes.c_void_p(-1).value:
+        return None
+    cookie = ctypes.c_size_t()
+    if not kernel32.ActivateActCtx(handle, ctypes.byref(cookie)):
+        return None
+    try:
+        module = kernel32.LoadLibraryW("comctl32.dll")
+        address = kernel32.GetProcAddress(module, b"TaskDialogIndirect") if module else None
+    finally:
+        kernel32.DeactivateActCtx(0, cookie.value)
+    if not address:
+        return None
+    func = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.POINTER(_TASKDIALOGCONFIG), ctypes.POINTER(ctypes.c_int),
+                              ctypes.POINTER(ctypes.c_int), ctypes.POINTER(wt.BOOL))(address)
+    _task_dialog = (handle, func)
+    return _task_dialog
+
+
+def task_dialog_answer(button: int, checked: bool, timed_out: bool) -> str:
+    """What the task dialog's result means. Ticking the box counts only together with Yes."""
+    if timed_out:
+        return "timeout"
+    if button == _IDYES:
+        return "always" if checked else "yes"
+    return "no"
+
+
+def ask_with_always(text: str, caption: str, timeout_ms: int, always: str) -> str | None:
+    """A top-most Yes/No task dialog (default No) with an unticked checkbox `always`: "yes", "always", "no",
+    "timeout", or None when the task dialog isn't available (then ask_yes_no shows the plain box)."""
+    loaded = _load_task_dialog()
+    if loaded is None:
+        return None
+    context, func = loaded
+    state = {"timed_out": False}
+
+    def callback(hwnd, message, wparam, lparam, data):
+        if message == _TDN_CREATED:
+            user32.SetWindowPos(wt.HWND(hwnd), wt.HWND(_HWND_TOPMOST), 0, 0, 0, 0, _SWP_NOSIZE_NOMOVE_NOACTIVATE)
+        elif message == _TDN_TIMER and wparam >= timeout_ms and not state["timed_out"]:
+            state["timed_out"] = True
+            user32.PostMessageW(hwnd, _TDM_CLICK_BUTTON, _IDNO, 0)
+        return 0
+
+    keep = _TDCALLBACK(callback)
+    config = _TASKDIALOGCONFIG(cbSize=ctypes.sizeof(_TASKDIALOGCONFIG),
+                               dwFlags=_TDF_ALLOW_DIALOG_CANCELLATION | _TDF_CALLBACK_TIMER,
+                               dwCommonButtons=_TDCBF_YES_BUTTON | _TDCBF_NO_BUTTON, pszWindowTitle=caption,
+                               pszMainIcon=_TD_WARNING_ICON, pszContent=text, nDefaultButton=_IDNO,
+                               pszVerificationText=always, pfCallback=keep)
+    button, checked = ctypes.c_int(), wt.BOOL()
+    cookie = ctypes.c_size_t()
+    if not kernel32.ActivateActCtx(context, ctypes.byref(cookie)):
+        return None
+    try:
+        result = func(ctypes.byref(config), ctypes.byref(button), None, ctypes.byref(checked))
+    finally:
+        kernel32.DeactivateActCtx(0, cookie.value)
+    if result != 0:
+        return None
+    return task_dialog_answer(button.value, bool(checked.value), state["timed_out"])
+
+
+def ask_yes_no(text: str, caption: str, timeout_ms: int, always: str | None = None) -> str:
+    """A top-most Yes/No box (default No) that blocks the calling thread: "yes", "no" or "timeout"; with `always`, a
+    task dialog with that unticked checkbox, which can also answer "always" (Yes with the box ticked).
     Doesn't take focus by itself; if Windows activates it, "y" answers Yes and Enter/Space choose the default, No. Call it on a thread of its own."""
     import threading
+    if always:
+        try:
+            answer = ask_with_always(text, caption, timeout_ms, always)
+        except OSError:
+            answer = None
+        if answer is not None:
+            return answer
     try:
         func = user32.MessageBoxTimeoutW
     except AttributeError:
@@ -444,13 +583,14 @@ def ask_yes_no(text: str, caption: str, timeout_ms: int) -> str:
 
 
 def dismiss_prompt(thread_id: int) -> bool:
-    """Answers No on a message box owned by that thread (a Yes/No box ignores WM_CLOSE). True if one was found."""
+    """Answers No on a message box or task dialog owned by that thread (a Yes/No box ignores WM_CLOSE). True if one was found."""
     found = []
 
     def visit(hwnd, _) -> bool:
         name = ctypes.create_unicode_buffer(16)
         if user32.GetClassNameW(hwnd, name, 16) and name.value == _DIALOG_CLASS:
             user32.PostMessageW(hwnd, _WM_COMMAND, _IDNO, 0)
+            user32.PostMessageW(hwnd, _TDM_CLICK_BUTTON, _IDNO, 0)  # a task dialog (harmless to a message box)
             found.append(hwnd)
         return True
 

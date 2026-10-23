@@ -253,6 +253,8 @@ namespace SpatialLauncher.SpatialWindows
             if (manager == null || !HasPending || modal != null) return;
             modal = manager.Spawn(pending[0].Title ?? "Allow screen?", modalSize);
             if (modal == null) return;
+            modal.SetSolid(true);
+            if (Application.isPlaying) modal.BeginOpen(fadeOnly: true);   // fade only; its buttons take presses from frame 0
             modalContent = new GameObject().AddComponent<ConsentContent>();
             modalContent.Init(modal, manager.WindowMaterial, this);
         }

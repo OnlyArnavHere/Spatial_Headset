@@ -1,6 +1,13 @@
 """The laptop's own question before a headset may control it: a top-most Yes/No box (default No, 30 s, then deny).
 LaptopApprover matches dispatch.Approver: it returns True (Yes) or False (No), raises asyncio.TimeoutError when the box
-timed out, and closes the box if the request is cancelled (session closed, kill switch). One box at a time."""
+timed out, and closes the box if the request is cancelled (session closed, kill switch). One box at a time.
+
+Always allow: with a pair store, the box also offers "Always allow this headset for control" (a checkbox on Windows, a
+button on macOS and Linux; never the default). Choosing it marks that pair, found by the headset's full public key from
+the signed handshake, and later requests from that headset are granted without a box, each one logged loudly. Only
+the laptop's own control request box is skipped: --input is still needed, and the headset still asks its wearer.
+The mark is removed in the app (Paired headsets > Stop always allowing), with --revoke-always NAME, or by forgetting the
+pair (--revoke NAME)."""
 import asyncio
 import logging
 import threading
@@ -11,6 +18,7 @@ import hostos
 log = logging.getLogger("approval")
 
 CAPTION = "Spatial Launcher"
+ALWAYS_TEXT = "Always allow this headset for control"
 PROMPT_TIMEOUT_MS = 30000
 NAME_MAX = 32
 DISMISS_WAIT_S = 2.0
@@ -34,11 +42,36 @@ def prompt_text(info: dict, keyboard: bool) -> str:
 
 
 class LaptopApprover:
-    def __init__(self, keyboard: bool = False, timeout_ms: int = PROMPT_TIMEOUT_MS):
+    def __init__(self, keyboard: bool = False, timeout_ms: int = PROMPT_TIMEOUT_MS, store=None):
         self.keyboard = keyboard
         self.timeout_ms = timeout_ms
+        self.store = store  # pairing.PairStore, or None: then there is no always-allow
+
+    def _always_allowed(self, spki) -> bool:
+        if self.store is None or not spki:
+            return False
+        try:
+            return self.store.always_allowed(bytes(spki))
+        except (ValueError, OSError) as e:
+            log.warning("Couldn't read the always-allow list (%s); asking instead", e)
+            return False
+
+    def _remember(self, info: dict) -> None:
+        try:
+            if self.store.set_always_allow(bytes(info["spki"]), True):
+                log.warning('"%s" is now ALWAYS ALLOWED to control this laptop without asking. Undo it in the app '
+                            "(Paired headsets) or with --revoke-always NAME.", sanitize_name(info.get("name")))
+        except (ValueError, OSError) as e:
+            log.warning("Couldn't save always allow (%s); this time only", e)
 
     async def __call__(self, info: dict) -> bool:
+        spki = info.get("spki")
+        if self._always_allowed(spki):
+            log.warning('CONTROL ALLOWED WITHOUT ASKING: "%s" (%s) is always allowed. Undo it in the app (Paired '
+                        "headsets) or with --revoke-always NAME.", sanitize_name(info.get("name")),
+                        info.get("fingerprint", "unknown"))
+            return True
+        offer_always = self.store is not None and bool(spki)
         if not _one_box.acquire(blocking=False):
             log.info("Another approval prompt is open; denying this request")
             return False
@@ -53,7 +86,8 @@ class LaptopApprover:
 
         def ask() -> None:
             try:
-                prompt = hostos.open_prompt(text, CAPTION, self.timeout_ms)
+                prompt = (hostos.open_prompt(text, CAPTION, self.timeout_ms, always=ALWAYS_TEXT) if offer_always
+                          else hostos.open_prompt(text, CAPTION, self.timeout_ms))
                 prompts.append(prompt)
                 answer = ("ok", prompt.wait())
             except BaseException as e:
@@ -81,6 +115,9 @@ class LaptopApprover:
             return False
         if value == "timeout":
             raise asyncio.TimeoutError()
+        if value == "always" and offer_always:
+            self._remember(info)
+            return True
         return value == "yes"
 
     @staticmethod

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using UnityEngine;
 
 namespace SpatialLauncher.SpatialWindows
@@ -25,6 +26,8 @@ namespace SpatialLauncher.SpatialWindows
         [Header("Rendering")]
         [Tooltip("Base material for window quads. Defaults to URP Unlit.")]
         [SerializeField] Material windowMaterial;
+        [Tooltip("Glass material for window bodies (Assets/Materials/SpatialGlass.mat). Without it windows get a plain dark body.")]
+        [SerializeField] Material glassMaterial;
 
         [Header("Spawning")]
         [SerializeField] float spawnDistance = 1.5f;
@@ -66,6 +69,7 @@ namespace SpatialLauncher.SpatialWindows
         public SpatialWindow FocusedWindow => windows.Count > 0 ? windows[windows.Count - 1] : null;
         /// <summary>Base material for window quads; content can reuse it for its own quads.</summary>
         public Material WindowMaterial => windowMaterial;
+        public Material GlassMaterial => glassMaterial;
         public Vector2 MinSize => minSize;
         public Vector2 MaxSize => maxSize;
 
@@ -194,6 +198,7 @@ namespace SpatialLauncher.SpatialWindows
             foreach (var window in GetComponentsInChildren<SpatialWindow>())
             {
                 if (windows.Contains(window)) continue;
+                if (window.TryGetComponent<WindowMotion>(out var motion) && motion.IsClosing) continue;
                 windows.Add(window);
                 window.AspectRequested -= SetAspect;
                 window.AspectRequested += SetAspect;
@@ -231,7 +236,7 @@ namespace SpatialLauncher.SpatialWindows
             var window = go.AddComponent<SpatialWindow>();
             var aspect = size.HasValue ? AspectPreset.Free : defaultAspect;
             window.Initialize(title, AspectPresets.Fit(size ?? defaultSize, aspect, minSize, maxSize), windowMaterial, h,
-                billboardByDefault, worldLockedByDefault);
+                billboardByDefault, worldLockedByDefault, glassMaterial);
             window.SetAspectPreset(aspect);
             window.SetCurve(defaultCurve);
             window.AspectRequested += SetAspect;
@@ -239,6 +244,7 @@ namespace SpatialLauncher.SpatialWindows
             // Start in the receded state so the new window grows forward into focus.
             window.SetPresentation(0f, unfocusedScale, instant: true);
             windows.Add(window);
+            if (Application.isPlaying) window.BeginOpen();
             WindowOpened?.Invoke(window);
             Focus(window);
             return window;
@@ -261,9 +267,19 @@ namespace SpatialLauncher.SpatialWindows
             if (window == null || !windows.Remove(window)) return;
 
             WindowClosed?.Invoke(window);
-            Destroy(window.gameObject);
+            // Out of the list and unhittable now; it fades out and is destroyed when the motion is done.
+            // Hidden windows (and edit mode, where nothing ticks) go at once.
+            if (Application.isPlaying && window.isActiveAndEnabled) window.BeginClose(() => DestroyWindow(window));
+            else DestroyWindow(window);
             ApplyOrder();
             FocusChanged?.Invoke(FocusedWindow);
+        }
+
+        static void DestroyWindow(SpatialWindow window)
+        {
+            if (window == null) return;
+            if (Application.isPlaying) Destroy(window.gameObject);
+            else DestroyImmediate(window.gameObject);
         }
 
         public void CloseAll()

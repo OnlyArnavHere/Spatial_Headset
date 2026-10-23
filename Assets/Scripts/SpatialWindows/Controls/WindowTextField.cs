@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -11,11 +12,14 @@ namespace SpatialLauncher.SpatialWindows
     /// Ctrl+V pastes, Tab moves to the next field of the same group, Enter submits, Esc leaves the field.
     /// On iOS focusing opens the on-screen keyboard (usable in Mono mode, where the screen can be touched).
     /// While any field has focus, <see cref="IsTyping"/> is true so single-key shortcuts elsewhere can stand down.
+    /// The virtual keyboard types into the focused field too (<see cref="ApplyStroke"/>), like voice typing does.
     /// </summary>
     public class WindowTextField : WindowControl
     {
-        static readonly Color NormalColor = new Color(0.20f, 0.21f, 0.25f);
-        static readonly Color FocusedColor = new Color(0.16f, 0.30f, 0.60f);
+        /// <summary>The raised glass overlay over the dark fallback, like the round controls.</summary>
+        public static readonly Color NormalColor = UITheme.CompositeOver(UITheme.GlassRaised, UITheme.GlassFallback);
+        /// <summary>The accent over the normal fill, so a focused field stands out from its neighbours.</summary>
+        public static readonly Color FocusedColor = UITheme.CompositeOver(new Color(UITheme.Accent.r, UITheme.Accent.g, UITheme.Accent.b, 0.45f), NormalColor);
 
         /// <summary>The field that has keyboard focus, if any.</summary>
         public static WindowTextField Focused { get; private set; }
@@ -67,6 +71,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Focused == this) return;
             if (Focused != null) Focused.Blur();
             Focused = this;
+            SetFocused(true);
             caretVisible = true;
             caretTimer = 0f;
             if (Keyboard.current != null) Keyboard.current.onTextInput += OnTextInput;
@@ -81,6 +86,7 @@ namespace SpatialLauncher.SpatialWindows
         {
             if (Focused != this) return;
             Focused = null;
+            SetFocused(false);
             if (Keyboard.current != null) Keyboard.current.onTextInput -= OnTextInput;
 #if UNITY_IOS && !UNITY_EDITOR
             if (touchKeyboard != null) touchKeyboard.active = false;
@@ -91,9 +97,46 @@ namespace SpatialLauncher.SpatialWindows
 
         public static void BlurAll() => Focused?.Blur();
 
+        /// <summary>
+        /// One virtual-keyboard stroke typed into this field: text is added, Backspace deletes, Enter submits, Esc leaves
+        /// the field. Other keys (arrows, Ctrl or Alt shortcuts) do nothing here.
+        /// </summary>
+        public void ApplyStroke(KeyStroke stroke)
+        {
+            if (!Interactable) return;
+            if (stroke.Kind == KeyStroke.Type.Text)
+            {
+                SetText(Text + stroke.Value);
+                return;
+            }
+            if (stroke.Kind != KeyStroke.Type.Down) return;
+            switch (stroke.Value)
+            {
+                case "Backspace":
+                    if (Text.Length > 0) SetText(Text.Substring(0, Text.Length - 1));
+                    break;
+                case "Enter":
+                    Blur();
+                    Submitted?.Invoke(this);
+                    break;
+                case "Escape":
+                    Blur();
+                    break;
+            }
+        }
+
+        protected override void OnInteractableChanged(bool nowInteractable)
+        {
+            base.OnInteractableChanged(nowInteractable);
+            if (!nowInteractable) Blur();
+        }
+
+        public override void Press(Vector3 worldPoint) => BeginPress();
+
         public override void Release(bool inside)
         {
-            if (inside) Focus();
+            EndPress();
+            if (inside && Interactable) Focus();
         }
 
         void OnTextInput(char character)
@@ -102,8 +145,9 @@ namespace SpatialLauncher.SpatialWindows
             SetText(Text + character);
         }
 
-        void Update()
+        protected override void Update()
         {
+            base.Update();
             if (Focused != this) return;
 
             caretTimer += Time.unscaledDeltaTime;
@@ -152,7 +196,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Text.Length == 0 && !focused)
             {
                 label.text = placeholder;
-                label.color = new Color(0.55f, 0.57f, 0.62f);
+                label.color = UITheme.TextSecondary;
             }
             else
             {

@@ -41,6 +41,7 @@ namespace SpatialLauncher.SpatialWindows.Editor
             CheckBuildScenes();
             CheckScene();
             CheckSceneAssets();
+            CheckBlurMaterial();
             CheckTextures();
             Debug.Log($"[DeviceCheck] Done: {passed} passed, {warnings} warnings, {failures} failures -> " +
                       (failures == 0 ? "OK to build" : "fix the failures before building"));
@@ -294,6 +295,9 @@ namespace SpatialLauncher.SpatialWindows.Editor
                     var so = new SerializedObject(managers[0]);
                     var material = so.FindProperty("windowMaterial").objectReferenceValue as Material;
                     Expect(material != null, "WindowManager has its window material assigned (no Shader.Find fallback at runtime)");
+                    var glass = so.FindProperty("glassMaterial").objectReferenceValue as Material;
+                    Expect(glass != null && glass.shader != null && glass.shader.name == "SpatialLauncher/SpatialGlass",
+                        "WindowManager has the SpatialGlass material assigned (window bodies are drawn with it)");
                     var head = so.FindProperty("head").objectReferenceValue as Transform;
                     Expect(head != null && head.GetComponent<Camera>() != null && head.GetComponent<UnityEngine.InputSystem.XR.TrackedPoseDriver>() != null,
                         $"WindowManager.head is the tracked AR camera ({(head != null ? head.name : "unset")}); Camera.main is null in HoloKit Stereo");
@@ -348,6 +352,15 @@ namespace SpatialLauncher.SpatialWindows.Editor
             {
                 if (openedHere) EditorSceneManager.CloseScene(scene, true);
             }
+        }
+
+        // The backdrop blur loads its material from Resources (BackdropBlurPass.MaterialPath), which keeps the shader in the build.
+        static void CheckBlurMaterial()
+        {
+            var material = Resources.Load<Material>(BackdropBlurPass.MaterialPath);
+            var shader = material != null ? material.shader : null;
+            Expect(shader != null && shader.name == "SpatialLauncher/KawaseBlur" && !ShaderUtil.ShaderHasError(shader),
+                $"Resources/{BackdropBlurPass.MaterialPath} uses the KawaseBlur shader ({(shader != null ? shader.name : "material missing")}), so the glass blur ships");
         }
 
         static void CheckSceneAssets()

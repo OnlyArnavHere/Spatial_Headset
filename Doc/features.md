@@ -40,6 +40,25 @@ gesture is switched off in Settings), F8, or in Mono the indicator's Stop.
 The laptop picker's list connection (window titles only) and Settings > Laptop's latency link show no screen and are
 not gated.
 
+### App switcher
+
+`AppSwitcher` brings a window forward from the headset's own windows and the connected laptop's (a laptop window that
+isn't streamed yet opens as a stream window through the Laptop Shell, which needs control). The overview
+(`SwitcherContent`) shows a card per window: headset windows first, most recently used first, then the laptop's
+windows in its taskbar or Dock order, with their real icons; a streamed laptop window appears once, as its headset
+window. Ways in:
+
+- **TRIGGER (ZOOM) button**, with Settings > Display > TRIGGER button set to Switcher (it then reads SWITCH): a press
+  opens the overview with the next window selected, each press moves on, and 1.5 s after the last press the selection
+  comes forward, like letting go of Alt+Tab. While the consent prompt asks, TRIGGER is still ALLOW. Set to Zoom (the
+  default), TRIGGER zooms as before; F5 and the Mono button always zoom.
+- **Pinch:** pinch a card to switch at once. A pinch held for 0.8 s while pointing at no window (and the other hand
+  not pinching) opens the overview (`PinchHoldRecognizer`; Settings > Gestures > Pinch and hold to switch).
+- **Home > Switch**, or **F7** in the editor: the overview, waiting for a pick.
+- **F6:** quick switch to the previous window without the overview; pressed again within 1.2 s it goes further back.
+
+Switching to a window while all windows are hidden shows them again.
+
 ## Deferred
 
 ### Other devices' screens

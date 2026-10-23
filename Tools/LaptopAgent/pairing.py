@@ -2,6 +2,10 @@
 
 pairs.json lives in the agent's home folder next to identity.key. A headset is trusted only if its full public key
 (SPKI DER) matches a stored pair; the fingerprint is always recomputed, never read back as proof.
+
+A pair can be marked "always allow": the laptop then grants that headset's control requests without its Yes/No box
+(approval.py). The mark is found by the full public key too, is off for every new pair, and is cleared with
+set_always_allow(..., False), or by revoking the pair.
 """
 import base64
 import hmac
@@ -106,6 +110,7 @@ class Pair:
     fingerprint: str
     public_key: bytes
     added: str
+    always_allow: bool = False
 
 
 def _utc_iso(now: datetime | None) -> str:
@@ -126,7 +131,8 @@ class PairStore:
             doc = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(doc, dict) or doc.get("version") != 1:
                 raise ValueError("unsupported version")
-            return [Pair(p["name"], p["fingerprint"], base64.b64decode(p["public_key"], validate=True), p["added"])
+            return [Pair(p["name"], p["fingerprint"], base64.b64decode(p["public_key"], validate=True), p["added"],
+                         p.get("always_allow") is True)
                     for p in doc["pairs"]]
         except (ValueError, KeyError, TypeError) as e:
             raise ValueError(f"{self.path} can't be read ({e}); fix or delete it. It was not changed.") from e
@@ -134,7 +140,8 @@ class PairStore:
     def _write(self, pairs) -> None:
         doc = {"version": 1, "pairs": [
             {"name": p.name, "fingerprint": p.fingerprint,
-             "public_key": base64.b64encode(p.public_key).decode("ascii"), "added": p.added} for p in pairs]}
+             "public_key": base64.b64encode(p.public_key).decode("ascii"), "added": p.added,
+             "always_allow": bool(p.always_allow)} for p in pairs]}
         identity.atomic_write(self.path, json.dumps(doc, indent=2).encode("utf-8"))
 
     def list(self) -> list[Pair]:
@@ -165,12 +172,33 @@ class PairStore:
         self._check(name, spki_der, pairs)
         for i, existing in enumerate(pairs):
             if existing.name.casefold() == name.casefold():
+                # same name and (checked above) same key: a re-pair starts again without the always-allow mark
                 pairs[i] = Pair(existing.name, pair.fingerprint, pair.public_key, pair.added)
                 self._write(pairs)
                 return pairs[i]
         pairs.append(pair)
         self._write(pairs)
         return pair
+
+    def set_always_allow(self, who: "str | bytes", value: bool) -> bool:
+        """Marks or unmarks a pair, given its name (case-insensitive) or its full public key. False if no pair matches."""
+        pairs = self._read()
+        for i, p in enumerate(pairs):
+            if isinstance(who, (bytes, bytearray)):
+                match = hmac.compare_digest(p.public_key, bytes(who))
+            else:
+                match = p.name.casefold() == str(who).strip().casefold()
+            if match:
+                if p.always_allow != bool(value):
+                    pairs[i] = Pair(p.name, p.fingerprint, p.public_key, p.added, bool(value))
+                    self._write(pairs)
+                return True
+        return False
+
+    def always_allowed(self, spki_der: bytes) -> bool:
+        """True only if the pair with exactly this public key is marked always allow."""
+        p = pinned(self, spki_der)
+        return p is not None and p.always_allow
 
     def revoke(self, name: str) -> bool:
         pairs = self._read()

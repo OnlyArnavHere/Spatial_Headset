@@ -20,6 +20,7 @@ namespace SpatialLauncher.SpatialWindows
         public WindowSettings windows = new WindowSettings();
         public ImmersionSettings immersion = new ImmersionSettings();
         public VoiceSettings voice = new VoiceSettings();
+        public PerformanceSettings performance = new PerformanceSettings();
 
         public SpatialSettings Clone() => JsonUtility.FromJson<SpatialSettings>(JsonUtility.ToJson(this));
     }
@@ -48,6 +49,8 @@ namespace SpatialLauncher.SpatialWindows
         /// less shrinks it with black around it, more magnifies it. Windows and hand tracking don't change.
         /// </summary>
         public float passthroughZoom = 1f;
+        /// <summary>HoloKit's stereo bar TRIGGER: false steps the zoom (ZOOM), true opens the app switcher (SWITCH).</summary>
+        public bool triggerSwitcher;
 
         /// <summary>Settings > Display > Zoom preset: the choices, in order, and their names.</summary>
         public static readonly float[] ZoomPresets = { 0.7f, 1f, 1.3f };
@@ -88,6 +91,8 @@ namespace SpatialLauncher.SpatialWindows
         public bool palmPush = true;
         public bool twoHandStretch = true;
         public bool crossSweepHide = true;
+        /// <summary>A pinch held on nothing opens the app switcher.</summary>
+        public bool pinchHoldSwitcher = true;
         /// <summary>Shows hand state and gesture recognizer outputs on screen, for tuning thresholds.</summary>
         public bool debugOverlay;
         /// <summary>
@@ -121,6 +126,8 @@ namespace SpatialLauncher.SpatialWindows
         public float defaultCurve;
         /// <summary>Aspect of new windows opened without a size of their own.</summary>
         public AspectPreset defaultAspect = AspectPreset.Free;
+        /// <summary>Windows open and close with a fade only (no scale).</summary>
+        public bool reduceMotion;
     }
 
     [Serializable]
@@ -130,6 +137,21 @@ namespace SpatialLauncher.SpatialWindows
         public float level;
         /// <summary>Start in the saved environment at the saved level; otherwise start in passthrough.</summary>
         public bool resumeOnStart;
+    }
+
+    [Serializable]
+    public class PerformanceSettings
+    {
+        /// <summary>
+        /// Windows' glass blurs the passthrough behind it (one shared pass per frame, <see cref="BackdropBlur"/>). Off: flat
+        /// glass.fallback colour, saves the pass's GPU time and a little heat.
+        /// </summary>
+        public bool glassBlur = true;
+        /// <summary>
+        /// Keep HoloKit's iOS 27 camera compatibility component (<see cref="HoloKitCameraFix"/>). Off removes it, to tell
+        /// whether it is what breaks the camera background on a device.
+        /// </summary>
+        public bool holoKitCameraFix = true;
     }
 
     [Serializable]

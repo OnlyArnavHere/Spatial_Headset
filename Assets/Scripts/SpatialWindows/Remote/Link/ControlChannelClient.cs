@@ -65,6 +65,12 @@ namespace SpatialLauncher.SpatialWindows
         public string ControlDeniedReason { get; private set; }
         public string RevokedReason { get; private set; }
         public IReadOnlyList<LaptopTarget> Targets { get; private set; } = Array.Empty<LaptopTarget>();
+        /// <summary>The laptop's OS as the welcome reported it for the shell ("windows", "macos", "linux"), or null.</summary>
+        public string ShellOs { get; private set; }
+        /// <summary>The agent offers the laptop shell (apps, search, window actions) on this OS.</summary>
+        public bool ShellOffered { get; private set; }
+        /// <summary>The shell can be used now: offered, and this session holds granted control (the agent refuses otherwise).</summary>
+        public bool ShellUsable => ShellOffered && State == LinkSessionState.Control;
 
         public double? RoundTripMs { get; private set; }
         public double? BestRoundTripMs { get; private set; }
@@ -82,6 +88,8 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>A window's stream ended on the laptop (slot, reason); the slot is free again.</summary>
         public event Action<int, string> WindowEnded;
         public event Action<string> Ended;
+        /// <summary>A laptop-shell reply (apps.*, window.done, search.results, shell.error), for LaptopShellClient.</summary>
+        public event Action<Dictionary<string, object>> ShellReceived;
 
         public ControlChannelClient(Action<string> send, Func<double> unixMs = null)
         {
@@ -104,6 +112,17 @@ namespace SpatialLauncher.SpatialWindows
         public void Open(string target)
         {
             if (IsLive && !string.IsNullOrEmpty(target)) send($"{{\"type\":\"open\",\"target\":{RemoteKeyProtocol.Quote(target)}}}");
+        }
+
+        /// <summary>
+        /// Sends one laptop-shell request (built by LaptopShellClient). Only while <see cref="ShellUsable"/>: without
+        /// granted control the agent refuses it anyway, so nothing leaves. False when nothing was sent.
+        /// </summary>
+        public bool SendShell(string json)
+        {
+            if (!ShellUsable || string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxMessageBytes) return false;
+            send(json);
+            return true;
         }
 
         public void CloseSlot(int slot)
@@ -208,6 +227,16 @@ namespace SpatialLauncher.SpatialWindows
                     break;
                 }
                 case "pong": OnPong(m); break;
+                case "apps.running":
+                case "apps.pinned":
+                case "apps.installed":
+                case "apps.icon":
+                case "apps.launched":
+                case "window.done":
+                case "search.results":
+                case "shell.error":
+                    ShellReceived?.Invoke(m);
+                    break;
                 case "control-granted":
                     if (State == LinkSessionState.Requested)
                     {
@@ -256,6 +285,11 @@ namespace SpatialLauncher.SpatialWindows
             CastOnly = Bool(m, "cast_only");
             MediaAllowed = Bool(m, "media");
             AgentDryRun = Bool(m, "dry_run");
+            if (m.TryGetValue("shell", out var sh) && sh is Dictionary<string, object> shell)
+            {
+                ShellOs = LinkJson.GetString(shell, "os");
+                ShellOffered = Bool(shell, "available");
+            }
             nextPing = 0f;
             SetState(revoked ? LinkSessionState.Revoked : LinkSessionState.ViewOnly);
             Welcomed?.Invoke();

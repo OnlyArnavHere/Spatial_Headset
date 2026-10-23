@@ -18,9 +18,11 @@ namespace SpatialLauncher.SpatialWindows
         [SerializeField] WindowManager manager;
         [Tooltip("In the editor, forward the physical keyboard to the focused laptop window.")]
         [SerializeField] bool forwardPhysicalKeyboard = true;
-        [SerializeField] Vector2 keyboardSize = new Vector2(0.66f, 0.29f);
         [Tooltip("Gap between the laptop window and the keyboard opened under it, in metres.")]
         [SerializeField] float gapBelowTarget = 0.1f;
+
+        /// <summary>The keyboard window size: the content size that gives 44 mm keys, plus the window padding.</summary>
+        Vector2 keyboardSize => VirtualKeyboardContent.WindowSize;
 
         /// <summary>The enabled instance, for <see cref="KeyboardShortcuts"/>.</summary>
         public static RemoteKeyboard Current { get; private set; }
@@ -101,9 +103,22 @@ namespace SpatialLauncher.SpatialWindows
             return KeyboardWindow;
         }
 
-        /// <summary>Sends key strokes to the current target; returns false (and sends nothing) without one.</summary>
+        /// <summary>
+        /// Sends key strokes to the current target; returns false (and sends nothing) without one. A focused local text
+        /// field (the Laptop Shell's search, a Settings field) takes them instead, as it does voice typing.
+        /// </summary>
         public bool Send(IReadOnlyList<KeyStroke> strokes)
         {
+            var field = WindowTextField.Focused;
+            if (field != null)
+            {
+                foreach (var stroke in strokes)
+                {
+                    if (WindowTextField.Focused != field) break; // Enter or Esc left the field: the rest isn't for it
+                    field.ApplyStroke(stroke);
+                }
+                return true;
+            }
             var sink = Target?.KeyboardSink;
             if (sink == null) return false;
             foreach (var stroke in strokes) stroke.SendTo(sink);

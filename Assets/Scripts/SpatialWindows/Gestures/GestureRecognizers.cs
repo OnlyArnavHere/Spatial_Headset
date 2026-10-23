@@ -86,7 +86,8 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// Hand gestures on top of the hand source (<see cref="IHandSource"/>), next to <see cref="HandWindowInput"/>'s
     /// point-and-pinch: (1) <see cref="FistGrabRecognizer"/>, (2) <see cref="PalmPushRecognizer"/>,
-    /// (3) <see cref="TwoHandStretchRecognizer"/>, (4) <see cref="CrossSweepRecognizer"/>. Every threshold is in one
+    /// (3) <see cref="TwoHandStretchRecognizer"/>, (4) <see cref="CrossSweepRecognizer"/>, (5) <see cref="PinchHoldRecognizer"/>
+    /// (the app switcher). Every threshold is in one
     /// <see cref="GestureConfig"/> asset. Each frame the host turns both hands into <see cref="HandFeatures"/> (tracking
     /// grace for half-lost tracking, fist/open/pinch timers, depth from the hand's apparent size, since the iPhone 16 has
     /// no LiDAR) and ticks the recognizers. A recognizer claims the hands it uses; a claimed hand's pointer in
@@ -130,6 +131,9 @@ namespace SpatialLauncher.SpatialWindows
         public PalmPushRecognizer PalmPush { get; private set; }
         public TwoHandStretchRecognizer Stretch { get; private set; }
         public CrossSweepRecognizer CrossSweep { get; private set; }
+        public PinchHoldRecognizer PinchHold { get; private set; }
+        /// <summary>The point-and-pinch input the recognizers run beside (its pointer rays), or null.</summary>
+        public HandWindowInput HandInput => hands;
         public IReadOnlyList<GestureRecognizer> Recognizers => recognizers;
         public WindowManager Manager { get; private set; }
         public bool IsRunning { get; private set; }
@@ -153,6 +157,7 @@ namespace SpatialLauncher.SpatialWindows
             PalmPush = Add(new PalmPushRecognizer());
             Stretch = Add(new TwoHandStretchRecognizer());
             CrossSweep = Add(new CrossSweepRecognizer());
+            PinchHold = Add(new PinchHoldRecognizer());
         }
 
         T Add<T>(T recognizer) where T : GestureRecognizer

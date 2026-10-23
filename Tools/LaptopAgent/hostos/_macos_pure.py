@@ -145,9 +145,17 @@ SCRIPT = ('on run argv\n'
           'display dialog (item 1 of argv) with title (item 2 of argv) buttons {"No", "Yes"} default button "No" '
           'cancel button "No" with icon caution giving up after (item 3 of argv as integer)\n'
           'end run')
+# The same with a third button, furthest from the default: "Always allow" (item 4 of argv is its label).
+SCRIPT_ALWAYS = ('on run argv\n'
+                 'display dialog (item 1 of argv) with title (item 2 of argv) buttons {(item 4 of argv), "No", "Yes"} '
+                 'default button "No" cancel button "No" with icon caution giving up after (item 3 of argv as integer)\n'
+                 'end run')
+ALWAYS_BUTTON = "Always allow"
 
 
-def osascript_argv(text: str, caption: str, timeout_s: int) -> list[str]:
+def osascript_argv(text: str, caption: str, timeout_s: int, always: bool = False) -> list[str]:
+    if always:
+        return ["osascript", "-e", SCRIPT_ALWAYS, "--", text, caption, str(timeout_s), ALWAYS_BUTTON]
     return ["osascript", "-e", SCRIPT, "--", text, caption, str(timeout_s)]
 
 
@@ -156,13 +164,15 @@ def timeout_seconds(timeout_ms: int) -> int:
 
 
 def parse_dialog(returncode: int, stdout: str, stderr: str) -> str:
-    """"yes", "no" or "timeout". Anything unexpected (a kill, empty output, an error) is "no"."""
+    """"yes", "always", "no" or "timeout". Anything unexpected (a kill, empty output, an error) is "no"."""
     if returncode == 0:
         out = stdout or ""
         if "gave up:true" in out:
             return "timeout"
         if "button returned:Yes" in out:
             return "yes"
+        if f"button returned:{ALWAYS_BUTTON}," in out + ",":
+            return "always"
     return "no"  # includes the Cancel button, which osascript reports as error (-128) with code 1
 
 

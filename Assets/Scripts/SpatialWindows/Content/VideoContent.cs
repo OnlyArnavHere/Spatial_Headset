@@ -1,3 +1,4 @@
+using SpatialLauncher.SpatialWindows.Theme;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Video;
@@ -10,7 +11,7 @@ namespace SpatialLauncher.SpatialWindows
     /// </summary>
     public class VideoContent : WindowContent
     {
-        const float BarHeight = 0.045f;
+        const float BarHeight = 0.056f;
         const float BarGap = 0.01f;
         const float Margin = 0.008f;
         const float TimeLabelWidth = 0.12f;
@@ -19,10 +20,10 @@ namespace SpatialLauncher.SpatialWindows
         /// <summary>Extra window height the control bar needs below the video, in metres.</summary>
         public const float ControlBarHeight = BarHeight + BarGap;
 
-        static readonly Color BarColor = new Color(0.16f, 0.16f, 0.19f);
-        static readonly Color ButtonColor = new Color(0.30f, 0.30f, 0.35f);
-        static readonly Color TrackColor = new Color(0.32f, 0.32f, 0.36f);
-        static readonly Color FillColor = new Color(0.20f, 0.78f, 0.90f);
+        static readonly Color BarColor = UITheme.GlassRaised;
+        static readonly Color ButtonColor = UITheme.GlassRaised;
+        static readonly Color TrackColor = UITheme.GlassRaised;
+        static readonly Color FillColor = UITheme.Accent;
 
         public VideoPlayerSource Source { get; private set; }
         public VideoPlayer Player => Source?.Player;
@@ -63,12 +64,15 @@ namespace SpatialLauncher.SpatialWindows
             screen = CreateSurface("Screen", transform, source);
 
             bar = CreateQuad("ControlBar", transform, CreateMaterial(BarColor));
+            Round(bar, UITheme.ControlRadius);
             PlayPauseButton = CreateControl<WindowButton>("PlayPause", transform, CreateMaterial(ButtonColor));
-            playGlyph = CreateLabel("PlayGlyph", transform, "II", 0.25f, TextAlignmentOptions.Center);
+            playGlyph = CreateLabel("PlayGlyph", transform, "II", TextRole.Headline, TextAlignmentOptions.Center);
             SeekBar = CreateControl<WindowSlider>("SeekBar", transform, CreateMaterial(TrackColor));
+            AddKnob(SeekBar);
             // The fill has no collider, so clicks on it reach the seek bar behind it.
-            fill = CreateQuad("SeekFill", transform, CreateMaterial(FillColor));
-            timeLabel = CreateLabel("Time", transform, "0:00 / 0:00", 0.2f, TextAlignmentOptions.MidlineRight);
+            fill = CreateQuad("SeekFill", transform, CreateMaterial(FillColor), FillLayer);
+            Round(fill, 0f, capsule: true);
+            timeLabel = CreateLabel("Time", transform, "0:00 / 0:00", TextRole.Body, TextAlignmentOptions.MidlineRight);
 
             PlayPauseButton.Clicked += TogglePlay;
             SeekBar.ValueChanged += Seek;
@@ -123,6 +127,7 @@ namespace SpatialLauncher.SpatialWindows
             fill.gameObject.SetActive(width > 0.0005f);
             fill.localPosition = new Vector3(trackLeft + width * 0.5f, trackY, -0.003f);
             fill.localScale = new Vector3(Mathf.Max(width, 0.0001f), trackHeight, 1f);
+            SeekBar.SetValue(progress);
         }
 
         void Update()

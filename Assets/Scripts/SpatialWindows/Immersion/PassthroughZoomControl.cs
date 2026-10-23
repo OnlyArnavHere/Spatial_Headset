@@ -10,10 +10,13 @@ namespace SpatialLauncher.SpatialWindows
     /// ZOOM (the wearer can reach the phone's top edge in the headset); in Mono it is a small button at the bottom right of
     /// the screen (tap or click); F5 works in both. Only in scenes with HoloKit, where there is passthrough to zoom.
     /// While <see cref="ConsentGate"/> asks for approval, TRIGGER is ALLOW instead and doesn't zoom.
+    /// With Settings > Display > TRIGGER button set to Switcher, TRIGGER reads SWITCH and opens or steps the app switcher
+    /// (<see cref="Switcher.AppSwitcher"/>) instead; F5 and the Mono button still zoom.
     /// </summary>
     public class PassthroughZoomControl : MonoBehaviour
     {
         const string TriggerLabel = "ZOOM";
+        const string SwitchLabel = "SWITCH";
 
         [SerializeField] Key toggleKey = Key.F5;
         [Tooltip("Show the on-screen button in Mono.")]
@@ -74,13 +77,28 @@ namespace SpatialLauncher.SpatialWindows
         void OnEnable()
         {
             if (holoKit == null || !useStereoTrigger) return;
-            holoKit.OnStereoTrigger += Step;
+            holoKit.OnStereoTrigger += OnTrigger;
             holoKit.StereoTriggerLabel = TriggerLabel;
         }
 
         void OnDisable()
         {
-            if (holoKit != null) holoKit.OnStereoTrigger -= Step;
+            if (holoKit != null) holoKit.OnStereoTrigger -= OnTrigger;
+        }
+
+        /// <summary>The stereo bar's TRIGGER: zoom, or the app switcher when Settings says so (never while asking consent).</summary>
+        public void OnTrigger()
+        {
+            var gate = ConsentGate.Current;
+            if (gate != null && (gate.HasPending || gate.TriggerUsedThisFrame)) return; // TRIGGER is ALLOW right now
+            var switcher = Switcher.AppSwitcher.Current;
+            if (SettingsStore.Current.display.triggerSwitcher && switcher != null)
+            {
+                Presses++;
+                switcher.TriggerPressed();
+                return;
+            }
+            Step();
         }
 
         void Update()
@@ -89,7 +107,12 @@ namespace SpatialLauncher.SpatialWindows
             var gate = ConsentGate.Current;
             bool asking = gate != null && gate.HasPending;
             // The stereo bar shows the pressed label briefly after each press: the zoom it switched to.
-            if (useStereoTrigger && !asking)
+            if (useStereoTrigger && !asking && SettingsStore.Current.display.triggerSwitcher && Switcher.AppSwitcher.Current != null)
+            {
+                holoKit.StereoTriggerLabel = SwitchLabel;
+                holoKit.StereoTriggerPressedLabel = "NEXT";
+            }
+            else if (useStereoTrigger && !asking)
             {
                 holoKit.StereoTriggerLabel = TriggerLabel;
                 float zoom = SettingsStore.Current.display.passthroughZoom;

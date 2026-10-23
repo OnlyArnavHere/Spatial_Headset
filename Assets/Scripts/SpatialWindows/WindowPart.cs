@@ -9,7 +9,9 @@ namespace SpatialLauncher.SpatialWindows
         CloseButton,
         ResizeHandle,
         /// <summary>An interactive element inside the content (button, slider); see <see cref="WindowControl"/>.</summary>
-        Control
+        Control,
+        /// <summary>The pill under the window; dragging it moves the window like the title bar.</summary>
+        GrabBar
     }
 
     /// <summary>
