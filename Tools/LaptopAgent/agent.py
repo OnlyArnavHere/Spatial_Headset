@@ -440,9 +440,9 @@ async def read_on_daemon_thread(read_line, prompt: str) -> str:
 
 async def pair_command(headset: tuple[str, int] | None, ident, store, name: str, *, read_line=input,
                        browse=discovery.browse, say=print, find_seconds: float = PAIR_DISCOVERY_S,
-                       give_up: float = PAIR_GIVE_UP_S, **pair_kw) -> int:
+                       give_up: float = PAIR_GIVE_UP_S, wired=None, **pair_kw) -> int:
     """Pairs with one headset by the code typed in. read_line(prompt) -> str runs on a daemon thread, so Ctrl+C never waits for stdin. Returns the exit
-    code."""
+    code. wired() -> [(host, port)] is tried before Bonjour, which doesn't reach a phone over the USB hotspot."""
     from handshake import HandshakeError
     loop = asyncio.get_running_loop()
 
@@ -450,6 +450,13 @@ async def pair_command(headset: tuple[str, int] | None, ident, store, name: str,
         return await read_on_daemon_thread(read_line, prompt)
 
     try:
+        if headset is None and wired is not None:
+            candidates = await loop.run_in_executor(None, wired)
+            if candidates:
+                headset = candidates[0]
+                say(f"Using the USB cable: headset at {headset[0]}:{headset[1]}.")
+            else:
+                say("Wired is on, but no USB Personal Hotspot connection was found. Looking over Wi-Fi instead.")
         if headset is None:
             headset = await find_pairing_headset(ask, browse=browse, say=say, seconds=find_seconds, give_up=give_up)
             if headset is None:
@@ -478,6 +485,9 @@ async def pair_command(headset: tuple[str, int] | None, ident, store, name: str,
                     say("The headset declined (or the confirmation timed out). Nothing was paired.")
                 elif reason == "not pairing":
                     say("The headset is not showing a pairing code. Open Laptop > Pair new laptop on it and run --pair again.")
+                elif reason == "can't connect":
+                    say(f"Couldn't reach the headset at {host}:{port}. Make sure Laptop > Pair new laptop is open on "
+                        "the headset and try again.")
                 elif reason == "name taken":
                     say("A paired headset with that name or key already exists here. Revoke it first (--revoke NAME).")
                 else:
@@ -498,7 +508,9 @@ def pair_main(args: argparse.Namespace) -> int:
         ident = identity.load_or_create(identity.default_home())
         store = pairing.PairStore(identity.default_home())
         return asyncio.run(pair_command(args.headset[0] if args.headset else None, ident, store,
-                                        socket.gethostname()), loop_factory=LOOP_FACTORY)
+                                        socket.gethostname(),
+                                        wired=discovery.wired_candidates if args.wired else None),
+                           loop_factory=LOOP_FACTORY)
     except (identity.IdentityError, OSError, ValueError) as e:
         print(f"error: {' '.join(str(e).split())}", file=sys.stderr)
         return 1

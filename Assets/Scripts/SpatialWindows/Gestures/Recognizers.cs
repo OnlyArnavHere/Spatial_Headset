@@ -274,7 +274,8 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// (5) A pinch held for <see cref="GestureConfig.pinchHoldTime"/> while that hand points at no window, with the other
     /// hand not pinching (so it never competes with a click, a drag or a two-hand stretch), opens the app switcher's
-    /// overview (<see cref="Switcher.AppSwitcher"/>), or closes it again. Fires once per pinch.
+    /// overview (<see cref="Switcher.AppSwitcher"/>). Fires once per pinch. It only opens: with jittery hand tracking a
+    /// toggle kept flashing the overview open and shut, so it closes by picking a card or its close button.
     /// </summary>
     public sealed class PinchHoldRecognizer : GestureRecognizer
     {
@@ -283,8 +284,8 @@ namespace SpatialLauncher.SpatialWindows
 
         public override string Name => "Pinch and hold";
 
-        /// <summary>What the gesture does when it fires (default: toggles the switcher's overview). Test seam.</summary>
-        public System.Action Fire = () => Switcher.AppSwitcher.Current?.ToggleOverview();
+        /// <summary>What the gesture does when it fires (default: opens the switcher's overview). Test seam.</summary>
+        public System.Action Fire = () => Switcher.AppSwitcher.Current?.OpenOverview();
 
         public override void Tick(in GestureFrame frame)
         {

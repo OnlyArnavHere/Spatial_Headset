@@ -159,6 +159,16 @@ class WindowSmokeTests(unittest.TestCase):
         self.assertIn("cancel_pair", self.c.calls)
         self.assertIsNone(self.w.dialog)
 
+    def test_code_typed_before_the_headset_is_found_is_acknowledged(self):
+        self.w.open_pair_dialog()
+        self.w.dialog.code.set("ABCD-EFGH-JKMN")
+        self.w.dialog.submit()
+        self.assertIn("as soon as the headset is found", self.w.dialog.status.get())
+        self.c._events.append({"type": "pair_prompt", "gen": 7, "text": "Enter the code"})
+        self.w.poll()
+        self.assertEqual(self.w.dialog.status.get(), "Sending...")
+        self.w.dialog.close()
+
     def test_pair_done_event_reaches_the_dialog(self):
         self.w.open_pair_dialog()
         self.c._events.append({"type": "pair_done", "gen": 7, "ok": True, "text": "Paired."})

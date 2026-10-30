@@ -62,6 +62,27 @@ class PairTests(unittest.TestCase):
         self.assertEqual(got, [("192.168.1.5", 4000, "ABCDEFGHJKMN")])
         self.assertTrue(done and done[0]["ok"])
 
+    def test_wired_pairing_dials_the_usb_hotspot_without_bonjour(self):
+        got = []
+
+        async def fake_pair_once(host, port, ident, store, code, name, announce, kw):
+            got.append((host, port, code))
+            return SimpleNamespace(name="Quest", headset_spki=b"x")
+
+        def no_bonjour(*_a, **_k):
+            raise AssertionError("Bonjour must not be used when the USB hotspot is found")
+
+        with mock.patch.object(agent, "_pair_once", fake_pair_once),                 mock.patch.object(agent.discovery, "browse", no_bonjour):
+            self.c, store = make(wired=True, headset_address="")
+            self.c._wired_candidates = lambda: [("172.20.10.1", 47810)]
+            self.c.begin_pair()
+            self.assertTrue(wait_for(lambda: self.c._pair_tasks))
+            time.sleep(0.05)
+            self.c.submit_code("abcd-efgh-jkmn")
+            done = collect(self.c, "pair_done")
+        self.assertEqual(got, [("172.20.10.1", 47810, "ABCDEFGHJKMN")])
+        self.assertTrue(done and done[0]["ok"])
+
     def test_cancel_ends_pairing_and_adds_nothing(self):
         self.c, store = make(pair_command=agent.pair_command, headset_address="192.168.1.5")
         self.c.begin_pair()

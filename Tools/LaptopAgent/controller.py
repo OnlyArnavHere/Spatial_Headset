@@ -74,6 +74,8 @@ GUI_HINTS = [
      "Close this and pair again, or enter the headset's address under Headset address."),
     ("and run --pair again.", "and try again."),
     ("Revoke it first (--revoke NAME).", "Remove it from the paired headsets first."),
+    ("Waiting (Cancel to stop)...",
+     "Waiting (Cancel to stop)... Over a USB cable, turn on Wired (USB Personal Hotspot) first."),
 ]
 
 
@@ -104,6 +106,7 @@ class AgentController:
             lambda keyboard: approval.LaptopApprover(keyboard=keyboard, store=self._store or self._store_factory()))
         self._watch_s = watch_s
         self._pair_command = pair_command or agent.pair_command
+        self._wired_candidates = discovery.wired_candidates
         self._fetch = fetch or tools_fetch.ensure
         self._frozen = frozen or paths.frozen
         self._platform = platform or sys.platform
@@ -546,7 +549,8 @@ class AgentController:
                 address = getattr(self._settings, "headset_address", "")
                 headset = discovery.parse_headset(address) if address else None
                 inner = asyncio.ensure_future(
-                    self._pair_command(headset, ident, store, socket.gethostname(), read_line=read_line, say=say))
+                    self._pair_command(headset, ident, store, socket.gethostname(), read_line=read_line, say=say,
+                                       wired=self._wired_candidates if getattr(self._settings, "wired", False) else None))
                 timed_out = []
                 timer = loop.call_later(self._pair_timeout, lambda: (timed_out.append(1), inner.cancel()))
                 try:
