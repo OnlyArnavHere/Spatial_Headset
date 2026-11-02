@@ -14,8 +14,9 @@ SPATIAL_AGENT_SMOKE_QUIT=SECONDS (tests only) quits by itself after that long.
 import os
 import queue
 import sys
+import threading
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 POLL_MS = 200
 
 
@@ -187,7 +188,14 @@ def selftest() -> int:
             del sys.frozen
         else:
             sys.frozen = saved[2]
-    check(paths.helper_argv("reaper", "x.py") == [sys.executable, "-I", "x.py"], "unfrozen helper_argv")
+    was_frozen = getattr(sys, "frozen", None)
+    if was_frozen is not None:
+        del sys.frozen  # the packaged app is frozen itself: check the source-run command line with the flag off
+    try:
+        check(paths.helper_argv("reaper", "x.py") == [sys.executable, "-I", "x.py"], "unfrozen helper_argv")
+    finally:
+        if was_frozen is not None:
+            sys.frozen = was_frozen
     print("selftest: " + ("FAILED (" + "; ".join(problems) + ")" if problems else "all checks passed"))
     return 1 if problems else 0
 
@@ -213,6 +221,15 @@ def run(background: bool = False) -> int:
         if not single.signal_existing():
             log.warning("The running instance did not answer; if no window appears, end it in Task Manager")
         return 0
+
+    if os.environ.get("SPATIAL_AGENT_UI") != "tk":
+        try:
+            from gui import web_app
+            if web_app.available():
+                return run_web(single, log, background)
+            log.info("No web view available: using the plain window")
+        except _WebViewMissing as e:
+            log.warning("The web view could not start (%s): using the plain window", e)
 
     import tkinter as tk
     import controller as controller_mod
@@ -263,6 +280,107 @@ def run(background: bool = False) -> int:
             if app.tray is not None:
                 app.tray.stop()
         single.release()
+    return 0
+
+
+class _WebViewMissing(Exception):
+    """The web view failed before the window existed; the Tk window takes over."""
+
+
+def run_web(single, log, background: bool) -> int:
+    """The HTML window (gui/web) in the system web view. webview.start() owns the main thread until the window is
+    destroyed; the agent, the tray and the second-launch listener post to App as with Tk."""
+    try:
+        import webview
+    except Exception as e:
+        raise _WebViewMissing(e)
+    import controller as controller_mod
+    import hostos
+    import settings as settings_mod
+    from gui import web_app
+    from hostos import _macos_perms
+
+    try:
+        hostos.make_dpi_aware()
+    except Exception:
+        log.debug("DPI awareness failed", exc_info=True)
+    controller = controller_mod.AgentController()
+    saved = settings_mod.load()
+    effective = controller.apply(saved, user_initiated=False)
+    saved.allow_control, saved.cast_only = effective.allow_control, effective.cast_only
+
+    app = None
+    holder = {}
+    bridge = web_app.Bridge(controller, saved, open_settings=_macos_perms.open_settings,
+                            on_relaunch=lambda: app.relaunch(), on_quit=lambda: app.post("quit"), version=VERSION)
+    try:
+        window = webview.create_window("Spatial Launcher Agent", os.path.join(web_app.WEB_DIR, "index.html"),
+                                       js_api=bridge, width=420, height=760, min_size=(360, 560),
+                                       background_color="#DCE3EA", text_select=True,
+                                       # a Mac has no tray: start in the Dock, where a click brings it back
+                                       hidden=background and sys.platform != "darwin",
+                                       minimized=background and sys.platform == "darwin")
+    except Exception as e:
+        bridge.close()
+        controller.shutdown()
+        raise _WebViewMissing(e)
+    root = web_app.WebRoot(window, minimize_instead_of_hide=sys.platform == "darwin")
+    app = App(root, controller, None, hide_on_close=sys.platform in ("win32", "darwin"))
+    app.window = bridge
+
+    def on_closing():
+        if app.quit_requested or not app.hide_on_close:
+            if not app.quit_requested:
+                threading.Thread(target=app.quit, daemon=True).start()
+                return False
+            return True
+        app.hide()
+        return False  # keep running in the tray (Windows) or the Dock (macOS)
+
+    window.events.closing += on_closing
+
+    def started():
+        log.info("Window: web view (%s)", getattr(webview, "renderer", "") or "system")
+        single.serve(lambda: app.post("open"))
+        if sys.platform == "win32":
+            try:
+                from gui.tray_win import TrayIcon
+                tray = TrayIcon(app.post)
+                if tray.start():
+                    app.tray = tray
+                else:
+                    log.warning("No tray icon; closing the window will quit the app")
+                    app.hide_on_close = False
+            except Exception:
+                log.exception("Tray icon failed")
+                app.hide_on_close = False
+        if background and app.tray is None and sys.platform != "darwin":
+            app.show()
+        smoke = os.environ.get("SPATIAL_AGENT_SMOKE_QUIT")
+        if smoke:
+            root.after(int(float(smoke) * 1000), lambda: app.post("quit"))
+        app.poll()
+        controller.start()
+        holder["started"] = True
+
+    try:
+        webview.start(started, icon=web_app.icon_path(), private_mode=True,
+                      debug=os.environ.get("SPATIAL_AGENT_DEBUG") == "1")
+    except Exception as e:
+        if not holder.get("started"):
+            bridge.close()
+            controller.shutdown()
+            raise _WebViewMissing(e)
+        raise
+    finally:
+        if holder.get("started"):
+            if not app.quit_requested:
+                app.quit_requested = True
+                bridge.close()
+                app.controller.shutdown()
+                if app.tray is not None:
+                    app.tray.stop()
+            single.release()
     return 0
 
 

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spatial Launcher Agent</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="board" id="board">
+
+  <!-- Status: the one big widget. data-state drives the lenses: off, waiting, live, error -->
+  <section class="w w-status" id="w-status" data-state="off" aria-live="polite">
+    <svg class="lenses" viewBox="0 0 132 64" aria-hidden="true">
+      <path class="bridge" d="M58 30c3-4 13-4 16 0"/>
+      <circle class="lens" cx="33" cy="32" r="25"/>
+      <circle class="lens" cx="99" cy="32" r="25"/>
+      <circle class="glint" cx="25" cy="23" r="4"/>
+      <circle class="glint" cx="91" cy="23" r="4"/>
+    </svg>
+    <div class="status-copy">
+      <h1 id="st-title">Off</h1>
+      <p id="st-sub">Turn on so your headset can connect.</p>
+    </div>
+    <div class="progress" id="dl" hidden><div id="dl-bar"></div></div>
+    <div class="status-foot">
+      <span class="chip" id="st-link">Wi-Fi</span>
+      <button class="btn ink" id="power" type="button">Turn on</button>
+    </div>
+  </section>
+
+  <!-- What the headset may do -->
+  <section class="w w-wide">
+    <h2 class="w-title">What the headset can do</h2>
+    <div class="seg" role="radiogroup" aria-label="What the headset can do">
+      <button type="button" role="radio" data-mode="view">Watch</button>
+      <button type="button" role="radio" data-mode="control">Control</button>
+      <button type="button" role="radio" data-mode="cast">Cast</button>
+    </div>
+    <p class="w-note" id="mode-note"></p>
+  </section>
+
+  <!-- Two small toggles -->
+  <label class="w w-small toggle-w">
+    <span class="w-icon" data-icon="usb"></span>
+    <span class="w-name">USB cable</span>
+    <span class="w-value" id="wired-value">Off</span>
+    <input type="checkbox" class="sw" data-setting="wired" aria-label="Connect over the USB cable">
+  </label>
+  <label class="w w-small toggle-w" id="login-w">
+    <span class="w-icon" data-icon="power"></span>
+    <span class="w-name">Open at login</span>
+    <span class="w-value" id="login-value">Off</span>
+    <input type="checkbox" class="sw" data-setting="start_at_login" aria-label="Open when I log in">
+  </label>
+
+  <!-- Pairing -->
+  <section class="w w-wide w-pair" id="w-pair">
+    <div class="pair-idle" id="pair-idle">
+      <h2 class="w-head">Pair a headset</h2>
+      <p class="w-note">On the headset, open Laptop &rsaquo; Pair new laptop.</p>
+      <div class="row">
+        <button class="btn ink" id="qr-open" type="button"><span data-icon="qr"></span>Show QR code</button>
+        <button class="btn plain" id="type-open" type="button">Type a code</button>
+      </div>
+    </div>
+    <div class="pair-live" id="pair-live" hidden>
+      <div class="qr" id="qr" role="img" aria-label="Pairing QR code" hidden></div>
+      <p class="pair-prompt"><span class="spinner" id="pair-spin"></span><span id="pair-prompt"></span></p>
+      <form class="code-form" id="code-form" autocomplete="off" hidden>
+        <input id="code" placeholder="XXXX-XXXX" maxlength="40" spellcheck="false" aria-label="Code shown on the headset">
+        <button class="btn ink" type="submit">Pair</button>
+      </form>
+      <p class="pair-status" id="pair-status"></p>
+      <div class="row">
+        <button class="btn plain" id="pair-switch" type="button">Type a code instead</button>
+        <button class="btn plain" id="pair-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Paired headsets -->
+  <section class="w w-wide">
+    <h2 class="w-title">Paired headsets</h2>
+    <ul class="heads" id="heads"></ul>
+    <p class="w-error" id="pairs-error" hidden></p>
+  </section>
+
+  <button class="more" id="more-open" type="button"><span data-icon="sliders"></span>More settings</button>
+</main>
+
+<!-- More settings: a sheet that slides up -->
+<div class="scrim" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="grabber"></div>
+    <div class="sheet-head">
+      <h2 id="sheet-title">More settings</h2>
+      <button class="btn plain" id="sheet-close" type="button">Done</button>
+    </div>
+
+    <div class="group">
+      <form class="field" id="addr-form" autocomplete="off">
+        <label for="address">Headset address</label>
+        <small>Leave empty to find headsets by themselves.</small>
+        <div class="inline">
+          <input id="address" placeholder="192.168.1.5" spellcheck="false">
+          <button class="btn ink" type="submit">Save</button>
+        </div>
+      </form>
+      <pre class="note" id="wired-text" hidden></pre>
+    </div>
+
+    <div class="group" id="perm-group" hidden>
+      <h3>macOS permissions</h3>
+      <div id="perms"></div>
+      <button class="btn plain" id="relaunch" type="button">Quit and reopen</button>
+    </div>
+
+    <div class="group">
+      <div class="kv"><span>Emergency stop</span><b id="kill">Ctrl+Alt+Shift+Q</b></div>
+      <div class="kv"><span>Laptop</span><b id="laptop"></b></div>
+      <div class="kv"><span>Version</span><b id="version"></b></div>
+      <button class="row-btn" id="open-logs" type="button">Open log folder</button>
+    </div>
+
+    <button class="row-btn danger" id="quit" type="button">Quit Spatial Launcher Agent</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
