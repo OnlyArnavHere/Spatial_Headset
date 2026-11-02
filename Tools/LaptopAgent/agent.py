@@ -12,12 +12,14 @@
   python agent.py --revoke-always NAME            keep the pair, but ask again before it may take control
   python agent.py --window "Notepad"              also start streaming one window right away (e.g. for the browser)
   python agent.py --cast-only                     view only, plus play/pause, seek, next/previous and volume (Cast)
-  python agent.py --wired                         print the USB Personal Hotspot address and dial the headset over it
+  python agent.py --wired                         connect over the USB cable (no Wi-Fi or hotspot needed)
 
 Run `python agent.py --help` for every option. See README.md, especially the risks section, before using --input.
 """
 import argparse
 import asyncio
+import contextlib
+import functools
 import logging
 import shutil
 import socket
@@ -29,6 +31,7 @@ from pathlib import Path
 
 import approval
 import discovery
+import handshake
 import hostos
 import identity
 import network
@@ -95,8 +98,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Cast mode: the headset may only play/pause, seek, skip and change volume; every other key, "
                         "mouse, typing and scroll event is dropped here (can't be combined with --input)")
     p.add_argument("--wired", action="store_true",
-                   help="also look for the headset iPhone's USB Personal Hotspot (172.20.10.x) and also "
-                        "dial the headset iPhone over it (172.20.10.1; see Doc/wired.md)")
+                   help="also connect to the headset iPhone over its USB cable, with no Wi-Fi or hotspot (Apple's USB "
+                        "service; on Windows install the Apple Devices app), and over its USB Personal Hotspot "
+                        "(172.20.10.1) for an older headset app; see Doc/wired.md")
     p.add_argument("--verbose", action="store_true", help="show ffmpeg and MediaMTX logs")
     return p.parse_args(argv)
 
@@ -224,6 +228,23 @@ def start_mediamtx(args, job: hostos.ChildReaper) -> subprocess.Popen:
     return mediamtx
 
 
+FFMPEG_LOG_MAX = 1 << 20
+
+
+def _ffmpeg_log():
+    """In the windowed app (no stderr) ffmpeg's errors go to logs/ffmpeg.log, started afresh once it passes 1 MB.
+    None when there is a console to print them on, or the file can't be opened."""
+    if sys.stderr is not None:
+        return None
+    try:
+        path = paths.logs_dir() / "ffmpeg.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        big = path.exists() and path.stat().st_size > FFMPEG_LOG_MAX
+        return open(path, "w" if big else "a", encoding="utf-8")
+    except OSError:
+        return None
+
+
 def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReaper, rtsp_port: int = RTSP_PORT):
     """Returns launch(target, path): starts ffmpeg capturing the target and publishing it on the path."""
     ffmpeg = tool("ffmpeg")
@@ -236,11 +257,20 @@ def capture_launcher(args, encoder: tuple[str, str, str], job: hostos.ChildReape
         rect = hostos.visible_rect(rect)
         width, height = output_size(rect.width, rect.height, args.max_width, args.max_height)
         command = [ffmpeg, "-hide_banner", "-loglevel", "info" if args.verbose else "warning"]
+        log_file = _ffmpeg_log()
+        if log_file is not None:
+            command.append("-nostats")  # the progress line would fill the log file
         command += hostos.capture_input_args(target.selector, args.fps, width, height, pix_fmt, ffmpeg=ffmpeg)
         command += hostos.encoder_args(name, codec, args.fps, bitrate_bits(args.bitrate))
         command += ["-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://127.0.0.1:{rtsp_port}/{path}"]
         log.debug("ffmpeg: %s", subprocess.list2cmdline(command))
-        process = job.spawn(command, stdin=subprocess.DEVNULL)
+        if log_file is None:
+            process = job.spawn(command, stdin=subprocess.DEVNULL)
+        else:
+            with log_file:
+                log_file.write(f"--- {time.strftime('%H:%M:%S')} /{path}: {target.description}\n")
+                log_file.flush()
+                process = job.spawn(command, stdin=subprocess.DEVNULL, stdout=log_file, stderr=log_file)
         return process, (width, height)
 
     return launch
@@ -401,13 +431,16 @@ class _AnnounceWriter:
         return getattr(self._writer, name)
 
 
-async def _pair_once(host, port, ident, store, code, name, announce, pair_kw):
+async def _pair_once(host, port, ident, store, code, name, announce, pair_kw, opener=None):
     import pair_protocol
     from handshake import HandshakeError
     try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), 5.0)
+        connecting = opener() if opener is not None else asyncio.open_connection(host, port)
+        reader, writer = await asyncio.wait_for(connecting, 5.0)
     except (asyncio.TimeoutError, OSError):
         raise HandshakeError("can't connect") from None
+    except Exception as e:  # usbmux.UsbmuxError
+        raise HandshakeError(f"can't connect ({e})") from None
     return await pair_protocol.agent_pair(reader, _AnnounceWriter(writer, announce), ident, store, code, name,
                                           **pair_kw)
 
@@ -438,18 +471,166 @@ async def read_on_daemon_thread(read_line, prompt: str) -> str:
     return await future
 
 
+QR_POLL_S = 2.0  # how often a cable or fixed address is asked whether it scanned the QR
+QR_BROWSE_S = 6.0  # a Bonjour browse for the armed headset restarts this often (a failed try can be retried)
+QR_GIVE_UP = ("name taken",)
+
+
 async def pair_command(headset: tuple[str, int] | None, ident, store, name: str, *, read_line=input,
                        browse=discovery.browse, say=print, find_seconds: float = PAIR_DISCOVERY_S,
-                       give_up: float = PAIR_GIVE_UP_S, wired=None, **pair_kw) -> int:
-    """Pairs with one headset by the code typed in. read_line(prompt) -> str runs on a daemon thread, so Ctrl+C never waits for stdin. Returns the exit
-    code. wired() -> [(host, port)] is tried before Bonjour, which doesn't reach a phone over the USB hotspot."""
+                       give_up: float = PAIR_GIVE_UP_S, wired=None, usb=None, qr_shown=None, **pair_kw) -> int:
+    """Pairs with one headset. Returns the exit code.
+
+    Typed code: read_line(prompt) -> str runs on a daemon thread, so Ctrl+C never waits for stdin. Before Bonjour
+    (which doesn't reach a phone on a cable): usb() -> [usbmux.Device] (an iPhone on the USB cable, through Apple's
+    multiplexer; no network needed), then wired() -> [(host, port)] (the USB hotspot).
+
+    QR: with qr_shown, a QR invite is made and handed to qr_shown(invite) to show; whichever finishes first wins,
+    the headset scanning it or the code typed in. The two never run an exchange at the same time."""
+    exchange = asyncio.Lock()
+    won = []
+
+    def typed_say(text: str) -> None:
+        if not won:
+            say(text)
+
+    typed = asyncio.ensure_future(_pair_typed(headset, ident, store, name, read_line, browse, typed_say, find_seconds,
+                                              give_up, wired, usb, pair_kw, exchange))
+    if qr_shown is None:
+        return await typed
+    invite = pairing.new_qr_invite(ident.spki_der)
+    qr_shown(invite)
+    qr = asyncio.ensure_future(qr_pair(invite, ident, store, name, headset=headset, browse=browse, usb=usb,
+                                       wired=wired, say=say, pair_kw=pair_kw, exchange=exchange))
+    try:
+        done, _ = await asyncio.wait({typed, qr}, return_when=asyncio.FIRST_COMPLETED)
+        if qr in done and qr.result() is not None:
+            won.append(True)
+            result = qr.result()
+            say(f"Paired with {result.name} ({identity.format_fp(identity.fingerprint(result.headset_spki))})")
+            return 0
+        return await typed
+    except asyncio.CancelledError:
+        typed.cancel()
+        try:
+            return await typed  # says "Pairing cancelled." and returns 1
+        except BaseException:
+            return 1
+    finally:
+        for task in (typed, qr):
+            task.cancel()
+        await asyncio.gather(typed, qr, return_exceptions=True)
+
+
+async def qr_pair(invite, ident, store, name: str, *, headset=None, browse=discovery.browse, usb=None, wired=None,
+                  say=print, pair_kw=None, exchange: asyncio.Lock | None = None, poll_s: float = QR_POLL_S,
+                  browse_s: float = QR_BROWSE_S):
+    """Waits for a headset to scan `invite` and pairs with it: the Bonjour instance the armed headset advertises,
+    the phone on the USB cable (usb()), and any fixed address (headset, wired()). Returns the PairResult, or None when
+    this way can't finish (it said why). A headset too old for QR pairing is not asked again."""
+    from handshake import HandshakeError, LINK_PORT
+    import usbmux
+    kw = dict(pair_kw or {}, qr=True)
+    exchange = exchange or asyncio.Lock()
+    finished = asyncio.get_running_loop().create_future()
+    skip: set = set()  # targets that answered like an older headset
+
+    async def attempt(key, host, port, opener=None) -> None:
+        if key in skip or finished.done():
+            return
+        async with exchange:
+            if finished.done():
+                return
+            try:
+                result = await _pair_once(host, port, ident, store, invite.code, name, lambda: None, kw, opener=opener)
+            except HandshakeError as e:
+                reason = e.reason.removeprefix("peer refused: ")
+                if reason == "no qr":
+                    skip.add(key)
+                elif reason in QR_GIVE_UP and not finished.done():
+                    say("A paired headset with that name or key already exists here. Revoke it first (--revoke NAME).")
+                    finished.set_result(None)
+                elif reason != "not pairing":
+                    log.info("QR pairing with %s: %s", key, reason)
+                return
+            if not finished.done():
+                finished.set_result(result)
+
+    async def over_bonjour() -> None:
+        instance = pairing.qr_instance(invite.code)
+        shared = {}
+        if browse is discovery.browse:  # one Bonjour client for every round, closed when pairing ends
+            from zeroconf.asyncio import AsyncZeroconf
+            shared["zeroconf"] = AsyncZeroconf()
+        try:
+            while True:
+                gen = browse(pairing=True, instance=instance, **shared)
+                try:
+                    async with asyncio.timeout(browse_s):
+                        async for host, port in gen:
+                            await attempt((host, port), host, port)
+                except TimeoutError:
+                    pass
+                finally:
+                    await gen.aclose()
+        finally:
+            if shared:
+                await asyncio.shield(shared["zeroconf"].async_close())
+
+    async def over_fixed() -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            targets = [headset] if headset is not None else []
+            if wired is not None:
+                with contextlib.suppress(Exception):
+                    targets += await loop.run_in_executor(None, wired)
+            if usb is not None:
+                try:
+                    devices = await usb()
+                except usbmux.UsbmuxError:
+                    devices = []
+                for d in devices:
+                    await attempt(d.key, d.key, LINK_PORT, functools.partial(usbmux.connect, d.device_id, LINK_PORT))
+            for host, port in dict.fromkeys(targets):
+                await attempt((host, port), host, port)
+            await asyncio.sleep(poll_s)
+
+    workers = [asyncio.ensure_future(over_bonjour())]
+    if headset is not None or wired is not None or usb is not None:
+        workers.append(asyncio.ensure_future(over_fixed()))
+    try:
+        return await finished
+    finally:
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+
+
+async def _pair_typed(headset, ident, store, name, read_line, browse, say, find_seconds, give_up, wired, usb, pair_kw,
+                      exchange) -> int:
     from handshake import HandshakeError
     loop = asyncio.get_running_loop()
+    opener = None
 
     async def ask(prompt: str) -> str:
         return await read_on_daemon_thread(read_line, prompt)
 
     try:
+        if headset is None and usb is not None:
+            import usbmux
+            try:
+                devices = await usb()
+            except usbmux.UsbmuxError as e:
+                devices = []
+                say(str(e))
+            if devices:
+                device = devices[0]
+                headset = (device.key, handshake.LINK_PORT)
+                opener = functools.partial(usbmux.connect, device.device_id, handshake.LINK_PORT)
+                say("Using the iPhone on the USB cable." if len(devices) == 1 else
+                    f"{len(devices)} iPhones are on the USB cable; using the first one. Unplug the others to choose.")
+            else:
+                say("No iPhone was found on the USB cable. Plug it in and tap Trust on it.")
         if headset is None and wired is not None:
             candidates = await loop.run_in_executor(None, wired)
             if candidates:
@@ -464,15 +645,17 @@ async def pair_command(headset: tuple[str, int] | None, ident, store, name: str,
         host, port = headset
         wrong = 0
         while True:
-            text = await ask("Enter the code shown on the headset (XXXX-XXXX-XXXX): ")
+            text = await ask("Enter the code shown on the headset (XXXX-XXXX): ")
             try:
                 code = pairing.parse_code(text)
             except ValueError as e:
                 say(str(e))
                 continue  # nothing was sent
             try:
-                result = await _pair_once(host, port, ident, store, code, name,
-                                          lambda: say("Waiting for you to confirm on the headset..."), pair_kw)
+                async with exchange:
+                    result = await _pair_once(host, port, ident, store, code, name,
+                                              lambda: say("Waiting for you to confirm on the headset..."), pair_kw,
+                                              opener=opener)
             except HandshakeError as e:
                 reason = e.reason.removeprefix("peer refused: ")
                 if reason == "wrong code":
@@ -485,8 +668,9 @@ async def pair_command(headset: tuple[str, int] | None, ident, store, name: str,
                     say("The headset declined (or the confirmation timed out). Nothing was paired.")
                 elif reason == "not pairing":
                     say("The headset is not showing a pairing code. Open Laptop > Pair new laptop on it and run --pair again.")
-                elif reason == "can't connect":
-                    say(f"Couldn't reach the headset at {host}:{port}. Make sure Laptop > Pair new laptop is open on "
+                elif reason.startswith("can't connect"):
+                    where = "on the USB cable" if opener is not None else f"at {host}:{port}"
+                    say(f"Couldn't reach the headset {where}. Make sure Laptop > Pair new laptop is open on "
                         "the headset and try again.")
                 elif reason == "name taken":
                     say("A paired headset with that name or key already exists here. Revoke it first (--revoke NAME).")
@@ -499,6 +683,19 @@ async def pair_command(headset: tuple[str, int] | None, ident, store, name: str,
         say("Pairing cancelled.")
         return 1
 
+def _print_qr(invite) -> None:
+    print("Look at this QR code with the headset (Laptop > Pair new laptop); it pairs by itself:")
+    try:
+        import qr_image
+        qr_image.terminal(invite.payload)
+    except Exception as e:  # a console that can't show the block characters
+        print(f"(The QR code can't be shown here: {e}. Type the code from the headset instead.)")
+
+
+def usbmux_list():
+    import usbmux
+    return usbmux.list_devices
+
 
 def pair_main(args: argparse.Namespace) -> int:
     if args.headset and len(args.headset) > 1:
@@ -509,7 +706,8 @@ def pair_main(args: argparse.Namespace) -> int:
         store = pairing.PairStore(identity.default_home())
         return asyncio.run(pair_command(args.headset[0] if args.headset else None, ident, store,
                                         socket.gethostname(),
-                                        wired=discovery.wired_candidates if args.wired else None),
+                                        wired=discovery.wired_candidates if args.wired else None,
+                                        usb=usbmux_list() if args.wired else None, qr_shown=_print_qr),
                            loop_factory=LOOP_FACTORY)
     except (identity.IdentityError, OSError, ValueError) as e:
         print(f"error: {' '.join(str(e).split())}", file=sys.stderr)
@@ -562,7 +760,7 @@ def main() -> None:
     runner = LinkRunner(ident, store, streams, RTSP_PORT, max_windows=args.max_windows,
                         input_enabled=args.input, keyboard_enabled=args.keyboard, cast_only=args.cast_only,
                         dry_run=args.dry_run_input, pinned=args.headset,
-                        approver=approval.LaptopApprover(keyboard=args.keyboard, store=store) if args.input and not args.cast_only else None, discover=not args.headset)
+                        approver=approval.LaptopApprover(keyboard=args.keyboard, store=store) if args.input and not args.cast_only else None, discover=not args.headset, usb=args.wired)
 
     keyboard = "off (start with --input --keyboard to allow it)"
     if args.keyboard:

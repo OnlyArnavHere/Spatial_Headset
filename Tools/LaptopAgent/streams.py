@@ -8,6 +8,7 @@ using it closes, so nothing is captured that no one is watching. Streams started
 import logging
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -171,6 +172,9 @@ class StreamManager:
         for target_id, stream in list(self._streams.items()):
             if stream.running and stream.target.kind == "window":
                 hostos.request_repaint(stream.target.handle)
+            elif stream.running and sys.platform == "win32":
+                # a still desktop delivers no frames at all on Windows, so a headset joining it would wait forever
+                hostos.request_repaint(hostos.foreground_window())
             if not stream.running:
                 log.warning("Stream /%s stopped (exit code %s): %s closed or no longer capturable?",
                             stream.path, stream.process.returncode, stream.target.description)

@@ -32,8 +32,9 @@ Each slot's sender holds a SlotTrack, a small queue the window's packets are for
 sender loop stays blocked in recv() of the track it last read, and a MediaPlayer track that is stopped under it would
 end that loop for good.
 
-LinkRunner dials the headsets (given addresses, Bonjour, the USB hotspot), one session at a time, and redials with a
-backoff after a session ends.
+LinkRunner dials the headsets (given addresses, Bonjour, the USB hotspot, and with usb=True iPhones on the USB cable
+through Apple's multiplexer, usbmux.py), one session at a time, and redials with a backoff after a session ends. A
+headset on the cable gets a stream session (stream_link.py) instead of WebRTC: there is no network to carry WebRTC.
 """
 import asyncio
 import json
@@ -64,7 +65,7 @@ MAX_CONTROL_MESSAGE = 16 * 1024
 MAX_PENDING_REQUESTS = 8      # control requests handled at once; more are dropped
 MAX_SHELL_TASKS = 32          # shell requests in flight; more are answered "busy"
 MAX_TARGETS = 100             # windows listed in one `targets` message
-PLAYER_RETRY_S = 5.0          # how long to wait for ffmpeg to start publishing
+PLAYER_RETRY_S = 15.0         # how long to wait for ffmpeg to start publishing (Media Foundation took 8 s)
 DISCONNECTED_LIMIT_S = 10.0   # a session ends after this long in "disconnected"
 CONNECT_LIMIT_S = 20.0        # ...or if the peer connection never gets to "connected"
 SLOT_QUEUE = 120
@@ -74,6 +75,10 @@ BACKOFF_MAX_S = 30.0
 BACKOFF_MAX_WIRED_S = 10.0
 MAX_DISCOVERED = 16           # headsets found by discovery that are dialled at once
 DROP_AFTER_FAILURES = 5       # a Bonjour-found headset is forgotten after this many failures in a row
+USB_POLL_S = 2.0              # how often the cable is checked for iPhones
+USB_PREFIX = "usb:"           # runner keys of iPhones on the cable: ("usb:<serial>", LINK_PORT)
+USB_TOO_OLD = ("the headset app is too old for USB without the hotspot: update it, or turn on Personal Hotspot "
+               "on the phone")
 _IDR = re.compile(rb"\x00\x00\x01[\x25\x45\x65]")  # start code + NAL header of an IDR slice (type 5)
 _SPS = re.compile(rb"\x00\x00\x01[\x27\x47\x67]")  # ...of a sequence parameter set (type 7)
 
@@ -174,8 +179,14 @@ def h264_preferences() -> list:
             if c.mimeType.lower() == "video/h264" and c.parameters.get("packetization-mode") == "1"]
 
 
+# Don't sniff the stream before handing it over: the codec, size and SPS/PPS are in the RTSP description already, and a
+# still screen sends 1-2 frames a second, so the default 5 s analysis made every open of an idle window time out.
+# Measured at 2 fps: 5.1 s to open with the defaults, 0.6 s with these.
+PLAYER_OPTIONS = {"rtsp_transport": "tcp", "analyzeduration": "0", "probesize": "32768"}
+
+
 def open_player(url: str) -> MediaPlayer:
-    return MediaPlayer(url, format="rtsp", options={"rtsp_transport": "tcp"}, decode=False)
+    return MediaPlayer(url, format="rtsp", options=dict(PLAYER_OPTIONS), decode=False)
 
 
 class LinkSession:
@@ -550,7 +561,8 @@ class LinkRunner:
                  approver: dispatch.Approver | None = None, shell_backend: "shell.ShellBackend | None" = None,
                  pinned: list[tuple[str, int]] | None = None, discover: bool = False,
                  browse: Callable = discovery.browse, wired: Callable = discovery.wired_candidates,
-                 on_connect_failed: Callable[[str, int, bool], None] | None = None):
+                 on_connect_failed: Callable[[str, int, bool], None] | None = None, usb: bool = False,
+                 usb_list: Callable | None = None, usb_connect: Callable | None = None):
         self.on_connect_failed = on_connect_failed  # (host, port, found_by_discovery) when a dial can't connect
         self.ident = ident
         self.store = store
@@ -567,6 +579,11 @@ class LinkRunner:
         self.discover = discover
         self._browse = browse
         self._wired = wired
+        self.usb = usb
+        self._usb_list = usb_list
+        self._usb_connect = usb_connect
+        self._usb_ids: dict[str, int] = {}  # "usb:<serial>" -> usbmux DeviceID (it changes when replugged)
+        self.usb_status = ""  # what the cable check last saw, for the status line
         self.limiter = handshake.HandshakeLimiter()
         self.blocklist = handshake.AuthBlocklist()
         self.active: LinkSession | None = None
@@ -587,6 +604,9 @@ class LinkRunner:
             if self.discover and not self.stopped:
                 tasks = self._loop_tasks = [asyncio.ensure_future(self._browse_loop()),
                                             asyncio.ensure_future(self._wired_loop())]
+            if self.usb and not self.stopped:
+                tasks.append(asyncio.ensure_future(self._usb_loop()))
+                self._loop_tasks = tasks
             await asyncio.Event().wait()
         finally:
             for task in tasks + [w[0] for w in self._workers.values()]:
@@ -665,6 +685,34 @@ class LinkRunner:
                 self._found(host, port, BACKOFF_MAX_WIRED_S, "USB hotspot")
             await asyncio.sleep(30)
 
+    async def _usb_loop(self) -> None:
+        """iPhones on the cable, through Apple's USB multiplexer: each one is dialled on the link port."""
+        import usbmux
+        listing = self._usb_list or usbmux.list_devices
+        last_problem = None
+        while True:
+            try:
+                devices = await listing()
+                problem = None
+                self.usb_status = (f"{len(devices)} iPhone{'s' if len(devices) != 1 else ''} on the USB cable"
+                                   if devices else "no iPhone on the USB cable")
+            except usbmux.UsbmuxError as e:
+                devices, problem = [], str(e)
+                self.usb_status = problem
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                devices, problem = [], f"USB check failed: {e}"
+                self.usb_status = problem
+            if problem != last_problem:
+                if problem:
+                    log.warning("USB: %s", problem)
+                last_problem = problem
+            for device in devices:
+                self._usb_ids[device.key] = device.device_id
+                self._found(device.key, handshake.LINK_PORT, BACKOFF_MAX_WIRED_S, "USB cable")
+            await asyncio.sleep(USB_POLL_S)
+
     # --- Dialling ------------------------------------------------------------------------------------------------
 
     async def _worker(self, key: tuple[str, int], cap: float, wake: asyncio.Event, drop_after: int = 0) -> None:
@@ -683,7 +731,8 @@ class LinkRunner:
                     log.debug("Headset %s:%d: %s", *key, reason)
                 last_failure = reason
                 failures += 1
-                if reason == "can't connect" and self.on_connect_failed is not None:  # handshake's reason text
+                if (reason == "can't connect" and self.on_connect_failed is not None  # handshake's reason text
+                        and not key[0].startswith(USB_PREFIX)):  # the cable has no Local Network permission to miss
                     try:
                         self.on_connect_failed(key[0], key[1], key in self._discovered)
                     except Exception:
@@ -709,18 +758,35 @@ class LinkRunner:
         host, port = key
         session = None
         self.attempt_count += 1
+        usb = host.startswith(USB_PREFIX)
 
         async def make_offer() -> str:
             nonlocal session
             session = LinkSession(self.streams, self.rtsp_port, revoked=self.revoked, **self.options)
             return await session.build_offer()
 
+        extra = {}
+        if usb:
+            import usbmux
+            connect = self._usb_connect or usbmux.connect
+            device_id = self._usb_ids.get(host)
+            if device_id is None:
+                return "failed", "that iPhone is no longer on the cable"
+
+            async def opener():
+                try:
+                    return await connect(device_id, port)
+                except usbmux.UsbmuxError as e:
+                    raise OSError(str(e)) from None
+            extra = dict(opener=opener, stream=True)
         try:
             result = await handshake.agent_connect(host, port, self.ident, self.store, make_offer,
-                                                   limiter=self.limiter, blocklist=self.blocklist)
+                                                   limiter=self.limiter, blocklist=self.blocklist, **extra)
         except handshake.HandshakeError as e:
             if session is not None:
                 await session.close()
+            if usb and e.reason == "unsupported mode":
+                return "failed", USB_TOO_OLD
             return "failed", e.reason if not e.remote else f"the headset refused: {e.reason}"
         except asyncio.CancelledError:
             if session is not None:
@@ -732,6 +798,10 @@ class LinkRunner:
             log.debug("Handshake with %s:%d crashed", host, port, exc_info=True)
             return "failed", f"{type(e).__name__}: {e}"
 
+        if usb:
+            import stream_link
+            session = stream_link.StreamLinkSession(self.streams, self.rtsp_port, result.reader, result.writer,
+                                                    revoked=self.revoked, **self.options)
         if self.active is not None:
             same = self.active_spki == result.headset_spki
             log.info("Ignoring %s (%s:%d): %s", result.name, host, port,
@@ -746,7 +816,10 @@ class LinkRunner:
         self._idle.clear()
         reason = "?"
         try:
-            await session.apply_answer(result.answer_sdp)
+            if usb:
+                session.start()
+            else:
+                await session.apply_answer(result.answer_sdp)
             log.info("Linked with %s (%s:%d, %s)", result.name, host, port, result.mode)
             self.session_count += 1
             reason = await session.run()

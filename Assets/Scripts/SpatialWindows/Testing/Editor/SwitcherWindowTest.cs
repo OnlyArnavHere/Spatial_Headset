@@ -204,9 +204,9 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 var left = new HandFeatures(Handedness.Left);
                 var right = new HandFeatures(Handedness.Right);
                 float t = Time.time + 1000f;
-                GestureFrame Frame(float pinchFor, bool otherPinched)
+                GestureFrame Frame(float pinchFor, bool otherPinched, bool tracked = true)
                 {
-                    right.Tracked = true;
+                    right.Tracked = tracked;
                     right.Pinched = pinchFor > 0f;
                     right.PinchFor = pinchFor;
                     left.Tracked = otherPinched;
@@ -215,6 +215,9 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                     return new GestureFrame { Left = left, Right = right, Time = t, DeltaTime = 0.1f, Head = new Pose(Vector3.zero, Quaternion.identity) };
                 }
                 float hold = host.Config.pinchHoldTime;
+                recognizer.Tick(Frame(hold + 0.05f, false));
+                Check(fired == 0, "a hand that arrives already pinched isn't a pinch and hold");
+                recognizer.Tick(Frame(0f, false));
                 recognizer.Tick(Frame(hold * 0.5f, false));
                 Check(fired == 0, "a short pinch is just a pinch");
                 recognizer.Tick(Frame(hold + 0.05f, false));
@@ -227,6 +230,10 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 recognizer.Tick(Frame(0f, false));
                 recognizer.Tick(Frame(hold + 0.05f, false));
                 Check(fired == 2, "released and held again, it fires again");
+                t += host.Config.pinchHoldCooldown;
+                recognizer.Tick(Frame(0f, false, tracked: false));
+                recognizer.Tick(Frame(hold + 0.05f, false));
+                Check(fired == 2, "lost and found again still pinched, it doesn't fire");
             }
             finally
             {
