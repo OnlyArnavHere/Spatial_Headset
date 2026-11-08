@@ -10,8 +10,9 @@ namespace SpatialLauncher.SpatialWindows
     /// A floating QWERTY keyboard (<see cref="VirtualKeyboardLayout"/>) for laptop stream windows: a status line naming
     /// the window it types into, then five rows of keys. Each key is a <see cref="WindowButton"/>, so the mouse and a
     /// pinch both press it. Shift, Ctrl and Alt are one-shot toggles that light up and apply to the next key; tapping one
-    /// again cancels it. Character labels follow Shift. Talk is push to talk (<see cref="VoiceTyping"/>): hold it, speak,
-    /// let go; the status line shows what is being heard.
+    /// again cancels it. Character labels follow Shift. The mic key (Talk) is voice typing (<see cref="VoiceTyping"/>): tap
+    /// it, speak, tap it again; or hold it while speaking and let go. It turns red while listening and the status line
+    /// shows what is being heard.
     /// </summary>
     public class VirtualKeyboardContent : WindowContent
     {
@@ -22,6 +23,9 @@ namespace SpatialLauncher.SpatialWindows
         public static readonly Color ReturnColor = UITheme.AccentFill;
         public static readonly Color TalkColor = UITheme.KeyFill;
         public static readonly Color ListeningColor = UITheme.DestructiveFill;
+
+        /// <summary>A press of the mic key shorter than this is a tap (listening goes on until the next tap); longer is hold to talk.</summary>
+        public const float TalkTapSeconds = 0.4f;
 
         /// <summary>Key label size (pt): 17 pt counts as large text, so white on KeyFill needs 4.5:1.</summary>
         public const float LabelPt = 17f;
@@ -36,6 +40,7 @@ namespace SpatialLauncher.SpatialWindows
                 case "Left": return UIIcons.KeyboardArrowLeft;
                 case "Right": return UIIcons.KeyboardArrowRight;
                 case "Home": return UIIcons.Home;
+                case "Talk": return UIIcons.Mic;
                 default: return null;
             }
         }
@@ -52,6 +57,8 @@ namespace SpatialLauncher.SpatialWindows
         public KeyModifiers Modifiers { get; private set; }
         public string StatusText => status != null ? status.text : "";
 
+        float talkPressedAt;
+        bool talkStopOnRelease;
         Func<IReadOnlyList<KeyStroke>, bool> send;
         Func<RemoteStreamContent> target;
         VoiceTyping voice;
@@ -91,8 +98,8 @@ namespace SpatialLauncher.SpatialWindows
                 if (key.Kind == VirtualKeyKind.Voice)
                 {
                     var talk = CreateControl<WindowHoldButton>($"Key {key.Id}", transform, material);
-                    talk.Pressed += () => voice?.StartListening();
-                    talk.Released += () => voice?.StopListening();
+                    talk.Pressed += TalkPressed;
+                    talk.Released += TalkReleased;
                     control = talk;
                 }
                 else
@@ -116,6 +123,29 @@ namespace SpatialLauncher.SpatialWindows
             foreach (var entry in keys)
                 if (entry.key.Id == id) return entry.button;
             return null;
+        }
+
+        /// <summary>The mic key went down: starts listening, or (tapped while listening) stops.</summary>
+        public void TalkPressed()
+        {
+            if (voice == null) return;
+            if (voice.IsListening)
+            {
+                voice.StopListening();
+                talkStopOnRelease = false;
+                return;
+            }
+            voice.StartListening();
+            talkPressedAt = Time.unscaledTime;
+            talkStopOnRelease = true;
+        }
+
+        /// <summary>The mic key came up: a hold ends listening; a tap leaves it on until the next tap.</summary>
+        public void TalkReleased()
+        {
+            if (voice == null || !talkStopOnRelease) return;
+            talkStopOnRelease = false;
+            if (Time.unscaledTime - talkPressedAt >= TalkTapSeconds) voice.StopListening();
         }
 
         /// <summary>What clicking a key does: toggles a modifier, or sends the key with the active modifiers and clears them.</summary>

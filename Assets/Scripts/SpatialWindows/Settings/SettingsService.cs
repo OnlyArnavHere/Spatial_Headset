@@ -121,6 +121,7 @@ namespace SpatialLauncher.SpatialWindows
                 gestures.PalmPush.Enabled = s.hands.palmPush;
                 gestures.Stretch.Enabled = s.hands.twoHandStretch;
                 gestures.CrossSweep.Enabled = s.hands.crossSweepHide;
+                gestures.PanicGestureEnabled = s.hands.panicGesture;
                 gestures.PinchHold.Enabled = s.hands.pinchHoldSwitcher;
             }
             if (TryGetComponent<GestureDebugOverlay>(out var overlay)) overlay.Visible = s.hands.debugOverlay;
@@ -204,6 +205,7 @@ namespace SpatialLauncher.SpatialWindows
             FieldInfo ipdField, leftField, rightField;
             MethodInfo setup;
             Rect leftBase, rightBase, leftSet, rightSet;
+            Matrix4x4 leftProjection, rightProjection;
             float appliedIpd = -1f;
             bool searched;
 
@@ -249,15 +251,52 @@ namespace SpatialLauncher.SpatialWindows
                 if (cameraManager == null || leftField == null || rightField == null) return;
                 if (!(leftField.GetValue(cameraManager) is Camera left) || !(rightField.GetValue(cameraManager) is Camera right)) return;
                 if (!left.isActiveAndEnabled) return;
-                // A rect we didn't set is HoloKit's own layout: take it as the new base.
-                if (left.rect != leftSet) leftBase = left.rect;
-                if (right.rect != rightSet) rightBase = right.rect;
+                // A rect we didn't set is HoloKit's own layout (rect and projection): take it as the new base.
+                if (left.rect != leftSet) leftBase = Base(left, out leftProjection);
+                if (right.rect != rightSet) rightBase = Base(right, out rightProjection);
                 var shift = ViewportShift(display.viewportOffsetMm, new Vector2(Screen.width, Screen.height), Screen.dpi);
-                leftSet = new Rect(leftBase.position + shift, leftBase.size);
-                rightSet = new Rect(rightBase.position + shift, rightBase.size);
+                var leftShifted = new Rect(leftBase.position + shift, leftBase.size);
+                var rightShifted = new Rect(rightBase.position + shift, rightBase.size);
+                // Each eye fills its half of the screen: no black margins or gap. The projection grows with the rect, so
+                // the picture keeps its scale and place (the lens geometry and IPD hold); more of the scene shows at the edges.
+                leftSet = LeftHalf;
+                rightSet = RightHalf;
                 left.rect = leftSet;
                 right.rect = rightSet;
+                left.projectionMatrix = GrowProjection(leftProjection, leftShifted, leftSet, left.nearClipPlane, left.farClipPlane);
+                right.projectionMatrix = GrowProjection(rightProjection, rightShifted, rightSet, right.nearClipPlane, right.farClipPlane);
             }
+
+            static Rect Base(Camera eye, out Matrix4x4 projection)
+            {
+#if UNITY_EDITOR
+                eye.ResetProjectionMatrix(); // HoloKit sets a projection only on the device; the editor's follows the rect
+#endif
+                projection = eye.projectionMatrix;
+                return eye.rect;
+            }
+        }
+
+        static readonly Rect LeftHalf = new Rect(0f, 0f, 0.5f, 1f), RightHalf = new Rect(0.5f, 0f, 0.5f, 1f);
+
+        /// <summary>
+        /// The projection for <paramref name="to"/> that shows the scene exactly as <paramref name="projection"/> does in
+        /// <paramref name="from"/> (same scale and place on the screen), extended (or cropped) to the new rect's edges.
+        /// Rects are viewport rects (0..1 of the screen); <paramref name="projection"/> is an OpenGL-style perspective.
+        /// </summary>
+        public static Matrix4x4 GrowProjection(Matrix4x4 projection, Rect from, Rect to, float near, float far)
+        {
+            if (from.width <= 0f || from.height <= 0f || projection.m00 == 0f || projection.m11 == 0f) return projection;
+            // The frustum's edges on the near plane: m00 = 2n/(r-l), m02 = (r+l)/(r-l); the same for y with m11, m12.
+            float width = 2f * near / projection.m00, height = 2f * near / projection.m11;
+            float l = (projection.m02 - 1f) * width * 0.5f, r = l + width;
+            float b = (projection.m12 - 1f) * height * 0.5f, t = b + height;
+            float perX = width / from.width, perY = height / from.height; // near-plane metres per viewport unit
+            l += (to.xMin - from.xMin) * perX;
+            r += (to.xMax - from.xMax) * perX;
+            b += (to.yMin - from.yMin) * perY;
+            t += (to.yMax - from.yMax) * perY;
+            return Matrix4x4.Frustum(l, r, b, t, near, far);
         }
     }
 }

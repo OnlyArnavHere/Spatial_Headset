@@ -1,6 +1,8 @@
 #if SPATIAL_LAUNCHER_WEBRTC
 using System;
 using System.Collections.Generic;
+using System.Text;
+using SpatialLauncher.LaptopLink;
 using Unity.WebRTC;
 using UnityEngine;
 
@@ -15,6 +17,9 @@ namespace SpatialLauncher.SpatialWindows
     /// The session ends on pc Failed/Closed, after more than 10 s Disconnected, or when the control client ends it (an
     /// old agent, a stop, an oversize message); the teardown itself happens in the next <see cref="Tick"/>, never inside
     /// a WebRTC callback.
+    /// Over the stream transport (USB without a network; <see cref="StreamLinkTransport"/>) there is no peer connection:
+    /// the handshake's own connection carries the same control and input messages, each slot decodes its own video
+    /// (<see cref="SlotVideoSource.UseDecoder"/>), and the session ends when that connection closes.
     /// </summary>
     public sealed class LinkSession : IDisposable
     {
@@ -22,6 +27,7 @@ namespace SpatialLauncher.SpatialWindows
         const float FlushLimit = 0.3f;
 
         readonly RTCPeerConnection pc;
+        readonly StreamLinkTransport stream;
         readonly RTCDataChannel controlChannel;
         readonly RTCDataChannel[] inputChannels;
         readonly Dictionary<string, VideoStreamTrack> tracks = new Dictionary<string, VideoStreamTrack>();
@@ -37,7 +43,10 @@ namespace SpatialLauncher.SpatialWindows
         public ControlChannelClient Control { get; }
         public IReadOnlyList<SlotVideoSource> Slots => slots;
         public IReadOnlyList<DataChannelInputSink> Inputs => inputs;
+        /// <summary>The WebRTC connection; null over the stream transport.</summary>
         public RTCPeerConnection Peer => pc;
+        /// <summary>True over the USB stream transport.</summary>
+        public bool IsStream => stream != null;
         /// <summary>The session is over (torn down).</summary>
         public bool IsEnded { get; private set; }
         /// <summary>True from the moment something ended it, until the teardown ran.</summary>
@@ -105,6 +114,36 @@ namespace SpatialLauncher.SpatialWindows
             AttachTracks();
         }
 
+        /// <summary>
+        /// A session over the stream transport. <paramref name="post"/> runs an action on the main thread (the transport
+        /// calls back on its reader thread). The transport is started by <see cref="Begin"/>.
+        /// </summary>
+        internal LinkSession(StreamLinkTransport transport, Action<Action> post, int slotCount, string laptopName, string address)
+        {
+            stream = transport;
+            LaptopName = laptopName;
+            Address = address;
+            Control = new ControlChannelClient(SendControl);
+            slots = new SlotVideoSource[slotCount];
+            inputs = new DataChannelInputSink[slotCount];
+            for (int k = 0; k < slotCount; k++)
+            {
+                int slot = k;
+                slots[k] = new SlotVideoSource(k, new Vector2Int(1920, 1080)) { Mid = null, Usable = true };
+                slots[k].UseDecoder();
+                slots[k].StopRequested += Control.CloseSlot;
+                inputs[k] = new DataChannelInputSink(k, Control, json => SendInput(slot, json));
+            }
+            transport.ControlReceived = bytes => post(() => { if (!IsEnded) Control.Receive(bytes); });
+            transport.InputReceived = (slot, bytes) => post(() => { if (!IsEnded) inputs[slot].ReceiveInput(bytes); });
+            transport.VideoReceived = (slot, timestamp, key, data) => slots[slot].SubmitVideo(data); // decoded on this thread
+            transport.Closed += reason => post(() => RequestEnd("connection lost"));
+
+            Control.Opened += OnOpened;
+            Control.WindowEnded += (slot, reason) => EndWindow(slot, reason);
+            Control.Ended += RequestEnd;
+        }
+
         void AttachTracks()
         {
             foreach (var slot in slots)
@@ -117,6 +156,7 @@ namespace SpatialLauncher.SpatialWindows
             if (IsEnded || endRequested != null) { listenerLease?.Dispose(); return; }
             lease = listenerLease;
             Control.BeginConnecting();
+            stream?.Start(); // the laptop says welcome as soon as it reads M5's success
         }
 
         void OnOpened(OpenedWindow window)
@@ -133,11 +173,13 @@ namespace SpatialLauncher.SpatialWindows
 
         void SendControl(string json)
         {
+            if (stream != null) { if (!IsEnded) stream.Send(StreamLinkTransport.Control, 0, Encoding.UTF8.GetBytes(json)); return; }
             if (!IsEnded && controlChannel.ReadyState == RTCDataChannelState.Open) controlChannel.Send(json);
         }
 
         void SendInput(int slot, string json)
         {
+            if (stream != null) { if (!IsEnded) stream.Send(StreamLinkTransport.Input, slot, Encoding.UTF8.GetBytes(json)); return; }
             if (!IsEnded && inputChannels[slot].ReadyState == RTCDataChannelState.Open) inputChannels[slot].Send(json);
         }
 
@@ -154,13 +196,13 @@ namespace SpatialLauncher.SpatialWindows
             if (ClosePending)
             {
                 bool flushed;
-                try { flushed = controlChannel.BufferedAmount == 0; }
+                try { flushed = stream != null ? stream.PendingBytes == 0 : controlChannel.BufferedAmount == 0; }
                 catch (Exception) { flushed = true; }
                 if (flushed || now >= closeDeadline) CloseConnection();
                 return;
             }
             if (IsEnded) return;
-            if (endRequested == null)
+            if (endRequested == null && stream == null)
             {
                 if (connectionState == RTCPeerConnectionState.Failed || connectionState == RTCPeerConnectionState.Closed)
                     RequestEnd("connection lost");
@@ -174,6 +216,8 @@ namespace SpatialLauncher.SpatialWindows
             if (endRequested != null) { Teardown(endRequested, false); return; }
             Control.Tick(now);
             foreach (var sink in inputs) sink.Tick(now);
+            if (stream != null)
+                foreach (var slot in slots) slot.Tick(now); // the decoders hand their newest frame to Unity here
         }
 
         /// <summary>
@@ -205,11 +249,19 @@ namespace SpatialLauncher.SpatialWindows
                 slot.Unbind(reason == "stopped" ? "Stopped" : "The laptop connection ended");
                 slot.DetachTrack();
             }
-            pc.OnTrack = null;
-            pc.OnConnectionStateChange = null;
-            controlChannel.OnMessage = null;
-            controlChannel.OnClose = null;
-            foreach (var channel in inputChannels) channel.OnMessage = null;
+            if (pc != null)
+            {
+                pc.OnTrack = null;
+                pc.OnConnectionStateChange = null;
+                controlChannel.OnMessage = null;
+                controlChannel.OnClose = null;
+                foreach (var channel in inputChannels) channel.OnMessage = null;
+            }
+            else if (stream != null)
+            {
+                stream.ControlReceived = null;
+                stream.InputReceived = null;
+            }
             if (flushFirst)
             {
                 closeDeadline = Time.realtimeSinceStartup + FlushLimit;
@@ -226,6 +278,13 @@ namespace SpatialLauncher.SpatialWindows
         void CloseConnection()
         {
             ClosePending = false;
+            if (stream != null)
+            {
+                stream.VideoReceived = null;
+                stream.Close("closed");
+                foreach (var slot in slots) slot.DisposeDecoder();
+                return;
+            }
             try
             {
                 controlChannel.Close();

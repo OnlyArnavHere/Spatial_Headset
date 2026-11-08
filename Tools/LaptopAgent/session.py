@@ -22,6 +22,10 @@ Control channel (JSON text, at most 16 KiB per message; anything bigger ends the
   headset -> agent  {"type":"control-request","consent":"full control"}, {"type":"control-release"}, {"type":"stop"}
                     agent -> headset {"type":"control-granted"|"control-denied"|"control-revoked",...}: see dispatch.py
   headset -> agent  {"type":"stop"} ends the session ("headset stopped"), after revoking control and releasing input
+  agent -> headset  {"type":"text-focus","editable":bool,"slot":n|null} when the laptop's keyboard focus moves into or
+                    out of a text field (textfocus.py), so the headset can show or hide its keyboard. Sent only while
+                    control with the keyboard is GRANTED, after the headset's first click; "slot" is the window the
+                    headset clicked in last (null if none). Never sent on Linux.
   headset -> agent  apps.*, window.*, search.query: the laptop shell, see shell.py. Refused unless control is GRANTED
                     (with --input, not cast-only). The welcome's "shell" says {"os","available"}.
 The input channels carry the mouse, key, text and media messages described in dispatch.py, which are checked there; the
@@ -32,11 +36,12 @@ Each slot's sender holds a SlotTrack, a small queue the window's packets are for
 sender loop stays blocked in recv() of the track it last read, and a MediaPlayer track that is stopped under it would
 end that loop for good.
 
-LinkRunner dials the headsets (given addresses, Bonjour, the USB hotspot, and with usb=True iPhones on the USB cable
-through Apple's multiplexer, usbmux.py), one session at a time, and redials with a backoff after a session ends. A
+LinkRunner dials the headsets (found over Bonjour, and with usb=True iPhones on the USB cable through Apple's
+multiplexer, usbmux.py), one session at a time, and redials with a backoff after a session ends. A
 headset on the cable gets a stream session (stream_link.py) instead of WebRTC: there is no network to carry WebRTC.
 """
 import asyncio
+import concurrent.futures
 import json
 import logging
 import re
@@ -56,6 +61,7 @@ import handshake
 import identity
 import pairing
 import shell
+import textfocus
 from streams import Stream, StreamManager
 
 log = logging.getLogger("session")
@@ -77,8 +83,10 @@ MAX_DISCOVERED = 16           # headsets found by discovery that are dialled at 
 DROP_AFTER_FAILURES = 5       # a Bonjour-found headset is forgotten after this many failures in a row
 USB_POLL_S = 2.0              # how often the cable is checked for iPhones
 USB_PREFIX = "usb:"           # runner keys of iPhones on the cable: ("usb:<serial>", LINK_PORT)
-USB_TOO_OLD = ("the headset app is too old for USB without the hotspot: update it, or turn on Personal Hotspot "
-               "on the phone")
+USB_TOO_OLD = "the headset app is too old for the USB cable: update it"
+TEXT_FOCUS_POLL_S = 0.3  # how often the laptop's focus is checked for a text field while the headset can type
+# One thread for every check: UI Automation's COM objects belong to the thread that made them.
+_TEXT_FOCUS_POOL = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="textfocus")
 _IDR = re.compile(rb"\x00\x00\x01[\x25\x45\x65]")  # start code + NAL header of an IDR slice (type 5)
 _SPS = re.compile(rb"\x00\x00\x01[\x27\x47\x67]")  # ...of a sequence parameter set (type 7)
 
@@ -215,6 +223,10 @@ class LinkSession:
         self._oversize = False
         self._end_reason: str | None = None
         self._shell_tasks: set[asyncio.Task] = set()
+        self.text_focus_probe = textfocus.editable  # tests swap it
+        self._text_focus_task: asyncio.Task | None = None
+        self._text_focus_sent = False
+        self._last_click_slot: int | None = None
         self.shell = shell.ShellService(shell_backend or shell.default_backend(), self._send, self._shell_gate,
                                         dry_run=dry_run)
 
@@ -299,6 +311,9 @@ class LinkSession:
             return
         self.closed = True
         self.dispatcher.close()  # never leave a button or key held down after the headset goes away
+        if self._text_focus_task is not None:
+            self._text_focus_task.cancel()
+            await asyncio.gather(self._text_focus_task, return_exceptions=True)
         for task in list(self._requests) + list(self._shell_tasks):
             task.cancel()
         if self._requests or self._shell_tasks:
@@ -349,6 +364,47 @@ class LinkSession:
     def _on_input(self, slot: Slot, message) -> None:
         slot.input_messages += 1
         self.dispatcher.on_input(slot.index, message)
+        if self._is_click(message):
+            self._last_click_slot = slot.index
+            if self._text_focus_task is None and not self.closed and self.input_enabled and self.keyboard_enabled \
+                    and not self.cast_only:
+                self._text_focus_task = asyncio.ensure_future(self._watch_text_focus())
+
+    @staticmethod
+    def _is_click(message) -> bool:
+        if isinstance(message, (bytes, bytearray)):
+            message = bytes(message).decode("utf-8", "replace")
+        if not isinstance(message, str) or '"down"' not in message:
+            return False
+        try:
+            parsed = json.loads(message)
+        except (ValueError, RecursionError):
+            return False
+        return isinstance(parsed, dict) and parsed.get("type") == "down"
+
+    def _keyboard_granted(self) -> bool:
+        return (self.dispatcher.state is dispatch.ControlState.GRANTED and self.input_enabled and self.keyboard_enabled
+                and not self.cast_only)
+
+    async def _watch_text_focus(self) -> None:
+        """Tells the headset when the laptop's focus moves into or out of a text field (see "text-focus" above)."""
+        loop = asyncio.get_running_loop()
+        while not self.closed:
+            editable = False
+            if self._keyboard_granted():
+                try:
+                    editable = await loop.run_in_executor(_TEXT_FOCUS_POOL, self.text_focus_probe)
+                except Exception:
+                    log.debug("Text focus check failed", exc_info=True)
+                    editable = False
+                if editable is None:
+                    return  # this OS can't tell: no keyboard pop-up
+            if self.closed:
+                return
+            if bool(editable) != self._text_focus_sent:
+                self._text_focus_sent = bool(editable)
+                self._send({"type": "text-focus", "editable": self._text_focus_sent, "slot": self._last_click_slot})
+            await asyncio.sleep(TEXT_FOCUS_POLL_S)
 
     def _on_control_message(self, raw) -> None:
         size = len(raw) if isinstance(raw, (bytes, bytearray)) else len(raw.encode("utf-8", "replace"))
@@ -559,8 +615,7 @@ class LinkRunner:
                  streams: StreamManager, rtsp_port: int, *, max_windows: int = 4, input_enabled: bool = False,
                  keyboard_enabled: bool = False, cast_only: bool = False, dry_run: bool = False,
                  approver: dispatch.Approver | None = None, shell_backend: "shell.ShellBackend | None" = None,
-                 pinned: list[tuple[str, int]] | None = None, discover: bool = False,
-                 browse: Callable = discovery.browse, wired: Callable = discovery.wired_candidates,
+                 discover: bool = False, browse: Callable = discovery.browse,
                  on_connect_failed: Callable[[str, int, bool], None] | None = None, usb: bool = False,
                  usb_list: Callable | None = None, usb_connect: Callable | None = None):
         self.on_connect_failed = on_connect_failed  # (host, port, found_by_discovery) when a dial can't connect
@@ -575,10 +630,8 @@ class LinkRunner:
         self.stopped = False  # ...and so does this: no dialling, no new workers
         self._shutdown_task: asyncio.Task | None = None
         self._loop_tasks: list[asyncio.Task] = []
-        self.pinned = list(pinned or [])
         self.discover = discover
         self._browse = browse
-        self._wired = wired
         self.usb = usb
         self._usb_list = usb_list
         self._usb_connect = usb_connect
@@ -594,16 +647,13 @@ class LinkRunner:
         self._idle = asyncio.Event()
         self._idle.set()
         self._workers: dict[tuple[str, int], tuple[asyncio.Task, asyncio.Event]] = {}
-        self._discovered: set[tuple[str, int]] = set()  # workers started by discovery rather than by hand
+        self._discovered: set[tuple[str, int]] = set()  # workers started by Bonjour rather than by the USB cable
 
     async def run(self) -> None:
         tasks = []
         try:
-            for host, port in self.pinned:
-                self._add_target(host, port, BACKOFF_MAX_S)  # given by hand: retried forever
             if self.discover and not self.stopped:
-                tasks = self._loop_tasks = [asyncio.ensure_future(self._browse_loop()),
-                                            asyncio.ensure_future(self._wired_loop())]
+                tasks = self._loop_tasks = [asyncio.ensure_future(self._browse_loop())]
             if self.usb and not self.stopped:
                 tasks.append(asyncio.ensure_future(self._usb_loop()))
                 self._loop_tasks = tasks
@@ -678,13 +728,6 @@ class LinkRunner:
                 log.warning("Bonjour discovery stopped (%s); retrying in 10 s", e)
             await asyncio.sleep(10)
 
-    async def _wired_loop(self) -> None:
-        loop = asyncio.get_running_loop()
-        while True:
-            for host, port in await loop.run_in_executor(None, self._wired):
-                self._found(host, port, BACKOFF_MAX_WIRED_S, "USB hotspot")
-            await asyncio.sleep(30)
-
     async def _usb_loop(self) -> None:
         """iPhones on the cable, through Apple's USB multiplexer: each one is dialled on the link port."""
         import usbmux
@@ -719,6 +762,7 @@ class LinkRunner:
         delay = BACKOFF_START_S
         last_failure = None
         failures = 0
+        linked = False  # this address has worked: it is the headset, so it is never given up on
         while not self.stopped:
             await self._idle.wait()
             if self.stopped:
@@ -730,7 +774,11 @@ class LinkRunner:
                 else:
                     log.debug("Headset %s:%d: %s", *key, reason)
                 last_failure = reason
-                failures += 1
+                # Only an address that can't be reached counts towards giving up (stale Bonjour addresses). A headset
+                # that answers ("not paired", a refusal) is there: keep trying it, so it links as soon as pairing is
+                # done. Giving up on it left Wi-Fi unused until Bonjour happened to announce the headset again.
+                if reason == "can't connect" and not linked:
+                    failures += 1
                 if (reason == "can't connect" and self.on_connect_failed is not None  # handshake's reason text
                         and not key[0].startswith(USB_PREFIX)):  # the cable has no Local Network permission to miss
                     try:
@@ -747,6 +795,7 @@ class LinkRunner:
                 delay = min(cap, delay * 2)
             else:
                 delay, last_failure, wait, failures = BACKOFF_START_S, None, BACKOFF_START_S, 0
+                linked = True
             wake.clear()
             try:
                 await asyncio.wait_for(wake.wait(), wait)

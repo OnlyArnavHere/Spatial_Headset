@@ -9,7 +9,8 @@ namespace SpatialLauncher.SpatialWindows
     /// The video of one slot (one m-line) of the link session as a content texture. The slot's track exists for the
     /// whole session; a window is bound to it when the agent answers an open (<see cref="Bind"/>) and unbound when it ends.
     /// Drives the texture, <see cref="Tick"/> and <see cref="Changed"/>; no reconnect loop
-    /// (the session ending ends it).
+    /// (the session ending ends it). Over the stream transport (USB without a network) there is no track: the slot
+    /// owns a <see cref="StreamVideoDecoder"/> that the session feeds with access units (<see cref="SubmitVideo"/>).
     /// </summary>
     public sealed class SlotVideoSource : IRemoteVideoSource
     {
@@ -17,6 +18,7 @@ namespace SpatialLauncher.SpatialWindows
 
         readonly Vector2Int expectedSize;
         VideoStreamTrack track;
+        StreamVideoDecoder decoder;
         bool bound;
         float boundAt;
         Vector2Int lastSize;
@@ -74,6 +76,24 @@ namespace SpatialLauncher.SpatialWindows
 
         public bool HasTrack => track != null;
 
+        /// <summary>Stream transport: this slot decodes the access units it is given itself.</summary>
+        internal void UseDecoder()
+        {
+            if (decoder == null) decoder = new StreamVideoDecoder();
+        }
+
+        /// <summary>Stream transport, any thread: one access unit for this slot (dropped when no window is bound).</summary>
+        internal void SubmitVideo(ArraySegment<byte> annexB) => decoder?.Submit(annexB);
+
+        /// <summary>Main thread: frees the decoder (stream transport).</summary>
+        internal void DisposeDecoder()
+        {
+            decoder?.Dispose();
+            decoder = null;
+        }
+
+        Texture CurrentTexture => track != null ? track.Texture : decoder?.Texture;
+
         public void Start()
         {
             if (IsRunning) return;
@@ -101,10 +121,10 @@ namespace SpatialLauncher.SpatialWindows
             boundAt = now;
             Path = path;
             Description = description ?? "";
-            var current = track != null ? track.Texture : null;
+            var current = CurrentTexture;
             if (current != null)
             {
-                // The slot's track keeps its texture across windows and only announces the first frame once.
+                // The slot's track (or decoder) keeps its texture across windows and only announces the first frame once.
                 Texture = current;
                 lastSize = new Vector2Int(current.width, current.height);
                 ConnectCount++;
@@ -147,13 +167,20 @@ namespace SpatialLauncher.SpatialWindows
 
         public void Tick(float now)
         {
+            if (decoder != null && decoder.Update() && bound && CurrentState != RemoteVideoState.Receiving)
+            {
+                OnFrame(decoder.Texture);
+                return;
+            }
             if (!bound) return;
             if (CurrentState == RemoteVideoState.WaitingForVideo && now - boundAt > FirstFrameTimeout)
             {
-                SetState(RemoteVideoState.Failed, "No video arrived (is the captured window minimized?)");
+                SetState(RemoteVideoState.Failed, decoder != null && !StreamVideoDecoder.Supported
+                    ? "Video over the USB cable needs the iPhone app"
+                    : "No video arrived (is the captured window minimized?)");
                 return;
             }
-            var current = track != null ? track.Texture : null;
+            var current = CurrentTexture;
             if (current == null || CurrentState != RemoteVideoState.Receiving) return;
             var size = new Vector2Int(current.width, current.height);
             if (current == Texture && size == lastSize) return;

@@ -287,6 +287,14 @@ class _WebViewMissing(Exception):
     """The web view failed before the window existed; the Tk window takes over."""
 
 
+WIDGET_SIZE = (330, 330)  # gui/web/app.css fills it: four round buttons across, 12 px gaps, 10 px around
+
+
+def _glass_shape(window, shape) -> None:
+    from gui import glass
+    glass.set_shape(window, shape)
+
+
 def run_web(single, log, background: bool) -> int:
     """The HTML window (gui/web) in the system web view. webview.start() owns the main thread until the window is
     destroyed; the agent, the tray and the second-launch listener post to App as with Tk."""
@@ -312,11 +320,19 @@ def run_web(single, log, background: bool) -> int:
     app = None
     holder = {}
     bridge = web_app.Bridge(controller, saved, open_settings=_macos_perms.open_settings,
-                            on_relaunch=lambda: app.relaunch(), on_quit=lambda: app.post("quit"), version=VERSION)
+                            on_relaunch=lambda: app.relaunch(), on_quit=lambda: app.post("quit"), version=VERSION,
+                            on_minimize=lambda: window.minimize(), on_close=lambda: app.post("quit"),
+                            on_shape=lambda shape: _glass_shape(window, shape))
     try:
+        # A desktop widget (gui/glass.py): frameless glass tiles; the page draws minimize, close and the drag area.
         window = webview.create_window("Spatial Launcher Agent", os.path.join(web_app.WEB_DIR, "index.html"),
-                                       js_api=bridge, width=420, height=760, min_size=(360, 560),
-                                       background_color="#DCE3EA", text_select=True,
+                                       js_api=bridge, width=WIDGET_SIZE[0], height=WIDGET_SIZE[1],
+                                       min_size=WIDGET_SIZE,
+                                       frameless=True, easy_drag=False,
+                                       # a Mac blurs behind it; on Windows the page paints its own frosted glass
+                                       transparent=sys.platform == "darwin",
+                                       vibrancy=sys.platform == "darwin", resizable=False,
+                                       background_color="#1C1E24", text_select=True,
                                        # a Mac has no tray: start in the Dock, where a click brings it back
                                        hidden=background and sys.platform != "darwin",
                                        minimized=background and sys.platform == "darwin")
@@ -325,7 +341,9 @@ def run_web(single, log, background: bool) -> int:
         controller.shutdown()
         raise _WebViewMissing(e)
     root = web_app.WebRoot(window, minimize_instead_of_hide=sys.platform == "darwin")
-    app = App(root, controller, None, hide_on_close=sys.platform in ("win32", "darwin"))
+    # Closing the widget quits: the next start is a fresh process, with no state left over from the last run (paired
+    # headsets and settings are on disk and stay). Minimize puts it away while it keeps running.
+    app = App(root, controller, None, hide_on_close=False)
     app.window = bridge
 
     def on_closing():
@@ -341,6 +359,11 @@ def run_web(single, log, background: bool) -> int:
 
     def started():
         log.info("Window: web view (%s)", getattr(webview, "renderer", "") or "system")
+
+        def make_glass():
+            from gui import glass
+            bridge.glass = glass.apply(window)
+        threading.Thread(target=make_glass, daemon=True, name="glass").start()
         single.serve(lambda: app.post("open"))
         if sys.platform == "win32":
             try:

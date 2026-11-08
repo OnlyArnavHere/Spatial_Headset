@@ -1,7 +1,7 @@
 """The status window: running or idle, paired headsets, the settings toggles, the log.
 
 Tk objects are touched on the main thread only. Everything from other threads (the controller's events, log records,
-the slow wired-network check) comes through queues that poll() drains with root.after.
+the slow USB cable check) comes through queues that poll() drains with root.after.
 Importing this module opens no window; the helpers below are plain functions.
 """
 import logging
@@ -13,7 +13,6 @@ from tkinter import messagebox, ttk
 
 import autostart
 import hostos
-import network
 import settings as settings_mod
 from hostos import _macos_perms
 from gui import theme
@@ -80,7 +79,7 @@ class LogQueueHandler(logging.Handler):
 
 class MainWindow:
     def __init__(self, root: tk.Misc, controller, settings: settings_mod.Settings | None = None, *,
-                 save=settings_mod.save, wired_report=network.wired_report, kill_switch: str | None = None,
+                 save=settings_mod.save, wired_report=None, kill_switch: str | None = None,
                  poll_ms: int = POLL_MS, attach_log: bool = True, login=None, show_permissions: bool | None = None,
                  open_settings=_macos_perms.open_settings, on_relaunch=None):
         self.root, self.controller, self._save = root, controller, save
@@ -89,7 +88,7 @@ class MainWindow:
         self._show_permissions = (sys.platform == "darwin") if show_permissions is None else show_permissions
         self._perm_widgets: dict = {}
         self._perm_tick = 0
-        self._wired_report, self._poll_ms = wired_report, poll_ms
+        self._wired_report, self._poll_ms = wired_report or _usb_report, poll_ms
         self.settings = settings or settings_mod.Settings()
         self.dialog: PairDialog | None = None
         self._wired_results: queue.Queue = queue.Queue()
@@ -162,15 +161,7 @@ class MainWindow:
         self.login_note = tk.StringVar()
         ttk.Label(options, textvariable=self.login_note, style="Muted.TLabel", wraplength=470).grid(
             row=2, column=1, columnspan=2, sticky="e")
-        ttk.Label(options, text="Headset address").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        self.address = tk.StringVar(value=self.settings.headset_address)
-        entry = ttk.Entry(options, textvariable=self.address)
-        entry.grid(row=3, column=1, sticky="ew", padx=8, pady=(8, 0))
-        entry.bind("<Return>", lambda _e: self.on_address())
-        ttk.Button(options, text="Apply", command=self.on_address).grid(row=3, column=2, pady=(8, 0))
-        ttk.Label(options, text="Leave empty to find headsets automatically.", style="Muted.TLabel").grid(
-            row=4, column=1, columnspan=2, sticky="w", padx=8)
-        ttk.Checkbutton(options, text="Wired (USB Personal Hotspot)", variable=self.vars["wired"],
+        ttk.Checkbutton(options, text="Wired (USB cable, no Wi-Fi needed)", variable=self.vars["wired"],
                         command=lambda: self.on_toggle("wired")).grid(row=5, column=0, columnspan=3, sticky="w",
                                                                       pady=(8, 2))
         self.wired_text = tk.StringVar()
@@ -327,10 +318,6 @@ class MainWindow:
         elif name == "wired":
             self.wired_text.set("")
 
-    def on_address(self) -> None:
-        text = self.address.get().strip()
-        self._commit(settings_mod.Settings(**{**vars(self.settings), "headset_address": text}))
-
     def _commit(self, new: settings_mod.Settings) -> bool:
         try:
             new.validate()
@@ -345,7 +332,6 @@ class MainWindow:
             self._save(new)
         except ValueError as e:
             messagebox.showerror("Settings", str(e), parent=self.root)
-            self.address.set(self.settings.headset_address)
             for key in self.vars:
                 self.vars[key].set(getattr(self.settings, key))
             return False
@@ -353,15 +339,15 @@ class MainWindow:
             # apply() ran before save(), so the new settings are in effect for this run; only the file failed
             messagebox.showerror("Settings", f"Couldn't save settings: {e}", parent=self.root)
         self.settings = new
-        self.address.set(new.headset_address)
         return True
 
     def _check_wired(self) -> None:
-        self.wired_text.set("Checking the USB hotspot...")
+        self.wired_text.set("Looking for the iPhone on the USB cable...")
 
         def work() -> None:
             try:
-                lines = "\n".join(self._wired_report().lines())
+                report = self._wired_report()
+                lines = report if isinstance(report, str) else "\n".join(report.lines())
             except Exception as e:
                 lines = f"Couldn't check: {e}"
             self._wired_results.put(lines)
@@ -447,3 +433,8 @@ class MainWindow:
             except tk.TclError:
                 pass
         logging.getLogger().removeHandler(self.log_handler)
+
+
+def _usb_report() -> str:
+    import usbmux
+    return usbmux.describe()

@@ -33,12 +33,20 @@ class CodeFormatTests(unittest.TestCase):
         codes = {pairing.new_code() for _ in range(200)}
         self.assertEqual(len(codes), 200)
         for c in codes:
-            self.assertRegex(c, r"^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{12}$")
+            self.assertRegex(c, r"^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{8}$")
+
+    def test_short_code_and_legacy_code_both_parse(self):
+        self.assertEqual(pairing.parse_code("abcd-efgh"), "ABCDEFGH")
+        self.assertEqual(pairing.format_code("ABCDEFGH"), "ABCD-EFGH")
+        self.assertEqual(pairing.parse_code("abcd-efgh-jkmn"), "ABCDEFGHJKMN")  # an older headset's code
+        for bad in ("ABCDEFG", "ABCDEFGHJ", "ABCDEFGHJKM", "ABCDEFGHJKMNP"):
+            with self.assertRaises(ValueError):
+                pairing.parse_code(bad)
 
     def test_alphabet_is_crockford(self):
         self.assertEqual(pairing.ALPHABET, "0123456789ABCDEFGHJKMNPQRSTVWXYZ")
         self.assertEqual(len(set(pairing.ALPHABET)), 32)
-        self.assertEqual(pairing.CODE_LEN, 12)
+        self.assertEqual(pairing.CODE_LEN, 8)
 
     def test_format(self):
         self.assertEqual(pairing.format_code("ABCDEFGHJKMN"), "ABCD-EFGH-JKMN")

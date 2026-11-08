@@ -1,5 +1,6 @@
 "use strict";
-// The agent window. Everything shown comes from api.poll(); every control calls one Bridge method (gui/web_app.py).
+// The agent's desktop widget. Everything shown comes from api.poll(); every control calls one Bridge method
+// (gui/web_app.py). The tiles' shapes go to api.set_shape so the glass can be cut to them (gui/glass.py).
 
 const ICONS = {
   usb: '<path d="M12 21V5M12 5l-2.5 3M12 5l2.5 3M12 16l-4.5-3V10M12 14l4.5-3V9"/><circle cx="12" cy="21" r="1.2" fill="currentColor"/><rect x="6" y="8.5" width="3" height="2" rx=".5"/><circle cx="16.5" cy="8.5" r="1.2"/>',
@@ -7,6 +8,11 @@ const ICONS = {
   power: '<path d="M12 3.5v8"/><path d="M7 6.5a7.5 7.5 0 1 0 10 0"/>',
   qr: '<rect x="4" y="4" width="6" height="6" rx="1.2"/><rect x="14" y="4" width="6" height="6" rx="1.2"/><rect x="4" y="14" width="6" height="6" rx="1.2"/><path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 20h1M20 14v1"/>',
   sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  minus: '<path d="M6 12h12"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  pointer: '<path d="M6 3.5l12 7.2-5.2 1.3 3.1 6.1-2.4 1.2-3.1-6.1L6 17z"/>',
+  cast: '<path d="M3 17.5a3.5 3.5 0 0 1 3.5 3.5M3 13.5A7.5 7.5 0 0 1 10.5 21M3 9.5A11.5 11.5 0 0 1 14.5 21"/><path d="M5 5.5h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/>',
+  x: '<path d="M7 7l10 10M17 7L7 17"/>',
   headset: '<path d="M3 10.5c0-1.4 1.1-2.5 2.5-2.5h13c1.4 0 2.5 1.1 2.5 2.5v4c0 1.4-1.1 2.5-2.5 2.5h-3l-1.8-2.2a2.2 2.2 0 0 0-3.4 0L8.5 17h-3A2.5 2.5 0 0 1 3 14.5z"/>',
 };
 
@@ -56,6 +62,7 @@ const MODE_NOTE = {
 
 function render(s) {
   snap = s;
+  document.body.classList.toggle("solid", s.glass === false); // no OS blur behind the window: a solid panel
   renderStatus(s);
   const mode = modeOf(s.settings);
   document.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
@@ -77,11 +84,11 @@ function renderStatus(s) {
   } else if (st === "running" && live.length) {
     state = "live";
     title = live.length === 1 ? live[0].name : `${live.length} headsets`;
-    sub = live.length === 1 ? `Connected over ${live[0].link}.` : "Connected.";
+    sub = live.length === 1 ? `Connected over ${live[0].link}` : "Connected";
     button = "Turn off";
   } else if (st === "running") {
     state = "waiting"; title = "Ready";
-    sub = s.pairs.length ? "Waiting for your headset to connect." : "Pair a headset below to get started.";
+    sub = s.pairs.length ? `Waiting for your headset · ${set.wired ? "USB cable" : "Wi-Fi"}` : "Pair a headset to start";
     button = "Turn off";
   } else if (st === "error") {
     state = "error"; title = "Stopped"; sub = s.status.message || "Something went wrong. Turn it on to try again.";
@@ -103,17 +110,9 @@ function renderStatus(s) {
     bar.classList.toggle("indet", d.percent == null);
     bar.style.width = d.percent == null ? "" : d.percent + "%";
   }
-  const link = live.length === 1 ? live[0].link : set.wired ? "USB cable" : set.headset_address ? set.headset_address : "Wi-Fi";
-  const chip = $("st-link");
-  const chipIcon = link === "USB cable" ? "usb" : "wifi";
-  if (chip.dataset.text !== link || chip.dataset.icon !== chipIcon) {
-    chip.innerHTML = icon(chipIcon) + esc(link);
-    chip.dataset.text = link;
-    chip.dataset.icon = chipIcon;
-  }
   const power = $("power");
-  setText("power", button);
-  power.className = "btn " + (button === "Turn on" ? "ink" : "plain");
+  if (power.title !== button) { power.title = button; power.setAttribute("aria-label", button); }
+  power.classList.toggle("on", button !== "Turn on");
   power.disabled = st === "starting";
 }
 
@@ -122,20 +121,21 @@ function renderToggles(s) {
     const name = box.dataset.setting;
     const value = name === "start_at_login" ? s.login.enabled : !!s.settings[name];
     if (box.checked !== value) box.checked = value;
-    box.closest(".w").classList.toggle("on", value);
+    const tile = box.closest(".tg");
+    if (tile) tile.classList.toggle("on", value);
   });
-  setText("wired-value", s.settings.wired ? "On. No Wi-Fi needed." : "Off");
+  setText("wired-value", s.settings.wired ? "Cable on" : "Cable");
   const login = document.querySelector('[data-setting="start_at_login"]');
   login.disabled = !s.login.available;
   $("login-w").classList.toggle("disabled", !s.login.available);
-  setText("login-value", !s.login.available ? (s.login.message || "Not available") : s.login.enabled ? "On, in the tray" : "Off");
+  setText("login-value", !s.login.available ? (s.login.message || "Not available") : s.login.enabled ? "On" : "Off");
 }
 
 function renderPairing(p) {
   const active = !!p && !p.finished;
   const done = !!p && p.finished;
-  $("pair-idle").hidden = !!p;
   $("pair-live").hidden = !p;
+  reportShape();
   if (!p) return;
   const showQr = active && !!p.qr && !typing;
   $("qr").hidden = !showQr;
@@ -165,6 +165,9 @@ function shortDate(text) {
 
 function renderHeads(s) {
   const live = new Set((s.connected || []).map(c => c.name));
+  setText("heads-title", s.pairs.length === 1 ? s.pairs[0].name : s.pairs.length ? `${s.pairs.length} headsets` : "Headsets");
+  setText("heads-sub", live.size ? "Connected" : s.pairs.length ? "Paired" : "None yet");
+  $("heads-open").classList.toggle("live", live.size > 0);
   const key = JSON.stringify([s.pairs, [...live], confirming, s.pairs_error]);
   if (key === lastHeadsKey) return;
   lastHeadsKey = key;
@@ -185,15 +188,13 @@ function renderHeads(s) {
       <div class="head-actions">
         ${p.always ? `<button class="btn plain" data-act="ask" data-name="${name}" title="Ask on this laptop before it takes control">Ask first</button>` : ""}
         <button class="btn forget" data-act="forget" data-name="${name}">Forget</button></div></li>`;
-  }).join("") : '<li class="empty">No headsets yet. Pair one above.</li>';
+  }).join("") : '<li class="empty">None yet. Pair one with Pair.</li>';
   const err = $("pairs-error");
   err.hidden = !s.pairs_error;
   err.textContent = s.pairs_error;
 }
 
 function renderSheet(s) {
-  const addr = $("address");
-  if (document.activeElement !== addr && addr.value !== s.settings.headset_address) addr.value = s.settings.headset_address;
   const w = $("wired-text");
   w.hidden = !(s.settings.wired && s.wired_text);
   if (w.textContent !== s.wired_text) w.textContent = s.wired_text;
@@ -238,7 +239,23 @@ async function startPairing(withCode) {
 
 function openSheet(open) {
   $("sheet").hidden = !open;
-  if (open) $("sheet-close").focus();
+  reportShape();
+}
+
+// The shapes of what is showing (the tiles, or the open card), in CSS pixels, for the glass (gui/glass.py).
+let lastShape = "";
+function reportShape() {
+  if (!api || !api.set_shape) return;
+  const card = [...document.querySelectorAll(".card")].find(c => !c.hidden);
+  const tiles = card ? [card] : [...document.querySelectorAll(".widget .t")];
+  const shape = tiles.map(t => {
+    const r = t.getBoundingClientRect();
+    return [r.left, r.top, r.width, r.height, parseFloat(getComputedStyle(t).borderTopLeftRadius) || 0].map(Math.round);
+  });
+  const key = JSON.stringify(shape);
+  if (key === lastShape) return;
+  lastShape = key;
+  api.set_shape(shape);
 }
 
 function wire() {
@@ -255,7 +272,8 @@ function wire() {
   });
 
   $("qr-open").addEventListener("click", () => startPairing(false));
-  $("type-open").addEventListener("click", () => startPairing(true));
+  $("type-open").addEventListener("click", () => { openSheet(false); startPairing(true); });
+  $("heads-open").addEventListener("click", () => openSheet(true));
   $("pair-switch").addEventListener("click", () => {
     typing = !typing;
     if (snap) renderPairing(snap.pair);
@@ -289,19 +307,14 @@ function wire() {
     if (snap) renderHeads(snap);
   });
 
+  $("win-min").addEventListener("click", () => api.minimize());
+  $("win-close").addEventListener("click", () => api.close_window());
   $("more-open").addEventListener("click", () => openSheet(true));
   $("sheet-close").addEventListener("click", () => openSheet(false));
-  $("sheet").addEventListener("click", e => { if (e.target === $("sheet")) openSheet(false); });
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
     if (!$("sheet").hidden) openSheet(false);
     else if (confirming) { confirming = ""; lastHeadsKey = ""; if (snap) renderHeads(snap); }
-  });
-  $("addr-form").addEventListener("submit", async e => {
-    e.preventDefault();
-    const error = await api.set_address($("address").value);
-    toast(error || "Saved.");
-    $("address").blur();
   });
   document.addEventListener("click", e => {
     const perm = e.target.closest("[data-perm]");
@@ -317,6 +330,13 @@ function wire() {
     setTimeout(() => setText("quit", "Quit Spatial Launcher Agent"), 4000);
   });
   poll();
+  setTimeout(reportShape, 50);
+  window.addEventListener("resize", () => { lastShape = ""; reportShape(); });
 }
 
+// The widget moves when dragged from anywhere but a control (pywebview drags from .pywebview-drag-region and its
+// children; a press on a control stops there, so buttons and switches click instead of dragging).
+document.addEventListener("mousedown", e => {
+  if (e.target.closest("button, input, label, a, select, textarea, .heads li")) e.stopPropagation();
+}, true);
 window.addEventListener("pywebviewready", () => { api = window.pywebview.api; wire(); });

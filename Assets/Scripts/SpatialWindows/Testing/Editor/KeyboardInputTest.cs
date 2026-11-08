@@ -210,13 +210,21 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(keyboardWindow.transform.position.y < a.Window.transform.position.y - a.Window.Size.y * 0.5f,
                 $"it opens below the stream window ({keyboardWindow.transform.position.y:F2} m vs {a.Window.transform.position.y:F2} m)");
             Check(launcher.OpenKeyboard() == keyboardWindow && manager.Windows.Count == count + 1, "opening it again brings the same window back");
-            Check(remoteKeyboard.Target == a && keyboard.StatusText == "Typing into: Stream A",
-                $"with the keyboard in front, keys go to the stream window focused before it (\"{keyboard.StatusText}\")");
+            Check(remoteKeyboard.Target == a && keyboard.StatusText == "Typing into: Stream A" && keyboardWindow.DockedTo == a.Window,
+                $"the keyboard is docked to the stream window it types into (\"{keyboard.StatusText}\")");
 
             yield return ClickKey(manager, mouse, cam, keyboard, "H");
             yield return ClickKey(manager, mouse, cam, keyboard, "I");
-            Check(sinkA.Strokes.SequenceEqual(new[] { KeyStroke.Text("h"), KeyStroke.Text("i") }) && manager.FocusedWindow == keyboardWindow,
-                $"clicking h, i types \"hi\" into Stream A ({sinkA.Describe()})");
+            Check(sinkA.Strokes.SequenceEqual(new[] { KeyStroke.Text("h"), KeyStroke.Text("i") }) && manager.FocusedWindow == a.Window,
+                $"clicking h, i types \"hi\" into Stream A, which keeps focus ({sinkA.Describe()})");
+            Check(a.Window.IsFocused && Mathf.Approximately(keyboardWindow.TargetDepth, a.Window.TargetDepth)
+                  && Mathf.Approximately(keyboardWindow.TargetScale, a.Window.TargetScale),
+                "typing moves neither window: the keyboard sits at the stream window's depth and scale");
+            var before = keyboardWindow.transform.position - a.Window.transform.position;
+            a.Window.MoveTo(a.Window.transform.position + Vector3.right * 0.2f);
+            yield return Settle;
+            Check((keyboardWindow.transform.position - a.Window.transform.position - before).sqrMagnitude < 1e-4f,
+                "moving the stream window takes its keyboard along");
             Check(remoteKeyboard.IsForwardingPhysicalKeys && KeyboardShortcuts.Blocked,
                 "in the editor the physical keyboard is forwarded too, and single-key shortcuts stand down");
 
@@ -224,11 +232,13 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             var b = OpenStream(manager, "Stream B", sinkB);
             opened.Add(b.Window);
             yield return Settle;
-            Check(remoteKeyboard.Target == b, "focusing another stream window makes it the target");
+            Check(remoteKeyboard.Target == a, "a docked keyboard keeps typing into its own window when another opens");
+            remoteKeyboard.OpenFor(b.Window, automatic: false);
             manager.Focus(keyboardWindow);
             yield return Settle;
-            Check(remoteKeyboard.Target == b && keyboard.StatusText == "Typing into: Stream B",
-                $"and it stays the target when the keyboard comes to the front (\"{keyboard.StatusText}\")");
+            Check(remoteKeyboard.Target == b && keyboard.StatusText == "Typing into: Stream B" && manager.FocusedWindow == b.Window
+                  && keyboardWindow.transform.position.y < b.Window.transform.position.y,
+                $"opened for Stream B it moves under it, and pressing it focuses Stream B (\"{keyboard.StatusText}\")");
 
             sinkA.Strokes.Clear();
             yield return ClickKey(manager, mouse, cam, keyboard, "Shift");
@@ -257,14 +267,17 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(remoteKeyboard.Target == b && !remoteKeyboard.IsForwardingPhysicalKeys && !KeyboardShortcuts.Blocked,
                 "with a non-stream window in front, the physical keyboard isn't forwarded and shortcuts work again");
 
-            // Closing stream windows moves the target back, then to none.
+            // Closing the window the keyboard is docked to closes the keyboard too.
             manager.Close(b.Window);
             yield return Settle;
-            Check(remoteKeyboard.Target == a, "closing Stream B makes Stream A the target again");
+            Check(remoteKeyboard.KeyboardWindow == null && !manager.Windows.Contains(keyboardWindow),
+                "closing Stream B closes its keyboard");
             manager.Close(a.Window);
             yield return Settle;
             sinkA.Strokes.Clear();
-            manager.Focus(keyboardWindow);
+            keyboardWindow = launcher.OpenKeyboard();
+            opened.Add(keyboardWindow);
+            keyboard = remoteKeyboard.KeyboardContent;
             yield return Settle;
             yield return ClickKey(manager, mouse, cam, keyboard, "Q");
             Check(remoteKeyboard.Target == null && sinkA.Strokes.Count == 0 && keyboard.StatusText.StartsWith("Open a laptop window"),

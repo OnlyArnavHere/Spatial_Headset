@@ -6,8 +6,10 @@ using UnityEditor.iOS.Xcode;
 namespace SpatialLauncher.SpatialWindows.Editor
 {
     /// <summary>
-    /// After every iOS build, links Security.framework into UnityFramework for the laptop link's Keychain identity
-    /// (SpatialLink.mm). CommonCrypto and dns_sd are part of libSystem.
+    /// After every iOS build, links into UnityFramework what the laptop link's native code needs: Security.framework for
+    /// the Keychain identity (SpatialLink.mm), VideoToolbox, CoreMedia, CoreVideo and Metal for windows over the USB
+    /// cable (SpatialVideoDecoder.mm), and Vision for reading the laptop's pairing QR code (SpatialQrScanner.mm).
+    /// CommonCrypto and dns_sd are part of libSystem.
     /// </summary>
     static class IosLinkBuild
     {
@@ -19,7 +21,8 @@ namespace SpatialLauncher.SpatialWindows.Editor
             var project = new PBXProject();
             project.ReadFromFile(projectPath);
             string framework = project.GetUnityFrameworkTargetGuid();
-            project.AddFrameworkToProject(framework, "Security.framework", false);
+            foreach (string name in new[] { "Security", "VideoToolbox", "CoreMedia", "CoreVideo", "Metal", "Vision" })
+                project.AddFrameworkToProject(framework, name + ".framework", false);
             project.WriteToFile(projectPath);
         }
     }

@@ -9,7 +9,8 @@ namespace SpatialLauncher.LaptopLink
     /// the pair store, the pairing-code authority, the listener, the connection handler and the Bonjour advertisement.
     /// Pairing mode (<see cref="BeginPairing"/>) holds a listener lease and advertises m=pair; normal mode
     /// (<see cref="AcquireDiscovery"/>) holds a lease and advertises without it. Every advertisement gets a new random
-    /// instance name. Public methods run on the main thread; events are raised there too.
+    /// instance name, except while a code read from a laptop's QR is armed (<see cref="ArmQrPairing"/>): then the name
+    /// comes from the QR, so that laptop can find this headset. Public methods run on the main thread; events are raised there too.
     /// </summary>
     public sealed class LinkHost : IDisposable
     {
@@ -63,6 +64,23 @@ namespace SpatialLauncher.LaptopLink
             return code;
         }
 
+        /// <summary>
+        /// The pairing screen's camera read a QR code. When it is a laptop's pairing QR (<see cref="PairCode.TryParseQr"/>)
+        /// its code replaces the shown one and the headset re-advertises as "SL-" + the QR's id, which is the name that
+        /// laptop looks for. Returns the armed code (the same one again for a QR already armed), or null when not pairing
+        /// or the text is not a pairing QR.
+        /// </summary>
+        public IssuedPairCode ArmQrPairing(string scanned)
+        {
+            if (disposed || !Pairing || !PairCode.TryParseQr(scanned, out string code, out string fingerprint)) return null;
+            var current = Codes.Active;
+            if (current != null && current.FromQr && current.Code == code) return current;
+            var armed = Codes.ArmQr(code, fingerprint);
+            pairCodeId = armed.Id;
+            Advertise();
+            return armed;
+        }
+
         /// <summary>Kills the code, stops advertising m=pair and gives the listener lease back. Safe any time.</summary>
         public void EndPairing()
         {
@@ -95,7 +113,8 @@ namespace SpatialLauncher.LaptopLink
         {
             if (Pairing || discovery > 0)
             {
-                AdvertisedName = NewInstanceName();
+                var code = Pairing ? Codes.Active : null;
+                AdvertisedName = code != null && code.FromQr ? PairCode.QrInstance(code.Code) : NewInstanceName();
                 bonjour.Register(AdvertisedName, Listener.Port, Pairing);
             }
             else if (AdvertisedName != null)

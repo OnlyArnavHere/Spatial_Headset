@@ -34,7 +34,7 @@ Push a tag `agent-vX.Y.Z` and the `agent-release` workflow builds Windows and ma
 |---|---|---|
 | `ffmpeg` (one per streamed window) | Captures a window or the screen (Windows Graphics Capture) and encodes H.264: NVENC, QuickSync or AMF if one works, else x264 with zero-latency settings. Started when the headset opens that window, stopped 15 s after the last headset window showing it closes | nothing (publishes to MediaMTX on 127.0.0.1) |
 | `MediaMTX` | A local relay between ffmpeg and the agent: ffmpeg publishes each stream to it over RTSP and the agent reads the H.264 packets back out and forwards them to the headset over WebRTC. WebRTC, HLS, RTMP, SRT, the API, metrics, pprof and playback are all switched off in its config | TCP 8554 on 127.0.0.1 only |
-| `session.py` | Dials the headset (found over Bonjour, or `--headset`), runs the signed handshake, and then one WebRTC session: a control data channel, one input channel and one video track per window slot. The headset opens its own listening socket; the laptop dials out | outbound TCP to the headset (port 47810 unless given); media goes over WebRTC (UDP) between the two |
+| `session.py` | Dials the headset (found over Bonjour, or on the USB cable with `--wired`), runs the signed handshake, and then one WebRTC session: a control data channel, one input channel and one video track per window slot. The headset opens its own listening socket; the laptop dials out | outbound TCP to the headset (port 47810 unless given); media goes over WebRTC (UDP) between the two |
 | `dispatch.py` | Turns the headset's input messages (from the per-window `input-k` data channels) into mouse and keyboard input, and runs the control state machine (view only until you allow it). Only with `--input` does it inject mouse input, and with `--keyboard` also keyboard input, into the window of the channel it arrived on | nothing: it reads the DTLS data channel of the existing session |
 
 `agent.py` starts and stops all of them. They run only while `agent.py` runs: nothing is installed as a service,
@@ -63,26 +63,26 @@ python agent.py --max-width 1280 --max-height 720 --fps 60 --bitrate 8M --encode
 
 ```
 python agent.py --pair                          # pair a new headset: type the code it shows, confirm there, exit
-python agent.py --pair --headset 192.168.1.5    # ...at this address instead of finding it over Bonjour
 python agent.py                                 # normal run: finds a paired headset over Bonjour and dials it
-python agent.py --headset 192.168.1.5[:PORT]    # dial this paired headset directly (repeatable; first to answer wins)
 python agent.py --pairs                         # list paired headsets, then exit
 python agent.py --revoke NAME                   # forget one, then exit
 python agent.py --revoke-always NAME            # keep it, but ask again before it may take control
 ```
 
-**Pairing (once per headset):** on the headset open Laptop > Pair new laptop; it shows a code. Run
-`python agent.py --pair`: it lists headsets that announce they are showing a code (if exactly one, it is used; with
+**Pairing (once per headset):** on the headset open Laptop > Pair new laptop. Run `python agent.py --pair`: it
+prints a QR code, and when the headset looks at it the two pair by themselves (the app's **Show QR code** does the
+same). Or type the code the headset shows: `--pair` lists headsets that announce they are showing a code (if exactly one, it is used; with
 several you pick one; with none it waits and says what to do), asks for the code, and after you confirm on the headset
-both sides pin each other's key. `--headset` skips discovery and then needs exactly one address.
+both sides pin each other's key. There is no way to give a headset's address: the agent finds headsets over Bonjour,
+or on the USB cable with `--wired`.
 
 **Normal run:** the agent dials only headsets it has paired, over the signed handshake, then streams. If the headset is
 not there it keeps retrying. In the headset, tap **Laptop** and pick a window or **Whole desktop**; each pick opens
-its own window, up to `--max-windows`. With USB Personal Hotspot use `--wired` (see Doc/wired.md).
+its own window, up to `--max-windows`. Over the USB cable (any USB-A or USB-C port), with no Wi-Fi, use `--wired` (see Doc/wired.md).
 
 Options: `--list`, `--window TITLE`, `--monitor N`, `--no-picker`, `--max-width` and `--max-height` (default 1920x1080;
 each picture is scaled down to fit, never padded, so pointer positions map 1:1), `--fps`, `--bitrate` (per stream),
-`--encoder auto|nvenc|qsv|amf|x264`, `--max-windows N` (default 4, 1 to 8), `--headset`, `--pair`, `--pairs`, `--revoke`,
+`--encoder auto|nvenc|qsv|amf|x264`, `--max-windows N` (default 4, 1 to 8), `--pair`, `--pairs`, `--revoke`,
 `--wired`, `--input`, `--keyboard` (with `--input`), `--cast-only`, `--dry-run-input` (log mapped mouse and key events
 instead of injecting them), `--verbose`.
 
@@ -252,12 +252,19 @@ If it is damaged or belongs to another user the agent says so and does not repla
 `pairs.json` in the same folder. `python agent.py --pairs` lists them (name, fingerprint, date added) and
 `python agent.py --revoke NAME` forgets one. If a headset's name changed since a half-finished pairing, run `--revoke <old name>` first.
 
-A new headset is paired with a one-time code. The **headset** shows a 12-character code (`XXXX-XXXX-XXXX`, letters and
+A new headset is paired with a one-time code. The **headset** shows an 8-character code (`XXXX-XXXX`, letters and
 digits without U; `I` and `L` are read as `1`, `O` as `0`) and advertises itself as ready to pair; you type it on the
 laptop with `python agent.py --pair` (the exchange itself is in `pair_protocol.py`). The code never crosses the
 network: both sides prove they know it with HMACs under a PBKDF2-stretched key that is bound to both public keys, then
 you confirm on the headset, and then laptop and headset each pin the other's key. A code works once, lasts 120 seconds and
-is dead after 3 wrong tries. There is no QR code.
+is dead after 3 wrong tries.
+
+The other way round is the **QR code**: the laptop makes a 20-character code (100 bits) and shows it, with its own key
+fingerprint, as a QR code (`qr_image.py`, drawn with segno). The headset's camera reads it on the pairing screen, takes
+that code, and advertises under a name derived from it; the laptop dials exactly that headset (or the iPhone on the USB
+cable) and runs the same exchange, marked as a QR exchange. The headset pairs only the laptop whose
+fingerprint was in the QR code, without asking, and the laptop's checks before the scan are answered "not pairing"
+without a strike or a rate-limit cost. The details are at the end of the docstring in `pair_protocol.py`.
 
 On a Mac the same files live in the agent's home folder under `~/Library/Application Support` (or `SPATIAL_LAUNCHER_HOME`),
 and `identity.key` is encrypted with a random 32-byte key kept in your login Keychain (service `SpatialLauncher.agent.identity.v1`), so it can't be used on another Mac or user account. A missing or changed Keychain key is reported, never replaced silently.
@@ -311,21 +318,23 @@ Read these before using `--input` or `--keyboard`.
 | `winapi.py` | The Windows backend's calls: DPI awareness, windows and monitors, raising, focusing and repainting windows, `SendInput` for mouse and keys, the kill-switch hotkey, the Yes/No prompt, the job object that ends child processes |
 | `identity.py` | The agent's RSA identity key (kept DPAPI-encrypted), RSASSA-PKCS1-v1_5 (SHA-256) signatures and public-key fingerprints |
 | `pairing.py` | The one-time pairing code (Crockford base32: generating, formatting, parsing, the headset-side policy), the paired-headset store (`pairs.json`) and pinning |
+| `qr_image.py` | Draws the pairing QR code: SVG for the app window, PNG for the Tk window, text for `--pair` |
 | `handshake.py` | The signed link handshake for already-paired headsets (wire protocol v1, documented at the top of the file): framing, transcripts, the agent and headset roles, and the connection limits |
 | `pair_protocol.py` | First-time pairing with the code the headset shows (wire protocol v2, documented at the top of the file; the spec for the C# side) |
-| `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`; `m=pair` marks a headset showing a code), `ip[:port]` parsing, the USB-hotspot address |
+| `discovery.py` | Finding the headset: Bonjour browsing (`_spatiallauncher._tcp.local.`; `m=pair` marks a headset showing a code) |
 | `session.py` | The link to the headset: dialling, the WebRTC session, window slots, the control channel |
 | `fake_headset.py` | A Python stand-in for the headset (pairing or paired mode) for testing the agent without a phone |
-| `network.py` | The USB-hotspot address and the firewall check for `--wired` (the agent needs no inbound port) |
+| `usbmux.py` | Apple's USB multiplexer: lists iPhones on the cable and opens a connection to the headset app through it (`--wired`, no network needed) |
+| `stream_link.py` | The session over that one connection (control, input and H.264 frames) when there is no network for WebRTC |
 | `test_session_e2e.py` | End-to-end tests: real MediaMTX and ffmpeg against the fake headset (x264 and, if present, NVENC), pairing and discovery: `python -m unittest test_session_e2e` |
 | `setup.py` | Windows: downloads MediaMTX and FFmpeg (pinned, checksummed) and installs the Python packages. macOS: checks Homebrew's tools and installs the packages. Not for Linux yet |
 | `clock.py`, `clock.html` | Test clock for measuring delay; click target |
-| `selftest_wired.py` | Checks wired-mode detection and the firewall logic with made-up adapters and rules: `python selftest_wired.py --no-live` |
 | `test_dispatch.py` | Unit tests for the input dispatcher (no network, no real input): routing per window, the control states, cast-only, rate limits, malformed input, releasing held input: `python -m unittest test_dispatch` |
 | `test_shell.py`, `test_shell_windows.py`, `test_shell_macos.py` | Unit tests for the laptop shell with a fake backend (every request, the control gate, invalid ids, rate limits, reply sizes, session wiring), for the Windows backend (shortcut parser, PNG, Start Menu rules, pin order, Store app ids) and the macOS backend (Dock pins, bundles, window filter); each has a read-only live listing on its own OS: `python -m unittest test_shell test_shell_windows test_shell_macos` |
 | `test_hostos.py`, `test_macos.py`, `test_macos_input.py`, `test_macos_secrets.py`, `test_linux.py`, `test_reaper.py` | Unit tests for the OS layer: every backend exposes the same names, macOS (screens, input, Keychain wrap), Linux (pure parts, key file, rows, dialog commands) and the child watcher: `python -m unittest test_hostos test_macos test_macos_input test_macos_secrets test_linux test_reaper` |
 | `_test_keychain.py` | Not a test: imported first by the test files that create identities, it points the macOS Keychain wrap key at a throwaway entry |
 | `test_identity.py`, `test_pairing.py` | Unit tests for the identity key, fingerprints, pair store and pairing codes: `python -m unittest test_identity test_pairing` |
+| `test_qr_pairing.py` | QR pairing: the QR text, the exchange against the reference headset (no strike, no rate cost, only the named laptop), and finding the headset on the USB cable and over Bonjour |
 | `test_handshake.py`, `test_pair_protocol.py`, `test_discovery.py` | Unit tests for the link handshake and the code-based pairing exchange (both roles over loopback sockets, with known-answer vectors) and discovery (Bonjour on 127.0.0.1; skipped if multicast is unavailable): `python -m unittest test_handshake test_pair_protocol test_discovery` |
 
 ## Licenses

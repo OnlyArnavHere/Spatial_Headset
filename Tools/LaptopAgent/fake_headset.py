@@ -7,7 +7,8 @@ aiortc, then decodes and counts the video it receives. Used by test_session_e2e.
   python fake_headset.py --pairing --advertise --host 192.168.1.5     also announce itself over Bonjour (m=pair)
 
 Its own identity and the laptops it trusts live in --home (use a scratch folder: the real keys are never touched).
-Then run `python agent.py --pair --headset 127.0.0.1:PORT` and, once paired, `python agent.py --headset 127.0.0.1:PORT`.
+The agent only finds headsets over Bonjour or on the USB cable, so start it with --advertise (and --host set to this
+laptop's LAN address); then run `python agent.py --pair` and, once paired, `python agent.py`.
 The control channel accepts commands typed as JSON lines on stdin with --stdin, e.g. {"type":"open","target":"desktop"}.
 """
 import argparse
@@ -160,6 +161,68 @@ class HeadsetSession:
             await self.pc.close()
 
 
+class StreamHeadsetSession(HeadsetSession):
+    """The headset's side of a stream session (stream_link.py: what USB without a network uses): the same messages as
+    HeadsetSession, over the handshake's own connection. Video is decoded with PyAV, so a test sees real frames;
+    frames are recorded with the slot as "slot<k>" in place of a mid."""
+
+    def __init__(self, reader, writer) -> None:
+        super().__init__()
+        self.reader, self.writer = reader, writer
+        self.slot_count = 8
+        self.video_frames: list[tuple[int, int, bool]] = []  # (slot, timestamp, keyframe) as received
+        self._decoders: dict = {}
+        self._readers.append(asyncio.ensure_future(self._read_stream()))
+
+    async def answer(self, offer_sdp: str) -> str:
+        raise RuntimeError("a stream session has no SDP")
+
+    async def _read_stream(self) -> None:
+        import av
+        import stream_link
+        while True:
+            try:
+                kind, slot, payload = await stream_link.read_frame(self.reader, self.slot_count)
+            except (stream_link.StreamClosed, ValueError):
+                return
+            if kind == stream_link.CONTROL:
+                self._on_message(payload.decode("utf-8"))
+                message = self.messages[-1] if self.messages else {}
+                if message.get("type") == "welcome":
+                    self.slot_count = len(message.get("slots") or []) or 1
+            elif kind == stream_link.INPUT:
+                self._on_input_message(slot, payload.decode("utf-8"))
+            elif kind == stream_link.VIDEO:
+                timestamp = int.from_bytes(payload[:4], "big")
+                key = bool(payload[4] & stream_link.FLAG_KEY)
+                self.video_frames.append((slot, timestamp, key))
+                decoder = self._decoders.get(slot)
+                if decoder is None:
+                    decoder = self._decoders[slot] = av.CodecContext.create("h264", "r")
+                try:
+                    for frame in decoder.decode(av.Packet(payload[5:])):
+                        self.frames.append((time.monotonic(), f"slot{slot}", frame.width, frame.height))
+                except av.error.InvalidDataError:
+                    pass
+
+    def send(self, message: dict) -> None:
+        import stream_link
+        self.writer.write(stream_link.frame(stream_link.CONTROL, 0, json.dumps(message).encode("utf-8")))
+
+    def send_input(self, slot: int, message) -> None:
+        import stream_link
+        data = message if isinstance(message, bytes) else (
+            message.encode("utf-8") if isinstance(message, str) else json.dumps(message).encode("utf-8"))
+        self.writer.write(stream_link.frame(stream_link.INPUT, slot, data))
+
+    async def close(self) -> None:
+        for task in self._readers:
+            task.cancel()
+        await asyncio.gather(*self._readers, return_exceptions=True)
+        with contextlib.suppress(Exception):
+            self.writer.close()
+
+
 class PrefixedReader:
     """Gives a StreamReader's already-consumed bytes back, then reads on from it (the handshake only uses readexactly)."""
 
@@ -181,7 +244,7 @@ class FakeHeadset:
     def __init__(self, home: Path, *, name: str = "Fake Headset", agent_spkis=(), pairing_mode: bool = False,
                  confirm: bool = True, host: str = "127.0.0.1", port: int = 0, advertise: bool = False,
                  gate: handshake.HeadsetGate | None = None, pair_iterations: int = pair_protocol.PAIR_ITERATIONS,
-                 echo=print):
+                 echo=print, stream_allowed: bool = False):
         self.home = Path(home)
         self.ident = identity.load_or_create(self.home)
         self.name = name
@@ -204,7 +267,9 @@ class FakeHeadset:
         self._server: asyncio.AbstractServer | None = None
         self._azc = None
         self._info = None
+        self.instance: str | None = None
         self._want_pairing = pairing_mode
+        self.stream_allowed = stream_allowed  # act as if every connection came over the USB tunnel
 
     @property
     def agent_spkis(self) -> list[bytes]:
@@ -225,9 +290,10 @@ class FakeHeadset:
             await self.start_pairing()
         return self.port
 
-    async def _register(self) -> None:
+    async def _register(self, instance: str | None = None) -> None:
         from zeroconf import ServiceInfo
-        instance = discovery.random_instance_name()
+        instance = instance or discovery.random_instance_name()
+        self.instance = instance
         properties = {"v": "1"}
         if self.issuer.active:
             properties["m"] = "pair"
@@ -246,17 +312,28 @@ class FakeHeadset:
             await self._register()
         return code
 
+    async def scan_qr(self, text: str) -> str:
+        """What the real headset does when its camera reads a laptop's QR: arms that code (ValueError if the text is
+        not a pairing QR) and re-advertises as "SL-" + qr_id."""
+        code = self.issuer.arm_qr(text)
+        self._echo(f"SCANNED QR: pairing with laptop {pairing.parse_qr(text)[1]}")
+        if self._azc is not None:
+            with contextlib.suppress(Exception):
+                await self._azc.async_unregister_service(self._info)
+            await self._register(pairing.qr_instance(code))
+        return code
+
     async def stop(self) -> None:
         if self._azc is not None:
             with contextlib.suppress(Exception):
                 await self._azc.async_unregister_service(self._info)
             await self._azc.async_close()
             self._azc = None
+        await self.drop_session()  # first: since Python 3.12 wait_closed() waits for a stream session's open connection
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
-        await self.drop_session()
 
     async def drop_session(self) -> None:
         """Closes the current WebRTC session but keeps listening, as a headset that went away and came back would."""
@@ -317,8 +394,9 @@ class FakeHeadset:
             return await pending.answer(offer_sdp)
 
         try:
-            await handshake.serve_headset_connection(reader, writer, self.gate, self.ident, self.name,
-                                                     self.agent_spkis, make_answer)
+            result = await handshake.serve_headset_connection(reader, writer, self.gate, self.ident, self.name,
+                                                              self.agent_spkis, make_answer,
+                                                              stream_allowed=self.stream_allowed)
         except handshake.HandshakeError as e:
             self.refusals.append(e.reason)
             log.info("Handshake refused: %s", e.reason)
@@ -328,6 +406,9 @@ class FakeHeadset:
             log.exception("Handshake crashed")
             await pending.close()
             return
+        if result.mode == handshake.MODE_STREAM:
+            await pending.close()
+            pending = StreamHeadsetSession(result.reader, result.writer)
         await self.drop_session()
         self.session = pending
         self.handshakes += 1

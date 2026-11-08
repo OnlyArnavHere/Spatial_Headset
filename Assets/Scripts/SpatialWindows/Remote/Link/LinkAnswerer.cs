@@ -18,8 +18,11 @@ namespace SpatialLauncher.SpatialWindows
     /// channels control (id 0) and input-k (id 1+k), the offer applied, every transceiver set to RecvOnly, the answer
     /// created and returned after ICE gathering (2 s cap). Commit keeps the connection as a <see cref="LinkSession"/>
     /// holding a listener lease; Abort throws everything away. Both are idempotent.
+    /// Stream sessions (USB without a network) follow the same rules: <see cref="AcceptStream"/> takes only the expected
+    /// laptop while nothing else is live, and <see cref="CommitStream"/> wraps the handshake's connection in a
+    /// <see cref="StreamLinkTransport"/> and a <see cref="LinkSession"/> with <see cref="MaxSlots"/> slots.
     /// </summary>
-    public sealed class LinkAnswerer : ILinkAnswerer
+    public sealed class LinkAnswerer : ILinkAnswerer, IStreamLinkAnswerer
     {
         const float GatheringTimeout = 2f;
         const int MaxSlots = 8;
@@ -118,6 +121,62 @@ namespace SpatialLauncher.SpatialWindows
                 queue.Enqueue(() => { if (!attempt.Cancelled) run(Build(attempt)); });
                 return await attempt.Tcs.Task.ConfigureAwait(false);
             }
+        }
+
+        public bool AcceptStream(LinkOffer offer)
+        {
+            lock (gate)
+            {
+                bool wanted = expected != null && offer?.LaptopSpki != null && expected.AsSpan().SequenceEqual(offer.LaptopSpki);
+                if (!wanted || panicked || current != null || (live != null && !live.IsEnded)) return false;
+                current = new Attempt { Offer = offer };
+                return true;
+            }
+        }
+
+        public void CommitStream(LinkOffer offer, System.IO.Stream connection, Action close)
+        {
+            queue.Enqueue(() =>
+            {
+                Attempt attempt;
+                lock (gate)
+                {
+                    attempt = current;
+                    bool ours = attempt != null && ReferenceEquals(attempt.Offer, offer);
+                    if (ours) current = null;
+                    if (!ours || panicked)
+                    {
+                        try { connection.Dispose(); } catch (Exception) { }
+                        try { close?.Invoke(); } catch (Exception) { }
+                        return;
+                    }
+                }
+                LinkSession session = null;
+                try
+                {
+                    var transport = new StreamLinkTransport(connection, close, MaxSlots);
+                    session = new LinkSession(transport, action => queue.Enqueue(action), MaxSlots, offer.LaptopName, offer.Address);
+                    var lease = acquireLease();
+                    attempt.Committed = true;
+                    lock (gate) live = session;
+                    session.Begin(lease);
+                    run(Pump(session));
+                    BeginLive(session);
+                    SessionStarted?.Invoke(session);
+                    Debug.Log("[Link] " + offer.LaptopName + " connected over the USB cable");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[Link] couldn't start the USB session: " + e.Message);
+                    lock (gate) { if (ReferenceEquals(live, session)) live = null; }
+                    if (session != null) session.Dispose();
+                    else
+                    {
+                        try { connection.Dispose(); } catch (Exception) { }
+                        try { close?.Invoke(); } catch (Exception) { }
+                    }
+                }
+            });
         }
 
         public void Commit(LinkOffer offer, LinkAnswer answer)

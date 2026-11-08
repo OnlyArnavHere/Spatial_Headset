@@ -1,4 +1,4 @@
-"""Unit tests for headset discovery: address parsing, the wired candidate and Bonjour browsing on loopback.
+"""Unit tests for headset discovery: instance names and Bonjour browsing on loopback.
 
   python -m unittest test_discovery -v        (from Tools/LaptopAgent)
 
@@ -16,7 +16,6 @@ from zeroconf.asyncio import AsyncZeroconf
 
 import discovery
 import handshake
-import network
 
 
 def multicast_unavailable() -> str | None:
@@ -30,41 +29,6 @@ def multicast_unavailable() -> str | None:
     except OSError as e:
         return f"multicast is not available on 127.0.0.1 ({e})"
     return None
-
-
-class ParseTests(unittest.TestCase):
-    def test_accepts(self):
-        for text, expected in {
-            "192.168.1.5": ("192.168.1.5", handshake.LINK_PORT),
-            " 192.168.1.5:5000 ": ("192.168.1.5", 5000),
-            "10.0.0.1:65535": ("10.0.0.1", 65535),
-            "[fe80::1]:5000": ("fe80::1", 5000),
-            "[::1]": ("::1", handshake.LINK_PORT),
-            "::1": ("::1", handshake.LINK_PORT),
-        }.items():
-            self.assertEqual(discovery.parse_headset(text), expected, text)
-
-    def test_rejects(self):
-        for text in ["", "laptop.local", "300.1.1.1", "1.2.3", "1.2.3.4:", "1.2.3.4:0", "1.2.3.4:65536",
-                     "1.2.3.4:-1", "1.2.3.4:abc", "1.2.3.4:5:6", "[::1", "[::1]x", "[::1]:99999", "[1.2.3.4]:5"]:
-            with self.subTest(text=text), self.assertRaises(ValueError):
-                discovery.parse_headset(text)
-
-
-class WiredTests(unittest.TestCase):
-    def test_hotspot_present(self):
-        phone_side = network.Interface("Ethernet 3", "172.20.10.2", "Apple Mobile Device Ethernet", "Public")
-        with mock.patch.object(network, "list_interfaces", return_value=[phone_side]):
-            self.assertEqual(discovery.wired_candidates(), [("172.20.10.1", handshake.LINK_PORT)])
-
-    def test_no_hotspot(self):
-        wifi = network.Interface("Wi-Fi", "192.168.1.20", "Intel Wi-Fi", "Private")
-        with mock.patch.object(network, "list_interfaces", return_value=[wifi]):
-            self.assertEqual(discovery.wired_candidates(), [])
-
-    def test_interface_listing_fails(self):
-        with mock.patch.object(network, "list_interfaces", side_effect=OSError("no powershell")):
-            self.assertEqual(discovery.wired_candidates(), [])
 
 
 class InstanceNameTests(unittest.TestCase):

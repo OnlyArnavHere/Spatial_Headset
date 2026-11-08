@@ -14,14 +14,17 @@ namespace SpatialLauncher.LaptopLink
         public byte[] LaptopSpki { get; }
         /// <summary>The laptop's source IP.</summary>
         public string Address { get; }
+        /// <summary>A stream-transport offer (USB without a network): no SDP, the handshake's connection carries the session.</summary>
+        public bool IsStream { get; }
 
-        public LinkOffer(string sdp, string fpO, string laptopName, byte[] laptopSpki, string address)
+        public LinkOffer(string sdp, string fpO, string laptopName, byte[] laptopSpki, string address, bool isStream = false)
         {
             Sdp = sdp;
             FpO = fpO;
             LaptopName = laptopName;
             LaptopSpki = laptopSpki;
             Address = address;
+            IsStream = isStream;
         }
     }
 
@@ -49,6 +52,18 @@ namespace SpatialLauncher.LaptopLink
         Task<LinkAnswer> AnswerAsync(LinkOffer offer, CancellationToken ct);
         void Commit(LinkOffer offer, LinkAnswer answer);
         void Abort(LinkOffer offer, string reason);
+    }
+
+    /// <summary>
+    /// An answerer that also takes stream-transport sessions (USB without a network; see Tools/LaptopAgent/stream_link.py).
+    /// Called from worker threads. <see cref="AcceptStream"/> runs after the offer's signature verified and decides at once;
+    /// when it returns true exactly one of <see cref="CommitStream"/> (the laptop's M5 verified; the caller now owns the
+    /// connection) or <see cref="ILinkAnswerer.Abort"/> follows.
+    /// </summary>
+    public interface IStreamLinkAnswerer
+    {
+        bool AcceptStream(LinkOffer offer);
+        void CommitStream(LinkOffer offer, System.IO.Stream stream, Action close);
     }
 
     /// <summary>The default: every verified offer is refused with "no answer".</summary>

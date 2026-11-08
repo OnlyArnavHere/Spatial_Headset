@@ -23,18 +23,29 @@ namespace SpatialLauncher.LaptopLink
         void Close();
     }
 
+    /// <summary>A channel whose connection can be taken over after the exchange (the stream transport keeps it open).</summary>
+    public interface IDetachableFrameChannel
+    {
+        /// <summary>
+        /// Hands the open connection over: afterwards <see cref="IFrameChannel.Close"/> leaves it open and the caller owns
+        /// <paramref name="stream"/> and <paramref name="close"/>. False when it is already closed.
+        /// </summary>
+        bool TryDetach(out Stream stream, out Action close);
+    }
+
     /// <summary>
     /// <see cref="IFrameChannel"/> over a stream (a NetworkStream). Frames are at most 64 KiB; <see cref="Version"/> is the
     /// "v" every frame must carry (0 until the first frame has been routed); at most <see cref="MaxFrames"/> frames are
     /// read or written ("too many frames"). A read that is cancelled or times out leaves the stream open so an error
     /// frame can still be sent; <see cref="Close"/> ends it.
     /// </summary>
-    public sealed class NetworkFrameChannel : IFrameChannel
+    public sealed class NetworkFrameChannel : IFrameChannel, IDetachableFrameChannel
     {
         readonly Stream stream;
         readonly Action close;
         int frames;
         bool closed;
+        bool detached;
 
         public int Version { get; set; }
         public int MaxFrames { get; set; }
@@ -128,9 +139,20 @@ namespace SpatialLauncher.LaptopLink
             }
         }
 
+        public bool TryDetach(out Stream detachedStream, out Action detachedClose)
+        {
+            detachedStream = null;
+            detachedClose = null;
+            if (closed || detached) return false;
+            detached = true;
+            detachedStream = stream;
+            detachedClose = close;
+            return true;
+        }
+
         public void Close()
         {
-            if (closed) return;
+            if (closed || detached) return;
             closed = true;
             try { stream.Dispose(); } catch (Exception) { }
             try { close?.Invoke(); } catch (Exception) { }
@@ -200,7 +222,7 @@ namespace SpatialLauncher.LaptopLink
     }
 
     /// <summary>Hands out an already read first frame once, then reads from the wrapped channel.</summary>
-    public sealed class ReplayChannel : IFrameChannel
+    public sealed class ReplayChannel : IFrameChannel, IDetachableFrameChannel
     {
         readonly IFrameChannel inner;
         Dictionary<string, object> first;
@@ -222,6 +244,14 @@ namespace SpatialLauncher.LaptopLink
         public Task WriteFrameAsync(Dictionary<string, object> frame, CancellationToken ct = default(CancellationToken)) { return inner.WriteFrameAsync(frame, ct); }
         public Task SendErrorAsync(string reason) { return inner.SendErrorAsync(reason); }
         public void Close() { inner.Close(); }
+
+        public bool TryDetach(out Stream stream, out Action close)
+        {
+            if (first == null && inner is IDetachableFrameChannel d) return d.TryDetach(out stream, out close);
+            stream = null;
+            close = null;
+            return false;
+        }
     }
 
     /// <summary>Building and checking the fields of link messages (the helpers of handshake.py).</summary>

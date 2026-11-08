@@ -7,125 +7,99 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<main class="board" id="board">
+<!-- A desktop widget, not an app window: glass tiles straight on the desktop, like Control Center. Each .t is one
+     tile; the page reports their shapes so the glass is cut to them where the OS allows (gui/glass.py). -->
+<main class="widget pywebview-drag-region" id="widget">
 
-  <!-- Status: the one big widget. data-state drives the lenses: off, waiting, live, error -->
-  <section class="w w-status" id="w-status" data-state="off" aria-live="polite">
-    <svg class="lenses" viewBox="0 0 132 64" aria-hidden="true">
-      <path class="bridge" d="M58 30c3-4 13-4 16 0"/>
-      <circle class="lens" cx="33" cy="32" r="25"/>
-      <circle class="lens" cx="99" cy="32" r="25"/>
-      <circle class="glint" cx="25" cy="23" r="4"/>
-      <circle class="glint" cx="91" cy="23" r="4"/>
-    </svg>
-    <div class="status-copy">
-      <h1 id="st-title">Off</h1>
-      <p id="st-sub">Turn on so your headset can connect.</p>
-    </div>
-    <div class="progress" id="dl" hidden><div id="dl-bar"></div></div>
-    <div class="status-foot">
-      <span class="chip" id="st-link">Wi-Fi</span>
-      <button class="btn ink" id="power" type="button">Turn on</button>
-    </div>
+  <!-- Status. data-state: off, waiting, live, error. The whole widget drags from anywhere but its controls. -->
+  <section class="t pill status pywebview-drag-region" id="w-status" data-state="off" aria-live="polite">
+    <span class="ring-wrap pywebview-drag-region">
+      <svg class="ring" viewBox="0 0 48 48" aria-hidden="true"><circle class="ring-track" cx="24" cy="24" r="21"/><circle class="ring-fill" cx="24" cy="24" r="21"/></svg>
+      <span class="ring-icon" data-icon="headset"></span>
+    </span>
+    <span class="status-copy pywebview-drag-region">
+      <b id="st-title">Off</b>
+      <small id="st-sub">Turn on so your headset can connect</small>
+    </span>
+    <button class="power" id="power" type="button" title="Turn on" aria-label="Turn on"><span data-icon="power"></span></button>
+    <span class="progress" id="dl" hidden><span id="dl-bar"></span></span>
   </section>
 
-  <!-- What the headset may do -->
-  <section class="w w-wide">
-    <h2 class="w-title">What the headset can do</h2>
-    <div class="seg" role="radiogroup" aria-label="What the headset can do">
-      <button type="button" role="radio" data-mode="view">Watch</button>
-      <button type="button" role="radio" data-mode="control">Control</button>
-      <button type="button" role="radio" data-mode="cast">Cast</button>
-    </div>
-    <p class="w-note" id="mode-note"></p>
-  </section>
+  <!-- What the headset may do, and the cable: round buttons -->
+  <div class="rounds">
+    <button class="t round" type="button" data-mode="view" title="Watch: the headset only sees the windows you share"><span data-icon="eye"></span><em>Watch</em></button>
+    <button class="t round" type="button" data-mode="control" title="Control: the headset can ask to use the mouse and keyboard (you approve each time)"><span data-icon="pointer"></span><em>Control</em></button>
+    <button class="t round" type="button" data-mode="cast" title="Cast: watch, plus play, pause, seek and volume"><span data-icon="cast"></span><em>Cast</em></button>
+    <label class="t round tg" id="wired-w" title="USB cable: connect over the iPhone's cable, no Wi-Fi needed">
+      <input type="checkbox" class="sw-hidden" data-setting="wired" aria-label="Connect over the USB cable">
+      <span data-icon="usb"></span><em id="wired-value">Cable</em>
+    </label>
+  </div>
 
-  <!-- Two small toggles -->
-  <label class="w w-small toggle-w">
-    <span class="w-icon" data-icon="usb"></span>
-    <span class="w-name">USB cable</span>
-    <span class="w-value" id="wired-value">Off</span>
-    <input type="checkbox" class="sw" data-setting="wired" aria-label="Connect over the USB cable">
-  </label>
-  <label class="w w-small toggle-w" id="login-w">
-    <span class="w-icon" data-icon="power"></span>
-    <span class="w-name">Open at login</span>
-    <span class="w-value" id="login-value">Off</span>
-    <input type="checkbox" class="sw" data-setting="start_at_login" aria-label="Open when I log in">
-  </label>
+  <!-- Pair, and the headsets -->
+  <button class="t pill small-pill" id="qr-open" type="button" title="Pair a headset: show a QR code to look at">
+    <span class="pill-icon" data-icon="qr"></span><span class="pill-copy"><b>Pair</b><small>QR code</small></span>
+  </button>
+  <button class="t pill small-pill" id="heads-open" type="button" title="Paired headsets">
+    <span class="pill-icon" data-icon="headset"></span><span class="pill-copy"><b id="heads-title">Headsets</b><small id="heads-sub">None yet</small></span>
+  </button>
 
-  <!-- Pairing -->
-  <section class="w w-wide w-pair" id="w-pair">
-    <div class="pair-idle" id="pair-idle">
-      <h2 class="w-head">Pair a headset</h2>
-      <p class="w-note">On the headset, open Laptop &rsaquo; Pair new laptop.</p>
-      <div class="row">
-        <button class="btn ink" id="qr-open" type="button"><span data-icon="qr"></span>Show QR code</button>
-        <button class="btn plain" id="type-open" type="button">Type a code</button>
-      </div>
-    </div>
-    <div class="pair-live" id="pair-live" hidden>
-      <div class="qr" id="qr" role="img" aria-label="Pairing QR code" hidden></div>
-      <p class="pair-prompt"><span class="spinner" id="pair-spin"></span><span id="pair-prompt"></span></p>
-      <form class="code-form" id="code-form" autocomplete="off" hidden>
-        <input id="code" placeholder="XXXX-XXXX" maxlength="40" spellcheck="false" aria-label="Code shown on the headset">
-        <button class="btn ink" type="submit">Pair</button>
-      </form>
-      <p class="pair-status" id="pair-status"></p>
-      <div class="row">
-        <button class="btn plain" id="pair-switch" type="button">Type a code instead</button>
-        <button class="btn plain" id="pair-cancel" type="button">Cancel</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- Paired headsets -->
-  <section class="w w-wide">
-    <h2 class="w-title">Paired headsets</h2>
-    <ul class="heads" id="heads"></ul>
-    <p class="w-error" id="pairs-error" hidden></p>
-  </section>
-
-  <button class="more" id="more-open" type="button"><span data-icon="sliders"></span>More settings</button>
+  <!-- Settings, minimize, close -->
+  <div class="foot">
+    <button class="t chipbtn" id="more-open" type="button">Settings</button>
+    <button class="t mini" id="win-min" type="button" title="Minimize" aria-label="Minimize"><span data-icon="minus"></span></button>
+    <button class="t mini" id="win-close" type="button" title="Quit (paired headsets are kept)" aria-label="Quit"><span data-icon="x"></span></button>
+  </div>
 </main>
 
-<!-- More settings: a sheet that slides up -->
-<div class="scrim" id="sheet" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
-    <div class="grabber"></div>
-    <div class="sheet-head">
-      <h2 id="sheet-title">More settings</h2>
-      <button class="btn plain" id="sheet-close" type="button">Done</button>
-    </div>
+<!-- Pairing: one glass card over the widget -->
+<section class="t card" id="pair-live" hidden>
+  <div class="qr" id="qr" role="img" aria-label="Pairing QR code" hidden></div>
+  <p class="pair-prompt"><span class="spinner" id="pair-spin"></span><span id="pair-prompt"></span></p>
+  <form class="code-form" id="code-form" autocomplete="off" hidden>
+    <input id="code" placeholder="XXXX-XXXX" maxlength="40" spellcheck="false" aria-label="Code shown on the headset">
+    <button class="btn ink" type="submit">Pair</button>
+  </form>
+  <p class="pair-status" id="pair-status"></p>
+  <div class="row">
+    <button class="btn plain" id="pair-switch" type="button">Type a code instead</button>
+    <button class="btn plain" id="pair-cancel" type="button">Cancel</button>
+  </div>
+</section>
 
-    <div class="group">
-      <form class="field" id="addr-form" autocomplete="off">
-        <label for="address">Headset address</label>
-        <small>Leave empty to find headsets by themselves.</small>
-        <div class="inline">
-          <input id="address" placeholder="192.168.1.5" spellcheck="false">
-          <button class="btn ink" type="submit">Save</button>
-        </div>
-      </form>
-      <pre class="note" id="wired-text" hidden></pre>
-    </div>
+<!-- Settings and the paired headsets: one glass card over the widget -->
+<section class="t card sheet" id="sheet" hidden role="dialog" aria-labelledby="sheet-title">
+  <div class="sheet-head pywebview-drag-region">
+    <b id="sheet-title">Settings</b>
+    <button class="btn plain" id="sheet-close" type="button">Done</button>
+  </div>
+  <div class="sheet-body">
+    <h3>Headsets</h3>
+    <ul class="heads" id="heads"></ul>
+    <p class="w-error" id="pairs-error" hidden></p>
+    <button class="btn plain wide" id="type-open" type="button">Pair by typing a code</button>
 
-    <div class="group" id="perm-group" hidden>
+    <label class="line tg" id="login-w">
+      <span>Open at login<small id="login-value">Off</small></span>
+      <input type="checkbox" class="sw" data-setting="start_at_login" aria-label="Open when I log in">
+    </label>
+    <p class="note-line" id="mode-note"></p>
+    <pre class="note" id="wired-text" hidden></pre>
+    <span id="wired-group" hidden></span>
+
+    <div id="perm-group" hidden>
       <h3>macOS permissions</h3>
       <div id="perms"></div>
       <button class="btn plain" id="relaunch" type="button">Quit and reopen</button>
     </div>
 
-    <div class="group">
-      <div class="kv"><span>Emergency stop</span><b id="kill">Ctrl+Alt+Shift+Q</b></div>
-      <div class="kv"><span>Laptop</span><b id="laptop"></b></div>
-      <div class="kv"><span>Version</span><b id="version"></b></div>
-      <button class="row-btn" id="open-logs" type="button">Open log folder</button>
-    </div>
-
+    <div class="kv"><span>Emergency stop</span><b id="kill">Ctrl+Alt+Shift+Q</b></div>
+    <div class="kv"><span>Laptop</span><b id="laptop"></b></div>
+    <div class="kv"><span>Version</span><b id="version"></b></div>
+    <button class="row-btn" id="open-logs" type="button">Open log folder</button>
     <button class="row-btn danger" id="quit" type="button">Quit Spatial Launcher Agent</button>
   </div>
-</div>
+</section>
 
 <div class="toast" id="toast" role="status" hidden></div>
 <script src="app.js"></script>

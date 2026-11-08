@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -12,6 +13,8 @@ namespace SpatialLauncher.LaptopLink
     /// derivation and the strike-or-consume step run as one task on the thread pool that the exchange's token does not
     /// cancel, so a closed socket or a timeout during the derivation still counts the proof. The laptop's key is pinned
     /// only after P6 verified. Until P3's mac verifies the exchange has 5 s; after that 75 s from the start.
+    /// QR pairing (pair_protocol.py, "QR pairing"): P1's "qr" must match a code armed from that laptop's QR, P2 says
+    /// "qr": true, and P5 is yes without asking.
     /// </summary>
     public static class PairProtocolHeadset
     {
@@ -43,20 +46,33 @@ namespace SpatialLauncher.LaptopLink
             byte[] spkiA = LinkMessages.PublicKey(p1);
             string nameA = NameRules.Validate(LinkJson.GetString(p1, "name"));
             if (NameRules.Strip(nameA).Length == 0) throw new LinkException("bad name"); // before "not pairing": no strike
-            if (authority.Active == null) throw new LinkException("not pairing");
+            IssuedPairCode atHello = authority.Active;
+            if (atHello == null) throw new LinkException("not pairing");
+            // QR pairing: only the laptop whose QR was scanned, asking with that QR's id; everyone else (and a typed code
+            // while a QR is armed) is "not pairing", which costs no strike.
+            bool askedQr = p1.ContainsKey("qr");
+            if (askedQr || atHello.FromQr)
+            {
+                string qr = LinkJson.GetString(p1, "qr");
+                if (qr == null || !atHello.FromQr || !Transcripts.MacEquals(Encoding.ASCII.GetBytes(qr), Encoding.ASCII.GetBytes(atHello.QrId))
+                    || Spki.Fingerprint(spkiA) != atHello.QrFingerprint)
+                    throw new LinkException("not pairing");
+            }
             if (!store.CheckCanAdd(NameRules.Strip(nameA), spkiA)) throw new LinkException("name taken"); // no strike, code untouched
 
             var nh = new byte[LinkMessages.NonceLength];
             using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(nh);
-            await ch.WriteFrameAsync(LinkMessages.Frame(Version, "pair-hello", "nonce", LinkMessages.B64(nh),
-                "spki", LinkMessages.B64(spkiH), "name", nameH), tok).ConfigureAwait(false);
+            var hello = atHello.FromQr
+                ? LinkMessages.Frame(Version, "pair-hello", "nonce", LinkMessages.B64(nh), "spki", LinkMessages.B64(spkiH), "name", nameH, "qr", true)
+                : LinkMessages.Frame(Version, "pair-hello", "nonce", LinkMessages.B64(nh), "spki", LinkMessages.B64(spkiH), "name", nameH);
+            await ch.WriteFrameAsync(hello, tok).ConfigureAwait(false);
             byte[] tp = Transcripts.Pair(na, nh, spkiA, spkiH, nameA, nameH);
 
             var p3 = LinkMessages.Require(await ch.ReadFrameAsync(Timeout.InfiniteTimeSpan, tok).ConfigureAwait(false), "pair-proof");
             byte[] sig = LinkMessages.Bytes(p3, "sig", exact: RsaPkcs1.SignatureLength);
             byte[] mac = LinkMessages.Bytes(p3, "mac", exact: 32);
             IssuedPairCode issued = authority.Active;
-            if (issued == null) throw new LinkException("not pairing");
+            if (issued == null || issued.Id != atHello.Id) throw new LinkException("not pairing"); // replaced meanwhile
             if (!RsaPkcs1.Verify(spkiA, sig, Transcripts.PairAgentSigMessage(tp)))
                 throw new LinkException("bad signature", auth: true); // cheap, and before PBKDF2: no strike
 
@@ -90,7 +106,8 @@ namespace SpatialLauncher.LaptopLink
                 "sig", LinkMessages.B64(identity.Sign(Transcripts.PairHeadsetSigMessage(tp))),
                 "mac", LinkMessages.B64(Transcripts.HeadsetMac(applied.Item2, tp))), tok).ConfigureAwait(false);
 
-            bool ok = await AskAsync(confirmer, nameA, spkiA, tok).ConfigureAwait(false);
+            // A scanned QR is the consent, and it named this laptop's key: no question.
+            bool ok = issued.FromQr || await AskAsync(confirmer, nameA, spkiA, tok).ConfigureAwait(false);
             await ch.WriteFrameAsync(LinkMessages.Frame(Version, "pair-confirm", "ok", ok,
                 "sig", LinkMessages.B64(identity.Sign(Transcripts.PairConfirmMessage(ok, tp)))), tok).ConfigureAwait(false);
             if (!ok) throw new LinkException("declined", remote: true); // the laptop has been told already

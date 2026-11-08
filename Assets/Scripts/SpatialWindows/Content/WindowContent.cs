@@ -40,10 +40,13 @@ namespace SpatialLauncher.SpatialWindows
             window.SizeChanged += OnWindowResized;
         }
 
+        /// <summary>The inset between the window's edge and the content: <see cref="Padding"/>, or 0 for edge-to-edge content.</summary>
+        protected virtual float ContentPadding => Padding;
+
         /// <summary>The content area in metres: the window body minus padding. Centred on this transform.</summary>
         protected Vector2 ContentSize => new Vector2(
-            Mathf.Max(0.01f, Window.Size.x - Padding * 2f),
-            Mathf.Max(0.01f, Window.Size.y - Padding * 2f));
+            Mathf.Max(0.01f, Window.Size.x - ContentPadding * 2f),
+            Mathf.Max(0.01f, Window.Size.y - ContentPadding * 2f));
 
         /// <summary>Positions and scales the visuals to fill a content area of the given size.</summary>
         protected abstract void Layout(Vector2 size);
@@ -157,9 +160,9 @@ namespace SpatialLauncher.SpatialWindows
         /// A quad that displays the source. Interactive sources (with <see cref="IContentSource.Input"/>) get a
         /// collider so the surface receives pointer input; display-only ones don't, so clicks reach the window body.
         /// </summary>
-        protected ContentSurface CreateSurface(string surfaceName, Transform parent, IContentSource source)
+        protected ContentSurface CreateSurface(string surfaceName, Transform parent, IContentSource source, float? radiusPt = null)
         {
-            var material = CreateRounded(Color.black, InsetRadiusPt);
+            var material = CreateRounded(Color.black, radiusPt ?? InsetRadiusPt);
             if (material.HasProperty("_UseTex")) material.SetFloat("_UseTex", 1f);
             ContentSurface surface;
             if (source.Input != null)

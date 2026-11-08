@@ -66,6 +66,9 @@ namespace SpatialLauncher.SpatialWindows
                 try { File.Copy(file, file + ".bad", true); } catch (Exception) { /* best effort */ }
             }
             loaded ??= new SpatialSettings();
+            // Version 1's default IPD was 64 mm; still on it means it was never set: take the new default.
+            if (loaded.version < 2 && loaded.display != null && Mathf.Approximately(loaded.display.ipdMm, 64f))
+                loaded.display.ipdMm = DisplaySettings.DefaultIpdMm;
             Sanitize(loaded);
             return loaded;
         }

@@ -90,6 +90,11 @@ namespace SpatialLauncher.SpatialWindows
         public event Action<string> Ended;
         /// <summary>A laptop-shell reply (apps.*, window.done, search.results, shell.error), for LaptopShellClient.</summary>
         public event Action<Dictionary<string, object>> ShellReceived;
+        /// <summary>
+        /// The laptop's keyboard focus moved into (true) or out of (false) a text field, while this headset can type;
+        /// the slot is the window it clicked in last (-1 if none). The keyboard pops up or goes away.
+        /// </summary>
+        public event Action<bool, int> TextFocusChanged;
 
         public ControlChannelClient(Action<string> send, Func<double> unixMs = null)
         {
@@ -227,6 +232,10 @@ namespace SpatialLauncher.SpatialWindows
                     break;
                 }
                 case "pong": OnPong(m); break;
+                case "text-focus":
+                    if (State == LinkSessionState.Control && KeyboardAllowed)
+                        TextFocusChanged?.Invoke(Bool(m, "editable"), Int(m, "slot"));
+                    break;
                 case "apps.running":
                 case "apps.pinned":
                 case "apps.installed":

@@ -154,7 +154,8 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         sealed class PairAgent
         {
             public ILinkIdentity Id, Stranger;
-            public string Name = "Laptop", Code;
+            public string Name = "Laptop", Code, Qr;
+            public bool SawQr;
             public bool BadSig, StopAfterProof;
             public Action AfterProof;
             public bool HeadsetVerified, ConfirmOk, ConfirmSigOk, PinnedHeadset;
@@ -178,8 +179,11 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         static async Task RunPairAgent(NetworkFrameChannel ch, PairAgent o)
         {
             byte[] na = Random32();
-            await ch.WriteFrameAsync(LinkMessages.Frame(2, "pair", "nonce", B64(na), "spki", B64(o.Id.Spki), "name", o.Name));
+            await ch.WriteFrameAsync(o.Qr == null
+                ? LinkMessages.Frame(2, "pair", "nonce", B64(na), "spki", B64(o.Id.Spki), "name", o.Name)
+                : LinkMessages.Frame(2, "pair", "nonce", B64(na), "spki", B64(o.Id.Spki), "name", o.Name, "qr", o.Qr));
             var p2 = LinkMessages.Require(await Read(ch), "pair-hello");
+            o.SawQr = p2.TryGetValue("qr", out var qr) && qr is bool sawQr && sawQr;
             byte[] nh = LinkMessages.Bytes(p2, "nonce", exact: 32);
             byte[] spkiH = LinkMessages.PublicKey(p2);
             string nameH = LinkJson.GetString(p2, "name");
@@ -236,6 +240,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 agent = new EditorFileIdentity(Path.Combine(root, "agent"));
                 stranger = new EditorFileIdentity(Path.Combine(root, "stranger"));
                 Pairing(root, headset, agent, stranger);
+                QrPairing(root, headset, agent, stranger);
                 Handshake(root, headset, agent, stranger);
                 Limits(root, headset);
             }
@@ -268,6 +273,45 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         }
 
         static PairAgent NewPair(ILinkIdentity agent, ILinkIdentity stranger, string code) => new PairAgent { Id = agent, Stranger = stranger, Code = code };
+
+        static void QrPairing(string root, ILinkIdentity headset, ILinkIdentity agent, ILinkIdentity stranger)
+        {
+            const string qrCode = "0123456789ABCDEFGHJK";
+            string qrId = PairCode.QrId(qrCode);
+            Func<ILinkIdentity, PairAgent> asker = id => new PairAgent { Id = id, Stranger = stranger, Code = qrCode, Qr = qrId };
+
+            // One attempt a minute: the laptop's "was my QR scanned?" checks must not use it up.
+            var rig = new Rig(root, headset, new HeadsetGate(() => 0, 1, 60));
+            rig.Confirmer.Answer = false; // anything that asked would be declined
+            var shown = rig.Auth.Issue();
+            var answers = new List<string>();
+            for (int i = 0; i < 3; i++)
+            {
+                var probe = asker(agent);
+                answers.Add(rig.Run(Addr, 2, (ch, _) => RunPairAgent(ch, probe)).Result?.Reason ?? "dropped");
+            }
+            Check(answers.All(r => r == "not pairing") && rig.Auth.Strikes == 0 && rig.Auth.Active == shown,
+                $"before the scan a QR check is \"not pairing\", with no strike and no cost to the rate limit ({string.Join(", ", answers)})");
+
+            rig.Auth.ArmQr(qrCode, Spki.Fingerprint(agent.Spki));
+            var thief = asker(stranger); // saw the screen, so knows the code, but not the laptop's key
+            var c = rig.Run(Addr, 2, (ch, _) => RunPairAgent(ch, thief));
+            Check(c.Result != null && c.Result.Reason == "not pairing" && rig.Auth.Strikes == 0 && rig.Auth.Active != null,
+                $"another laptop can't use a scanned QR ({c.Result})");
+
+            var o = asker(agent);
+            c = rig.Run(Addr, 2, (ch, _) => RunPairAgent(ch, o));
+            Check(c.Result != null && c.Result.Ok && o.SawQr && o.ConfirmOk && o.PinnedHeadset && rig.Confirmer.Names.Count == 0 &&
+                  rig.Store.FindByKey(agent.Spki) != null && rig.Auth.Active == null,
+                $"the laptop whose QR was scanned pairs at once, without a question on the headset ({c.Result}; agent: {c.AgentError?.Message})");
+
+            rig = new Rig(root, headset);
+            rig.Auth.ArmQr(qrCode, Spki.Fingerprint(agent.Spki));
+            var typed = NewPair(agent, stranger, qrCode);
+            c = rig.Run(Addr, 2, (ch, _) => RunPairAgent(ch, typed));
+            Check(c.Result != null && c.Result.Reason == "not pairing" && rig.Auth.Strikes == 0 && !typed.SawQr,
+                "while a QR is armed, an exchange without the QR's id is \"not pairing\"");
+        }
 
         static void Pairing(string root, ILinkIdentity headset, ILinkIdentity agent, ILinkIdentity stranger)
         {

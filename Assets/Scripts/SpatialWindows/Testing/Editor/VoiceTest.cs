@@ -95,7 +95,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             // Hold Talk: listening, in the Settings language, with what is heard on the status line.
             Vector2 screen = cam.WorldToScreenPoint(talk.transform.position);
             mouse.PressAt(screen);
-            yield return 0.3f;
+            yield return VirtualKeyboardContent.TalkTapSeconds + 0.1f;
             var settings = SettingsStore.Current.voice;
             Check(voice.IsListening && talk.IsHeld && keyboard.StatusText.Contains(stub.Phrase),
                 $"holding Talk listens and shows what it hears (\"{keyboard.StatusText}\")");
@@ -125,8 +125,14 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             yield return Tap(voice.EditorKey);
             manager.Focus(launcher.KeyboardInput.KeyboardWindow); // the field stays focused for typing
             yield return Settle;
+            // Tap Talk to start, tap again to stop.
             mouse.PressAt(screen = cam.WorldToScreenPoint(talk.transform.position));
+            yield return 0.1f;
+            mouse.ReleaseAt(screen);
             yield return 0.2f;
+            Check(voice.IsListening, "a tap on the mic key starts listening and it keeps listening after the tap");
+            mouse.PressAt(screen = cam.WorldToScreenPoint(talk.transform.position));
+            yield return 0.1f;
             mouse.ReleaseAt(screen);
             yield return 0.3f;
             Check(field.Text == stub.Phrase + stub.Phrase && sink.Texts.Count == 0 && delivered.Last().where == "text field",

@@ -80,9 +80,12 @@ namespace SpatialLauncher.LaptopLink
                 return null;
             }
             LinkResult result;
+            var probe = new QrProbe();
             try
             {
-                result = await RouteAsync(new NetworkFrameChannel(stream, close, 0, 8), address, since, ct).ConfigureAwait(false);
+                result = await RouteAsync(new NetworkFrameChannel(stream, close, 0, 8), address, since, ct, probe).ConfigureAwait(false);
+                // A laptop showing a QR asks every few seconds whether it was scanned: those answers cost no rate.
+                if (probe.Asked && result != null && !result.Ok && result.Reason == "not pairing") gate.Refund(address);
             }
             finally
             {
@@ -92,7 +95,9 @@ namespace SpatialLauncher.LaptopLink
             return result;
         }
 
-        async Task<LinkResult> RouteAsync(NetworkFrameChannel channel, string address, Stopwatch since, CancellationToken ct)
+        sealed class QrProbe { public bool Asked; }
+
+        async Task<LinkResult> RouteAsync(NetworkFrameChannel channel, string address, Stopwatch since, CancellationToken ct, QrProbe probe)
         {
             Dictionary<string, object> first = null;
             LinkException error = null;
@@ -117,7 +122,7 @@ namespace SpatialLauncher.LaptopLink
             if (first != null)
             {
                 string type = LinkJson.GetString(first, "type");
-                if (type == "pair") { version = 2; kind = LinkKind.Pairing; }
+                if (type == "pair") { version = 2; kind = LinkKind.Pairing; probe.Asked = first.ContainsKey("qr"); }
                 else if (type == "hello") { version = 1; kind = LinkKind.Handshake; }
                 else error = type == "error" ? new LinkException("peer refused", remote: true) : new LinkException("unexpected message");
                 if (error == null)

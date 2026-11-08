@@ -19,12 +19,20 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\SpatialLauncherAgent.exe
+UninstallDisplayName=Spatial Launcher Agent
+SetupIconFile=icon.ico
+WizardStyle=modern
+CloseApplications=yes
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
 Source: "..\dist\SpatialLauncherAgent\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
 Name: "{userprograms}\Spatial Launcher Agent"; Filename: "{app}\SpatialLauncherAgent.exe"
+Name: "{userdesktop}\Spatial Launcher Agent"; Filename: "{app}\SpatialLauncherAgent.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\SpatialLauncherAgent.exe"; Description: "Start Spatial Launcher Agent"; Flags: nowait postinstall skipifsilent

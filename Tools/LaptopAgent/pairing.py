@@ -8,6 +8,7 @@ A pair can be marked "always allow": the laptop then grants that headset's contr
 set_always_allow(..., False), or by revoking the pair.
 """
 import base64
+import hashlib
 import hmac
 import json
 import re
@@ -21,7 +22,10 @@ import identity
 
 PAIRS_FILE = "pairs.json"
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32: no I, L, O, U
-CODE_LEN = 12  # 60 bits
+CODE_LEN = 8  # 40 bits: safe because a code lives 120 s and allows 3 wrong tries (see pair_protocol.py)
+LEGACY_CODE_LEN = 12  # what headsets before 0.2 show; still accepted when typed
+QR_CODE_LEN = 20  # 100 bits: the code inside the laptop's QR, never typed (pair_protocol.py, "QR pairing")
+QR_PREFIX = "SLPAIR"
 CODE_TTL = 120.0
 MAX_WRONG_ATTEMPTS = 3
 _CONFUSABLE = str.maketrans("ILO", "110")
@@ -29,23 +33,68 @@ _CONFUSABLE = str.maketrans("ILO", "110")
 
 # --- One-time pairing code -------------------------------------------------------------------
 
-def new_code() -> str:
-    """A fresh canonical code: CODE_LEN characters from the Crockford base32 alphabet (60 bits), from a CSPRNG."""
-    return "".join(secrets.choice(ALPHABET) for _ in range(CODE_LEN))
+def new_code(length: int = CODE_LEN) -> str:
+    """A fresh canonical code: `length` characters from the Crockford base32 alphabet (5 bits each), from a CSPRNG."""
+    return "".join(secrets.choice(ALPHABET) for _ in range(length))
 
 
 def format_code(code: str) -> str:
-    """'ABCDEFGHJKMN' -> 'ABCD-EFGH-JKMN'."""
-    return "-".join(code[i:i + 4] for i in range(0, CODE_LEN, 4))
+    """'ABCDEFGH' -> 'ABCD-EFGH' (a legacy 12-character code gets three groups)."""
+    return "-".join(code[i:i + 4] for i in range(0, len(code), 4))
 
 
 def parse_code(text: str) -> str:
-    """What the user typed into the canonical 12 characters: spaces and dashes are dropped, case is ignored, I and L
+    """What the user typed into the canonical code (8 characters, or 12 from an older headset): spaces and dashes are dropped, case is ignored, I and L
     read as 1, O reads as 0. U (and anything else outside the alphabet) is refused. Raises ValueError."""
     chars = re.sub(r"[\s\-]", "", str(text)).upper().translate(_CONFUSABLE)
-    if len(chars) != CODE_LEN or any(c not in ALPHABET for c in chars):
-        raise ValueError(f"A pairing code is {CODE_LEN} characters: digits and letters, without U.")
+    if len(chars) not in (CODE_LEN, LEGACY_CODE_LEN, QR_CODE_LEN) or any(c not in ALPHABET for c in chars):
+        raise ValueError(f"A pairing code is {CODE_LEN} characters (XXXX-XXXX): digits and letters, without U.")
     return chars
+
+
+# --- QR pairing: the laptop shows the code, the headset scans it --------------------------------
+
+def qr_id(code: str) -> str:
+    """16 lowercase hex characters naming a QR code without revealing it: the first 8 bytes of
+    SHA-256("sl-qr-id:" || code). The armed headset advertises as "SL-" + qr_id, and P1 carries it as "qr"."""
+    return hashlib.sha256(b"sl-qr-id:" + code.encode("ascii")).hexdigest()[:16]
+
+
+def qr_instance(code: str) -> str:
+    """The Bonjour instance name of a headset armed with this QR code."""
+    return "SL-" + qr_id(code)
+
+
+@dataclass(frozen=True)
+class QrInvite:
+    """What the laptop shows: payload is the QR's text, "SLPAIR:<code>:<laptop fingerprint>" (QR alphanumeric
+    mode, so the symbol stays small)."""
+    code: str
+    fingerprint: str
+    payload: str
+
+    @property
+    def qr_id(self) -> str:
+        return qr_id(self.code)
+
+
+def new_qr_invite(spki_der: bytes) -> QrInvite:
+    code = new_code(QR_CODE_LEN)
+    fp = identity.fingerprint(spki_der)
+    return QrInvite(code, fp, f"{QR_PREFIX}:{code}:{fp}")
+
+
+def parse_qr(text: str) -> tuple[str, str]:
+    """(code, fingerprint) from a scanned QR's text. Raises ValueError. The C# headset mirrors this (PairCode.ParseQr)."""
+    parts = str(text).strip().split(":")
+    if len(parts) != 3 or parts[0] != QR_PREFIX:
+        raise ValueError("not a Spatial Launcher pairing QR code")
+    code, fp = parts[1], parts[2]
+    if len(code) != QR_CODE_LEN or any(c not in ALPHABET for c in code):
+        raise ValueError("bad code in the QR code")
+    if not re.fullmatch(r"[A-Z2-7]{16}", fp):
+        raise ValueError("bad fingerprint in the QR code")
+    return code, fp
 
 
 class CodeIssuer:
@@ -61,12 +110,34 @@ class CodeIssuer:
         self._code: str | None = None
         self._expires = 0.0
         self._wrong = 0
+        self._qr_fp: str | None = None
 
     def issue(self) -> str:
         self._code = new_code()
         self._expires = self._clock() + self._ttl
         self._wrong = 0
+        self._qr_fp = None
         return self._code
+
+    def arm_qr(self, qr_text: str) -> str:
+        """Replaces any code with the one in a scanned QR. Only the laptop whose key has the QR's fingerprint, asking
+        with its qr_id, can use it. Returns the code. Raises ValueError for a QR that isn't ours."""
+        code, fp = parse_qr(qr_text)
+        self._code = code
+        self._expires = self._clock() + self._ttl
+        self._wrong = 0
+        self._qr_fp = fp
+        return code
+
+    @property
+    def qr_fingerprint(self) -> str | None:
+        """The laptop fingerprint from the scanned QR, or None for a shown code (or none at all)."""
+        return self._qr_fp if self.active else None
+
+    @property
+    def qr_id(self) -> str | None:
+        code = self.code
+        return qr_id(code) if code is not None and self._qr_fp is not None else None
 
     @property
     def active(self) -> bool:

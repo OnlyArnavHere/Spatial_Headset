@@ -48,6 +48,15 @@ namespace SpatialLauncher.LaptopLink
                 return allowed;
             }
         }
+
+        /// <summary>Gives one attempt back (a laptop checking whether its QR was scanned, answered "not pairing").</summary>
+        public void Refund(string source)
+        {
+            lock (gate)
+            {
+                if (buckets.TryGetValue(source, out var b)) b[0] = Math.Min(cap, b[0] + 1.0);
+            }
+        }
     }
 
     /// <summary>
@@ -78,6 +87,11 @@ namespace SpatialLauncher.LaptopLink
         public void Leave(string source)
         {
             lock (gate) busy.Remove(source);
+        }
+
+        public void Refund(string source)
+        {
+            rate.Refund(source);
         }
     }
 }

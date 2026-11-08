@@ -66,7 +66,15 @@ namespace SpatialLauncher.SpatialWindows
 
         /// <summary>Open windows in focus order; the last one is in front.</summary>
         public IReadOnlyList<SpatialWindow> Windows => windows;
-        public SpatialWindow FocusedWindow => windows.Count > 0 ? windows[windows.Count - 1] : null;
+        public SpatialWindow FocusedWindow
+        {
+            get
+            {
+                for (int i = windows.Count - 1; i >= 0; i--)
+                    if (windows[i] != null && !IsDocked(windows[i])) return windows[i];
+                return null;
+            }
+        }
         /// <summary>Base material for window quads; content can reuse it for its own quads.</summary>
         public Material WindowMaterial => windowMaterial;
         public Material GlassMaterial => glassMaterial;
@@ -250,9 +258,10 @@ namespace SpatialLauncher.SpatialWindows
             return window;
         }
 
-        /// <summary>Brings a window to the front and gives it focus.</summary>
+        /// <summary>Brings a window to the front and gives it focus. A docked window focuses its owner instead.</summary>
         public void Focus(SpatialWindow window)
         {
+            if (window != null && window.DockedTo != null && windows.Contains(window.DockedTo)) window = window.DockedTo;
             if (window == null || !windows.Contains(window)) return;
             bool changed = FocusedWindow != window;
             windows.Remove(window);
@@ -262,9 +271,24 @@ namespace SpatialLauncher.SpatialWindows
             if (changed) FocusChanged?.Invoke(window);
         }
 
+        /// <summary>
+        /// Docks <paramref name="accessory"/> to <paramref name="owner"/> where it is now (see <see cref="SpatialWindow.DockedTo"/>),
+        /// or undocks it (null owner). The owner keeps (or gets) focus; closing the owner closes the accessory too.
+        /// </summary>
+        public void Dock(SpatialWindow accessory, SpatialWindow owner)
+        {
+            if (accessory == null || !windows.Contains(accessory)) return;
+            if (owner != null && !windows.Contains(owner)) owner = null;
+            accessory.DockTo(owner);
+            if (owner != null && (FocusedWindow == accessory || FocusedWindow == owner)) Focus(owner);
+            else ApplyOrder();
+        }
+
         public void Close(SpatialWindow window)
         {
             if (window == null || !windows.Remove(window)) return;
+            for (int i = windows.Count - 1; i >= 0; i--)
+                if (i < windows.Count && windows[i] != null && windows[i].DockedTo == window) Close(windows[i]);
 
             WindowClosed?.Invoke(window);
             // Out of the list and unhittable now; it fades out and is destroyed when the motion is done.
@@ -289,22 +313,35 @@ namespace SpatialLauncher.SpatialWindows
         }
 
         // The focused (last) window grows to full size and comes forward; the rest shrink and recede,
-        // stacked slightly by recency. Windows animate to these targets.
+        // stacked slightly by recency. Windows animate to these targets. A docked window (the keyboard) is left out
+        // of the order and moves exactly like its owner, so using it never sends either one back.
         void ApplyOrder()
         {
-            int count = windows.Count;
+            var ordered = new List<SpatialWindow>(windows.Count);
+            foreach (var window in windows)
+                if (window != null && !IsDocked(window)) ordered.Add(window);
+            int count = ordered.Count;
             int unfocusedCount = count - 1;
             float step = unfocusedCount > 1 ? Mathf.Min(depthStep, maxDepthSpread / (unfocusedCount - 1)) : 0f;
             for (int i = 0; i < count; i++)
             {
                 bool focused = i == count - 1;
                 if (focused)
-                    windows[i].SetPresentation(focusedForwardOffset, 1f);
+                    ordered[i].SetPresentation(focusedForwardOffset, 1f);
                 else
-                    windows[i].SetPresentation(i * step, unfocusedScale);
-                windows[i].SetFocused(focused);
+                    ordered[i].SetPresentation(i * step, unfocusedScale);
+                ordered[i].SetFocused(focused);
+            }
+            foreach (var window in windows)
+            {
+                if (window == null || !IsDocked(window)) continue;
+                var owner = window.DockedTo;
+                window.SetPresentation(owner.TargetDepth, owner.TargetScale);
+                window.SetFocused(owner.IsFocused);
             }
         }
+
+        bool IsDocked(SpatialWindow window) => window.DockedTo != null && windows.Contains(window.DockedTo);
 
         /// <summary>
         /// Gives the window an aspect preset: its content area takes that aspect (keeping the width where the size limits

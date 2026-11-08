@@ -341,8 +341,9 @@ namespace SpatialLauncher.SpatialWindows
     /// within <see cref="GestureConfig.sweepTime"/>, hides every window but the launcher; the same gesture (or the
     /// launcher's Show button) brings them back. Both hands must be tracked throughout (short drops within the tracking
     /// grace are tolerated), so one stray hand can't trigger it. While a remote screen is live or asking for approval
-    /// (<see cref="ConsentGate.IsActive"/>) the same gesture is the panic stop instead: it disconnects every remote screen
-    /// and returns to Home. It runs then even if Settings switched the gesture off.
+    /// (<see cref="ConsentGate.IsActive"/>) the same gesture is the panic stop instead, when Settings > Hands > Cross to stop
+    /// the laptop is on (off by default): it disconnects every remote screen and returns to Home, even if the hide gesture
+    /// is off. With it off, the gesture does nothing while a screen is live.
     /// </summary>
     public sealed class CrossSweepRecognizer : GestureRecognizer
     {
@@ -404,8 +405,14 @@ namespace SpatialLauncher.SpatialWindows
                         var gate = ConsentGate.Current;
                         if (gate != null && gate.IsActive)
                         {
-                            gate.PanicStop("panic stop (cross and sweep)");
-                            Event("panic stop: remote screens disconnected");
+                            // Live: the panic stop when switched on; otherwise nothing (hiding the windows over a live
+                            // screen by accident is no better).
+                            if (Host.PanicGestureEnabled)
+                            {
+                                gate.PanicStop("panic stop (cross and sweep)");
+                                Event("panic stop: remote screens disconnected");
+                            }
+                            else Event("ignored while a remote screen is live (panic gesture off)");
                         }
                         else
                         {

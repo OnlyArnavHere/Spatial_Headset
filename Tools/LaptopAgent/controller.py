@@ -16,7 +16,6 @@ from typing import Callable
 
 import agent
 import approval
-import discovery
 import hostos
 import identity
 import pairing
@@ -67,15 +66,12 @@ class _PairSession:
 
 # agent.py's pairing messages name command-line flags; the window shows these instead (the CLI text is unchanged).
 GUI_HINTS = [
-    ("or pass --headset IP[:PORT] to connect to a known address. Waiting (Ctrl+C to stop)...",
-     "or enter its address under Headset address. Waiting (Cancel to stop)..."),
-    ("or use --headset.", "or enter its address under Headset address."),
-    ("Run again with --headset IP[:PORT] to choose the headset.",
-     "Close this and pair again, or enter the headset's address under Headset address."),
+    ("Waiting (Ctrl+C to stop)...", "Waiting (Cancel to stop)..."),
+    ("Run --pair again and enter one of the numbers.", "Close this and pair again."),
     ("and run --pair again.", "and try again."),
     ("Revoke it first (--revoke NAME).", "Remove it from the paired headsets first."),
     ("Waiting (Cancel to stop)...",
-     "Waiting (Cancel to stop)... Over a USB cable, turn on Wired (USB Personal Hotspot) first."),
+     "Waiting (Cancel to stop)... Over a USB cable, turn on Wired (USB cable) first."),
 ]
 
 
@@ -106,7 +102,7 @@ class AgentController:
             lambda keyboard: approval.LaptopApprover(keyboard=keyboard, store=self._store or self._store_factory()))
         self._watch_s = watch_s
         self._pair_command = pair_command or agent.pair_command
-        self._wired_candidates = discovery.wired_candidates
+        self._usb_list = agent.usbmux_list()
         self._fetch = fetch or tools_fetch.ensure
         self._frozen = frozen or paths.frozen
         self._platform = platform or sys.platform
@@ -125,7 +121,7 @@ class AgentController:
         self._events: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._state, self._message = "idle", ""
-        self._settings = SimpleNamespace(allow_control=False, cast_only=False, headset_address="", wired=False)
+        self._settings = SimpleNamespace(allow_control=False, cast_only=False, wired=False)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -190,7 +186,8 @@ class AgentController:
         return (self._store or self._store_factory()).set_always_allow(name, False)
 
     # Pairing: the dialog calls these from the GUI thread; pair_command runs on the agent loop. Progress arrives as
-    # events: {"type": "pair_say", "text"}, {"type": "pair_prompt", "text"}, {"type": "pair_done", "ok", "text"}.
+    # events: {"type": "pair_say", "text"}, {"type": "pair_prompt", "text"}, {"type": "pair_done", "ok", "text"},
+    # and {"type": "pair_qr", "payload"}: the QR text for the headset to scan (qr_image draws it).
 
     def begin_pair(self) -> int:
         """Starts pairing (the pair dialog must be open) and returns its generation number, which tags every pair_*
@@ -227,7 +224,7 @@ class AgentController:
                 pass  # the loop is closed: nothing is running
 
     def apply(self, settings, user_initiated: bool = True):
-        """Takes new settings (allow_control, cast_only, headset_address, wired) and returns the ones in effect. On
+        """Takes new settings (allow_control, cast_only, wired) and returns the ones in effect. On
         macOS, control and Cast only stay off until Accessibility is granted (the system prompt is requested once, and
         only when user_initiated). Running: rebuilds the link runner if the options changed, keeping MediaMTX and the
         encoder."""
@@ -237,8 +234,6 @@ class AgentController:
                 setattr(merged, key, getattr(settings, key))
         if merged.allow_control and merged.cast_only:
             raise ValueError("Allow control and Cast only can't both be on.")
-        if merged.headset_address:
-            discovery.parse_headset(merged.headset_address)
         if (merged.allow_control or merged.cast_only) and not self._accessibility_granted():
             if user_initiated:
                 self._gate.ensure(perms_mod.ACCESSIBILITY)
@@ -362,20 +357,20 @@ class AgentController:
         args.input = args.keyboard = bool(s.allow_control)
         args.cast_only = bool(s.cast_only)
         args.wired = bool(s.wired)
-        args.headset = [discovery.parse_headset(s.headset_address)] if s.headset_address else None
         return args
 
     @staticmethod
     def _key(args):
-        return (args.input, args.cast_only, args.wired, tuple(args.headset or ()))
+        return (args.input, args.cast_only, args.wired)
 
     def _new_runner(self, args):
         approver = self._approver_factory(args.keyboard) if args.input else None
         return self._runner_factory(self._ident, self._store, self._streams, agent.RTSP_PORT,
                                     max_windows=args.max_windows, input_enabled=args.input,
                                     keyboard_enabled=args.keyboard, cast_only=args.cast_only,
-                                    dry_run=False, pinned=args.headset, approver=approver,
-                                    discover=not args.headset, on_connect_failed=self._on_connect_failed)
+                                    dry_run=False, approver=approver,
+                                    discover=True, on_connect_failed=self._on_connect_failed,
+                                    usb=bool(getattr(args, "wired", False)))
 
     async def _start(self) -> None:
         if self._state in ("starting", "running") or self._closing:
@@ -546,11 +541,11 @@ class AgentController:
                 if session.cancelled:
                     return False, "Pairing cancelled."
                 store = self._store or self._store_factory()
-                address = getattr(self._settings, "headset_address", "")
-                headset = discovery.parse_headset(address) if address else None
                 inner = asyncio.ensure_future(
-                    self._pair_command(headset, ident, store, socket.gethostname(), read_line=read_line, say=say,
-                                       wired=self._wired_candidates if getattr(self._settings, "wired", False) else None))
+                    self._pair_command(ident, store, socket.gethostname(), read_line=read_line, say=say,
+                                       usb=self._usb_list if getattr(self._settings, "wired", False) else None,
+                                       qr_shown=lambda invite: self._pair_event(session, type="pair_qr",
+                                                                                payload=invite.payload)))
                 timed_out = []
                 timer = loop.call_later(self._pair_timeout, lambda: (timed_out.append(1), inner.cancel()))
                 try:

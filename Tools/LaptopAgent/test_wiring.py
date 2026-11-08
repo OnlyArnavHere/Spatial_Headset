@@ -173,7 +173,7 @@ class ConnectFailureCallbackTests(unittest.TestCase):
     """The real LinkRunner reports a failed dial through its public callback; the controller turns it into the Local
     Network row on macOS."""
 
-    def run_runner(self, pinned, browse_hosts):
+    def run_runner(self, browse_hosts):
         import asyncio
         from session import LinkRunner
         calls = []
@@ -183,8 +183,8 @@ class ConnectFailureCallbackTests(unittest.TestCase):
                 yield host
 
         async def go():
-            runner = LinkRunner("ident", None, None, 1, pinned=pinned, discover=bool(browse_hosts), browse=browse,
-                                wired=lambda: [], on_connect_failed=lambda *a: calls.append(a))
+            runner = LinkRunner("ident", None, None, 1, discover=bool(browse_hosts), browse=browse,
+                                on_connect_failed=lambda *a: calls.append(a))
 
             async def attempt(key):
                 return "failed", "can't connect"
@@ -197,9 +197,8 @@ class ConnectFailureCallbackTests(unittest.TestCase):
         asyncio.run(go())
         return calls
 
-    def test_runner_reports_pinned_and_discovered_headsets(self):
-        calls = self.run_runner([("10.0.0.9", 47810)], [("10.0.0.5", 47810)])
-        self.assertIn(("10.0.0.9", 47810, False), calls)
+    def test_runner_reports_discovered_headsets(self):
+        calls = self.run_runner([("10.0.0.5", 47810)])
         self.assertIn(("10.0.0.5", 47810, True), calls)
 
     def test_other_failures_are_not_reported(self):
@@ -207,8 +206,12 @@ class ConnectFailureCallbackTests(unittest.TestCase):
         from session import LinkRunner
         calls = []
 
+        async def browse(pairing=False):
+            yield ("10.0.0.9", 47810)
+            await asyncio.sleep(3600)
+
         async def go():
-            runner = LinkRunner("ident", None, None, 1, pinned=[("10.0.0.9", 47810)],
+            runner = LinkRunner("ident", None, None, 1, discover=True, browse=browse,
                                 on_connect_failed=lambda *a: calls.append(a))
 
             async def attempt(key):

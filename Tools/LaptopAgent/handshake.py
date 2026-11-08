@@ -74,6 +74,15 @@ authenticated), the whole handshake must finish within 5 s, which also bounds ea
 extended: make_answer (ICE gathering) and M5 together may take until 30 s after the connection started, and the M5
 read may wait for that long. Past either limit: "handshake timeout".
 
+Stream transport (USB without a network). Over Apple's USB multiplexer (usbmux.py) there is no IP network for WebRTC,
+so the agent may ask for the "stream" transport: M1 carries "transport":"stream". A headset that supports it, and only
+for a connection that arrived over the USB tunnel (on the phone it comes from the loopback address, so the plain stream
+never crosses Wi-Fi), answers M2 with mode "paired-stream"; otherwise it answers "paired" and the agent refuses with
+"unsupported mode". The mode is in both transcripts, so the choice is signed. In stream mode M3 and M4 carry, instead of
+SDP, exactly the text STREAM_DESCRIPTION ("spatiallauncher-stream-v1"; anything else is "malformed sdp") and fpO = fpA =
+"" in the transcripts. After M5 neither side closes: the same TCP connection carries the session (stream_link.py).
+That connection is not encrypted beyond the authenticated handshake on it; it only ever runs over the USB cable.
+
 Error reasons. Sent to the peer in {"type":"error","reason":...} (the receiver never echoes them back):
   "bad frame length", "read timeout", "malformed frame", "unsupported version", "unexpected message",
   "too many frames", "handshake timeout", "missing <field>", "malformed <field>" (field is one of nonce, spki, sig,
@@ -112,6 +121,10 @@ NONCE_LEN = 32
 SIG_LEN = 256
 MAX_FRAMES = 6
 PROTOCOL_LABEL = "spatiallauncher-link-v1"
+TRANSPORT_STREAM = "stream"
+MODE_PAIRED = "paired"
+MODE_STREAM = "paired-stream"
+STREAM_DESCRIPTION = "spatiallauncher-stream-v1"
 
 CONNECT_TIMEOUT = 5.0
 AGENT_READ_TIMEOUT = 10.0
@@ -150,6 +163,8 @@ class AgentResult:
     headset_spki: bytes
     mode: str
     name: str
+    reader: object = None  # stream mode: the still-open connection
+    writer: object = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +172,8 @@ class HeadsetResult:
     offer_sdp: str
     agent_spki: bytes
     mode: str
+    reader: object = None  # stream mode: the still-open connection
+    writer: object = None
 
 
 # --- Pure helpers ----------------------------------------------------------------------------
@@ -369,8 +386,10 @@ class Channel:
             raise HandshakeError("connection closed") from None
 
 
-async def _finish(ch: Channel, error: HandshakeError | None) -> None:
-    """Tells the peer why (when we are the one refusing), then closes TCP."""
+async def _finish(ch: Channel, error: HandshakeError | None, keep_open: bool = False) -> None:
+    """Tells the peer why (when we are the one refusing), then closes TCP (unless it succeeded and keep_open)."""
+    if error is None and keep_open:
+        return
     if error is not None and not error.remote:
         try:
             await asyncio.wait_for(ch.write_raw({"v": ch.version, "type": "error", "reason": error.reason}), 1.0)
@@ -384,14 +403,16 @@ async def _finish(ch: Channel, error: HandshakeError | None) -> None:
 
 
 async def _run(ch: Channel, body, total_timeout: float, authed: asyncio.Event | None = None,
-               authed_total: float = 0.0):
+               authed_total: float = 0.0, keep_open=lambda result: False):
     """Runs body within total_timeout. With `authed`, total_timeout only applies until the event is set; after that
     the whole run may last authed_total seconds from the start."""
     error = None
+    result = None
     task = asyncio.ensure_future(body)
     try:
         if authed is None:
-            return await asyncio.wait_for(task, total_timeout)
+            result = await asyncio.wait_for(task, total_timeout)
+            return result
         loop = asyncio.get_running_loop()
         start = loop.time()
         waiter = asyncio.ensure_future(authed.wait())
@@ -400,10 +421,12 @@ async def _run(ch: Channel, body, total_timeout: float, authed: asyncio.Event | 
         finally:
             waiter.cancel()
         if task.done():
-            return task.result()
+            result = task.result()
+            return result
         if not authed.is_set():
             raise asyncio.TimeoutError
-        return await asyncio.wait_for(task, max(0.0, authed_total - (loop.time() - start)))
+        result = await asyncio.wait_for(task, max(0.0, authed_total - (loop.time() - start)))
+        return result
     except asyncio.TimeoutError:
         error = HandshakeError("handshake timeout")
         raise error from None
@@ -414,7 +437,7 @@ async def _run(ch: Channel, body, total_timeout: float, authed: asyncio.Event | 
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        await _finish(ch, error)
+        await _finish(ch, error, result is not None and keep_open(result))
 
 
 # --- Agent (client) --------------------------------------------------------------------------
@@ -422,16 +445,21 @@ async def _run(ch: Channel, body, total_timeout: float, authed: asyncio.Event | 
 async def agent_handshake(reader, writer, ident: identity.Identity, store: pairing.PairStore,
                           make_offer,
                           *, read_timeout: float = AGENT_READ_TIMEOUT,
-                          total_timeout: float = AGENT_TOTAL_TIMEOUT) -> AgentResult:
+                          total_timeout: float = AGENT_TOTAL_TIMEOUT, stream: bool = False) -> AgentResult:
     """Runs M1-M5 as the connecting agent (paired headsets only). make_offer() is awaited once the headset is acceptable and returns the
-    offer SDP; the caller applies the returned answer_sdp only because this function returned."""
+    offer SDP; the caller applies the returned answer_sdp only because this function returned. With stream=True
+    (USB only) make_offer is not called and the result carries the still-open reader and writer."""
     ch = Channel(reader, writer, read_timeout)
-    return await _run(ch, _agent_body(ch, ident, store, make_offer), total_timeout)
+    return await _run(ch, _agent_body(ch, ident, store, make_offer, stream), total_timeout,
+                      keep_open=lambda result: stream)
 
 
-async def _agent_body(ch: Channel, ident, store, make_offer) -> AgentResult:
+async def _agent_body(ch: Channel, ident, store, make_offer, stream: bool = False) -> AgentResult:
     na = secrets.token_bytes(NONCE_LEN)
-    await ch.write("hello", nonce=_b64s(na), spki=_b64s(ident.spki_der))
+    if stream:
+        await ch.write("hello", nonce=_b64s(na), spki=_b64s(ident.spki_der), transport=TRANSPORT_STREAM)
+    else:
+        await ch.write("hello", nonce=_b64s(na), spki=_b64s(ident.spki_der))
 
     m2 = await ch.read("hello")
     nh = _b64(m2, "nonce", exact=NONCE_LEN)
@@ -442,29 +470,39 @@ async def _agent_body(ch: Channel, ident, store, make_offer) -> AgentResult:
     name = wire_name.strip() or default_name(spki_h)
     if hmac.compare_digest(nh, na):
         raise HandshakeError("replayed nonce", auth=True)
-    if mode != "paired":
-        raise HandshakeError("unsupported mode")
+    if mode != (MODE_STREAM if stream else MODE_PAIRED):
+        raise HandshakeError("unsupported mode")  # with stream: a headset app too old for the USB cable
     if pairing.pinned(store, spki_h) is None:
         raise HandshakeError("not paired")
 
-    offer_sdp = await make_offer()
-    if not isinstance(offer_sdp, str):
-        raise HandshakeError("no offer")
-    offer_sdp = _sdp({"sdp": offer_sdp})
-    fp_offer = sdp_fingerprint(offer_sdp)
+    if stream:
+        offer_sdp, fp_offer = STREAM_DESCRIPTION, ""
+    else:
+        offer_sdp = await make_offer()
+        if not isinstance(offer_sdp, str):
+            raise HandshakeError("no offer")
+        offer_sdp = _sdp({"sdp": offer_sdp})
+        fp_offer = sdp_fingerprint(offer_sdp)
     t_a = transcript_agent(na, nh, ident.spki_der, spki_h, mode, wire_name, offer_sdp, fp_offer)
     await ch.write("offer", sdp=offer_sdp, sig=_b64s(identity.sign(ident.key, t_a)))
 
     m4 = await ch.read("answer")
     answer_sdp = _sdp(m4)
     sig = _b64(m4, "sig", exact=SIG_LEN)
-    fp_answer = sdp_fingerprint(answer_sdp)
+    if stream:
+        if answer_sdp != STREAM_DESCRIPTION:
+            raise HandshakeError("malformed sdp")
+        fp_answer = ""
+    else:
+        fp_answer = sdp_fingerprint(answer_sdp)
     t_h = transcript_headset(na, nh, ident.spki_der, spki_h, mode, wire_name, offer_sdp, answer_sdp, fp_offer,
                              fp_answer)
     if not identity.verify(spki_h, sig, t_h):
         raise HandshakeError("bad signature", auth=True)
 
     await ch.write("done", sig=_b64s(identity.sign(ident.key, done_message(t_h))))
+    if stream:
+        return AgentResult(answer_sdp, spki_h, mode, name, ch.reader, ch.writer)
     return AgentResult(answer_sdp, spki_h, mode, name)
 
 
@@ -474,20 +512,23 @@ async def headset_handshake(reader, writer, headset: identity.Identity, name: st
                             make_answer,
                             *, read_timeout: float = HEADSET_TOTAL_TIMEOUT,
                             total_timeout: float = HEADSET_TOTAL_TIMEOUT,
-                            authed_timeout: float = HEADSET_AUTHED_TIMEOUT) -> HeadsetResult:
+                            authed_timeout: float = HEADSET_AUTHED_TIMEOUT,
+                            stream_allowed: bool = False) -> HeadsetResult:
     """Runs M1-M5 as the listening headset. pinned_agents is an iterable of SPKI DER. make_answer(offer_sdp) is
-    awaited only after the offer's signature verified.
+    awaited only after the offer's signature verified. stream_allowed says the connection came over the USB tunnel; a
+    stream session is then left open (mode MODE_STREAM, reader and writer set) and make_answer is not called.
 
     total_timeout (and read_timeout) apply only until the offer signature has verified; from then on the whole
     handshake, including make_answer and the M5 read, may last authed_timeout seconds."""
     ch = Channel(reader, writer, read_timeout)
     authed = asyncio.Event()
-    body = _headset_body(ch, headset, name, list(pinned_agents), make_answer, authed, authed_timeout)
-    return await _run(ch, body, total_timeout, authed, authed_timeout)
+    body = _headset_body(ch, headset, name, list(pinned_agents), make_answer, authed, authed_timeout, stream_allowed)
+    return await _run(ch, body, total_timeout, authed, authed_timeout,
+                      keep_open=lambda result: result.mode == MODE_STREAM)
 
 
 async def _headset_body(ch: Channel, headset, name, pinned_agents, make_answer, authed,
-                        authed_timeout) -> HeadsetResult:
+                        authed_timeout, stream_allowed: bool = False) -> HeadsetResult:
     name = validate_name(name.strip() or default_name(headset.spki_der))
     m1 = await ch.read("hello")
     na = _b64(m1, "nonce", exact=NONCE_LEN)
@@ -495,7 +536,8 @@ async def _headset_body(ch: Channel, headset, name, pinned_agents, make_answer, 
     check_spki(spki_a)
     if not any(hmac.compare_digest(spki_a, bytes(p)) for p in pinned_agents):
         raise HandshakeError("unknown laptop")
-    mode = "paired"
+    stream = stream_allowed and m1.get("transport") == TRANSPORT_STREAM
+    mode = MODE_STREAM if stream else MODE_PAIRED
 
     nh = secrets.token_bytes(NONCE_LEN)
     await ch.write("hello", nonce=_b64s(nh), spki=_b64s(headset.spki_der), mode=mode, name=name)
@@ -503,24 +545,34 @@ async def _headset_body(ch: Channel, headset, name, pinned_agents, make_answer, 
     m3 = await ch.read("offer")
     offer_sdp = _sdp(m3)
     sig_a = _b64(m3, "sig", exact=SIG_LEN)
-    fp_offer = sdp_fingerprint(offer_sdp)
+    if stream:
+        if offer_sdp != STREAM_DESCRIPTION:
+            raise HandshakeError("malformed sdp")
+        fp_offer = ""
+    else:
+        fp_offer = sdp_fingerprint(offer_sdp)
     t_a = transcript_agent(na, nh, spki_a, headset.spki_der, mode, name, offer_sdp, fp_offer)
     if not identity.verify(spki_a, sig_a, t_a):
         raise HandshakeError("bad signature", auth=True)
     ch.read_timeout = authed_timeout
     authed.set()
 
-    answer_sdp = await make_answer(offer_sdp)
-    if not isinstance(answer_sdp, str):
-        raise HandshakeError("no answer")
-    answer_sdp = _sdp({"sdp": answer_sdp})
-    fp_answer = sdp_fingerprint(answer_sdp)
+    if stream:
+        answer_sdp, fp_answer = STREAM_DESCRIPTION, ""
+    else:
+        answer_sdp = await make_answer(offer_sdp)
+        if not isinstance(answer_sdp, str):
+            raise HandshakeError("no answer")
+        answer_sdp = _sdp({"sdp": answer_sdp})
+        fp_answer = sdp_fingerprint(answer_sdp)
     t_h = transcript_headset(na, nh, spki_a, headset.spki_der, mode, name, offer_sdp, answer_sdp, fp_offer, fp_answer)
     await ch.write("answer", sdp=answer_sdp, sig=_b64s(identity.sign(headset.key, t_h)))
 
     m5 = await ch.read("done")
     if not identity.verify(spki_a, _b64(m5, "sig", exact=SIG_LEN), done_message(t_h)):
         raise HandshakeError("bad signature", auth=True)
+    if stream:
+        return HeadsetResult(offer_sdp, spki_a, mode, ch.reader, ch.writer)
     return HeadsetResult(offer_sdp, spki_a, mode)
 
 
@@ -559,14 +611,16 @@ class AuthBlocklist:
 
 async def agent_connect(host: str, port: int, ident, store, make_offer, *,
                         limiter: HandshakeLimiter, blocklist: AuthBlocklist,
-                        connect_timeout: float = CONNECT_TIMEOUT, **timeouts) -> AgentResult:
-    """Connects to a headset and runs the handshake, within the concurrency limit and the block list."""
+                        connect_timeout: float = CONNECT_TIMEOUT, opener=None, **timeouts) -> AgentResult:
+    """Connects to a headset and runs the handshake, within the concurrency limit and the block list. opener() returns
+    (reader, writer) when the connection is not plain TCP to host:port (the USB tunnel)."""
     key = (host, port)
     if blocklist.blocked(key):
         raise HandshakeError("blocked after a failed authentication")
     async with limiter:
         try:
-            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), connect_timeout)
+            connecting = opener() if opener is not None else asyncio.open_connection(host, port)
+            reader, writer = await asyncio.wait_for(connecting, connect_timeout)
         except (asyncio.TimeoutError, OSError):
             raise HandshakeError("can't connect") from None
         try:
@@ -601,6 +655,11 @@ class RateLimiter:
                              if min(self._cap, v[0] + (now - v[1]) * self._rate) < self._cap}
         return allowed
 
+    def refund(self, source: str) -> None:
+        """Gives back one attempt (a QR check that found nothing to pair with)."""
+        tokens, last = self._buckets.get(source, (self._cap, self._clock()))
+        self._buckets[source] = (min(self._cap, tokens + 1.0), last)
+
 
 class HeadsetGate:
     """Per-source-IP pre-authentication limits: a rate limit and one handshake at a time."""
@@ -617,6 +676,9 @@ class HeadsetGate:
 
     def leave(self, source: str) -> None:
         self._busy.discard(source)
+
+    def refund(self, source: str) -> None:
+        self._rate.refund(source)
 
 
 async def serve_headset_connection(reader, writer, gate: HeadsetGate, headset, name, pinned_agents,

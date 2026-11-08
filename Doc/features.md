@@ -30,15 +30,25 @@ degrees (a drag), stays within 30 degrees of where the hand really points, and r
 
 Nothing from another device shows in the headset until the user allows it, every session (`ConsentGate`). A remote
 screen asks before it connects: a modal window "Allow <source> (<address>) to show its screen on this headset?
-(<mode>)" with Approve and Deny, answered by pinch or mouse, the stereo bar's TRIGGER (reads ALLOW while asking), or in
+(<mode>)" with Approve and Deny, answered by pinch or mouse, or in
 Mono the on-screen Approve/Deny buttons. Deny, closing the modal, or 30 s without an answer connects nothing. An
 approval covers that source in that mode only while one of its screens stays live; nothing is remembered. While live, a
 red "LIVE: <source>" line is drawn at the top of the view (in each eye in Stereo). Panic stop disconnects every remote
-screen, closes their windows, refuses anything waiting and brings Home to the front: cross and sweep (on even when the
-gesture is switched off in Settings), F8, or in Mono the indicator's Stop.
+screen, closes their windows, refuses anything waiting and brings Home to the front: cross and sweep (only when Settings >
+Hands > Cross to stop the laptop is on; off by default, as hand tracking swapping sides set it off by itself), F8, or in
+Mono the indicator's Stop.
 
 The laptop picker's list connection (window titles only) and Settings > Laptop's latency link show no screen and are
 not gated.
+
+### Stereo view
+
+In Stereo there is no HoloKit bar along the top (MORE, RECORD, MONO, OPTIONS, TRIGGER) and HoloKit's own buttons are
+hidden (`StereoChrome`); leave Stereo with Settings > Display > Leave Stereo. The passthrough image is locked to the
+eyes' (predicted) pose, so it doesn't slide when the head turns, and world-locked windows turn to face you only when
+they move, not with every head movement. There is no status overlay on screen (`DeviceStatusHud` is no longer added). Each eye fills its half of the screen (no black margins; the projection
+grows so scale and alignment hold), HoloKit's alignment guide is hidden, the camera image stays at real size (black past
+the camera's edges; windows still draw there), the default IPD is 63 mm, and HoloKit's predicted pose smooths ARKit's corrections longer (steadier windows).
 
 ### App switcher
 
@@ -48,16 +58,32 @@ isn't streamed yet opens as a stream window through the Laptop Shell, which need
 windows in its taskbar or Dock order, with their real icons; a streamed laptop window appears once, as its headset
 window. Ways in:
 
-- **TRIGGER (ZOOM) button**, with Settings > Display > TRIGGER button set to Switcher (it then reads SWITCH): a press
-  opens the overview with the next window selected, each press moves on, and 1.5 s after the last press the selection
-  comes forward, like letting go of Alt+Tab. While the consent prompt asks, TRIGGER is still ALLOW. Set to Zoom (the
-  default), TRIGGER zooms as before; F5 and the Mono button always zoom.
 - **Pinch:** pinch a card to switch at once. A pinch held for 0.8 s while pointing at no window (and the other hand
   not pinching) opens the overview (`PinchHoldRecognizer`; Settings > Gestures > Pinch and hold to switch).
 - **Home > Switch**, or **F7** in the editor: the overview, waiting for a pick.
 - **F6:** quick switch to the previous window without the overview; pressed again within 1.2 s it goes further back.
 
 Switching to a window while all windows are hidden shows them again.
+
+### Keyboard that pops up and stays put
+
+- **Pops up by itself** when a text field gets focus: a field on the headset (Laptop apps search, Settings), or a text
+  field on the laptop. The laptop agent checks a few times a second whether the laptop's focus is in a text field
+  (`Tools/LaptopAgent/textfocus.py`: UI Automation on Windows, the Accessibility API on macOS, nothing on Linux) and
+  tells the headset (`text-focus` on the control channel). It only does this while the headset has control with
+  typing, after its first click. The keyboard opens under the window you clicked in and closes again when the focus
+  leaves the text field. If you opened it with **Keys**, it stays until you close it.
+- **Docked to its window** (`WindowManager.Dock`): pressing its keys never takes focus, so neither the keyboard nor
+  the window moves back and forth. It comes forward and recedes with that window, follows it when you move it, and
+  closes with it. Drag the keyboard to place it somewhere else relative to the window.
+- **Voice typing:** the mic key. Tap it, speak, tap it again. Or hold it while you speak and let go. It turns red
+  while listening. The text goes to the focused text field, else to the window the keyboard is docked to.
+
+### Bezel-less laptop windows
+
+Laptop stream windows have no padding: the picture runs to the window's edges with the window's rounded corners, and
+the window keeps exactly the picture's aspect (it refits when the stream's size changes and after a resize), so there
+are no empty bars beside the picture.
 
 ## Deferred
 

@@ -9,9 +9,10 @@ from gui import theme
 
 PAD = theme.PAD
 WRAP = 400
-STEPS = ("1.  On the headset open Laptop > Pair new laptop. It shows a code.\n"
-         "2.  Over a USB cable: turn on Wired (USB Personal Hotspot) in the main window first.\n"
-         "3.  Type the code below (XXXX-XXXX-XXXX) and press Pair, then confirm on the headset.")
+STEPS = ("1.  On the headset open Laptop > Pair new laptop.\n"
+         "2.  Over a USB cable: turn on Wired (USB cable) in the main window first.\n"
+         "3.  Look at the QR code with the headset: it pairs by itself. Or type the code the\n"
+         "     headset shows (XXXX-XXXX), press Pair, and confirm on the headset.")
 SEARCHING = "Looking for a headset showing a code..."
 
 
@@ -35,6 +36,10 @@ class PairDialog:
                                                                             sticky="w")
         ttk.Label(frame, text=STEPS, wraplength=WRAP, justify="left", style="Muted.TLabel").grid(
             row=1, column=0, columnspan=2, sticky="w", pady=(6, PAD))
+
+        self.qr_image = None
+        self.qr_label = ttk.Label(frame)  # the QR, once the pairing has made one
+        self.qr_label.grid(row=1, column=2, rowspan=6, sticky="n", padx=(PAD + 6, 0))
 
         self.prompt = tk.StringVar(value=SEARCHING)
         ttk.Label(frame, textvariable=self.prompt, wraplength=WRAP, justify="left").grid(
@@ -95,8 +100,16 @@ class PairDialog:
             else:
                 self.asked = True
                 self.entry.focus_set()
+        elif kind == "pair_qr":
+            try:
+                import qr_image
+                self.qr_image = tk.PhotoImage(data=qr_image.png_base64(event["payload"], scale=5))
+                self.qr_label.configure(image=self.qr_image)
+            except Exception:
+                self.qr_label.configure(text="(The QR code can't be drawn.\nType the code instead.)")
         elif kind == "pair_done":
             self.finished = True
+            self.qr_label.configure(image="")
             self.progress.stop()
             self.progress.grid_remove()
             self._say(event["text"], "Ok.TLabel" if event.get("ok") else "Error.TLabel")

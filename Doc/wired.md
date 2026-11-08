@@ -1,62 +1,57 @@
-# Wired mode (USB Personal Hotspot)
+# Wired mode (USB cable, no network)
 
-The headset iPhone shares its Personal Hotspot with the laptop over the USB cable. The phone is the gateway
-(172.20.10.1) and the laptop gets one of 172.20.10.2 to .14. The headset then reaches the agent over the cable, with no
-Wi-Fi involved.
+The laptop talks to the headset app over the iPhone's charging cable through Apple's USB multiplexer, the same
+channel iTunes, Finder and Xcode use. No Wi-Fi, no Personal Hotspot and no IP network are needed.
+
+Any cable works the same way: Lightning or USB-C on the phone, USB-A or USB-C on the laptop, directly or through an
+adapter or hub. Use a cable that carries data (some cheap cables only charge): if Finder, the Apple Devices app or
+iTunes can see the phone, the cable is fine.
 
 ## Steps
 
-1. On the iPhone: Settings > Personal Hotspot > Allow Others to Join. The option only appears if the carrier plan
-   allows a hotspot.
-2. Plug the iPhone into the laptop and tap Trust on the phone. Windows needs Apple's driver, which comes with the Apple
-   Devices app or iTunes. An "Apple Mobile Device Ethernet" adapter then appears.
-3. On the laptop: `python agent.py --wired` (add `--cast-only` or `--input` as usual). The banner shows the line
-   `Wired (USB): host 172.20.10.x` and checks the firewall for that adapter.
-4. On the headset: open the Laptop picker and tap the paired laptop. The agent dials 172.20.10.1, the phone, over the
-   cable. Pair first if you haven't (see [connect.md](connect.md)).
+1. Plug the iPhone into the laptop and tap **Trust** on the phone. Windows needs Apple's driver: install the
+   **Apple Devices** app (or iTunes) from the Microsoft Store. macOS has it built in.
+2. On the laptop: in the app turn on **Wired (USB cable)** (or run `python agent.py --wired`). The app's settings show
+   "iPhone on the USB cable" once it sees the phone.
+3. Pair once if you haven't: on the headset open Laptop > Pair new laptop; on the laptop click Pair new headset and
+   type the code. Pairing goes over the cable too.
+4. On the headset: open Laptop and tap the laptop. The agent connects over the cable.
 
-## What works over the cable
+## How it works
 
-Everything the Wi-Fi link does, because it is the same link: the agent dials 172.20.10.1, runs the same signed
-handshake and opens the same WebRTC session. Only how the headset is found differs. Nothing below has a wired-only
-code path:
+- `Tools/LaptopAgent/usbmux.py` asks the multiplexer (127.0.0.1:27015 on Windows, `/var/run/usbmuxd` on macOS and
+  Linux) for iPhones attached by USB (phones it reaches over Wi-Fi are ignored) and opens a TCP connection to the
+  headset app's link port through it. On the phone that connection arrives from the loopback address.
+- The signed handshake runs in **stream mode** (`handshake.py`, `HandshakeHeadset.cs`). The headset offers it only
+  for loopback connections, so it can only happen over the cable. The mode is signed into both transcripts.
+- After the handshake the same connection carries the session (`stream_link.py`, `StreamLinkTransport.cs`): the
+  usual control and input messages, plus each window's H.264, which the iPhone decodes in hardware
+  (`Assets/Plugins/iOS/SpatialVideoDecoder.mm`). WebRTC isn't used, because there is no network for it.
+- The stream is not encrypted beyond the authenticated handshake. It never leaves the cable.
+- Everything else is the same as over Wi-Fi: view only and cast only, full control after both approvals, the laptop
+  shell, the switcher, the LIVE indicator, the panic stop and the kill switch.
 
-- view-only and cast-only windows, the picker and the per-window streams;
-- full control: mouse, keyboard and media keys, after the headset's consent prompt and the laptop's Yes (or its
-  "Always allow this headset for control");
-- the Laptop Shell (Laptop > Laptop apps): running, pinned and installed apps with their icons, search, launching apps,
-  and window raise, minimize, restore and close. It rides the control data channel, so it gets the same encryption,
-  the same gate (control granted, not cast-only, not stopped) and the same rate limits;
-- the app switcher, which only uses the headset's windows and the shell above;
-- the LIVE indicator, the panic stop and the laptop's kill switch.
+## Older builds
 
-Checked without a phone (`python -m unittest test_wired_shell`): with the hotspot adapter present, the agent dials
-172.20.10.1 without `--headset`, and the session it builds for that address carries the shell with the same gate
-(view only refused until control is granted, cast-only and no-input refused, the kill switch stops it).
-
-If the laptop is also on Wi-Fi, WebRTC may pick the Wi-Fi path for the media. To be sure the cable carries
-everything, turn Wi-Fi off on the laptop while testing.
-
-## Firewall
-
-No inbound rule is needed. The laptop dials the headset, and the video and input travel back over that same
-connection. The only port the agent opens is MediaMTX on 127.0.0.1:8554, which no other machine can reach.
-
-See [connect.md](connect.md) for pairing, the safeguards and what is protected.
+A headset app built before stream mode answers the laptop with "unsupported mode"; the laptop then says the headset
+app is too old for the USB cable. Rebuild and install the headset app. (Personal Hotspot over the cable was removed.)
 
 ## Checked so far, and what only the phone can show
 
-Checked on the laptop (`python selftest_wired.py`): the hotspot adapter is picked and the firewall logic and fix
-commands are right, all with made-up adapters, plus a read-only live check. The headset's Find laptop was checked in
-the editor against this machine.
+Checked on the laptop: the usbmux client against a fake multiplexer and against Apple's service on Windows (it
+answers and lists no phone when none is plugged in); whole stream sessions between the agent and a fake headset over
+localhost (`test_stream_link.py`: real ffmpeg, decoded frames on two slots, input, close, redial); the Python agent
+against the C# headset handshake and transport built with .NET; the Unity project compiles for iOS and the headset's
+link test suites pass.
 
 ## Test steps (on the device)
 
-1. Pair the laptop once if you haven't (see [connect.md](connect.md)).
-2. iPhone: Settings > Personal Hotspot > Allow Others to Join. Plug it into the laptop and tap Trust.
-3. Laptop: turn Wi-Fi off. In the agent app turn on Wired (USB) and Allow control (or run
-   `python agent.py --wired --input --keyboard`). The banner or status should show `Wired (USB): host 172.20.10.x`.
-4. Headset: Settings > Laptop > Link: Wired (USB). Open Laptop and tap the laptop. Expect "Connected (view only)".
+1. Turn Wi-Fi off on the laptop and on the phone, and Personal Hotspot off, so the cable is the only way through.
+2. Plug the iPhone into the laptop and tap Trust. In the agent app turn on Wired (USB cable) and Allow control (or run
+   `python agent.py --wired --input --keyboard`). Settings should say "iPhone on the USB cable".
+3. Pair over the cable if you haven't (Laptop > Pair new laptop on the headset; Pair new headset in the app).
+4. Headset: Settings > Laptop > Link: Wired (USB). Open Laptop and tap the laptop. Expect "Connected (view only)"
+   and, in the agent's log, "Linked with ... (usb:..., paired-stream)".
 5. Tap **Laptop apps**. Expect "Allow control". Tap it, approve on the headset, then on the laptop. Tick "Always
    allow this headset for control" once to check that the next session skips the laptop's box.
 6. In Laptop apps:
@@ -76,8 +71,8 @@ the editor against this machine.
 Please note the latency (each laptop stream window shows the link's round trip in ms on its status line) and whether anything above didn't work.
 
 Only the phone can show:
-- that the adapter appears and gets a 172.20.10.x address;
-- that iOS lets the app reach the laptop over the cable (Local Network permission);
-- that WebRTC video uses the cable;
+- that connections through the multiplexer arrive from loopback (if not, the headset answers "paired" and the laptop
+  logs "unsupported mode");
+- that the hardware decoder shows the picture, in the right colours, and keeps up with several windows;
 - the latency;
 - that the shell's icons and lists arrive quickly enough over the cable (they are small: an icon is at most 9 KB).

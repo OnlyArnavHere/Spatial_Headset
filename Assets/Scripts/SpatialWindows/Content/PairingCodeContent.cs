@@ -6,10 +6,11 @@ using UnityEngine;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// The pairing screen: shows the code the laptop's <c>agent.py --pair</c> asks for (XXXX-XXXX-XXXX), the seconds left
-    /// and how to run the agent. Opening it starts pairing mode on the <see cref="LinkHost"/> (listening, advertising
-    /// m=pair); closing it ends pairing. When the code ends it says why and offers "New code". The pinch confirmation
-    /// itself is the consent modal (<see cref="ConsentPairConfirmer"/>); the result is shown here.
+    /// The pairing screen. Two ways to pair: look at the QR code the laptop app shows (the camera reads it with
+    /// <see cref="PairQrScanner"/>; <see cref="LinkHost.ArmQrPairing"/> takes its code and the laptop finishes on its
+    /// own, no confirmation), or type the code shown here (XXXX-XXXX) on the laptop, then confirm with a pinch (the
+    /// consent modal, <see cref="ConsentPairConfirmer"/>). Opening it starts pairing mode on the <see cref="LinkHost"/>
+    /// (listening, advertising m=pair); closing it ends pairing. When the code ends it says why and offers "New code".
     /// </summary>
     public class PairingCodeContent : WindowContent
     {
@@ -30,6 +31,9 @@ namespace SpatialLauncher.SpatialWindows
         public bool Expired { get; private set; }
         public bool Paired { get; private set; }
         public bool Confirming { get; private set; }
+        /// <summary>A laptop's QR was read and armed; the laptop finishes pairing by itself.</summary>
+        public bool Scanned { get; private set; }
+        public PairQrScanner Scanner { get; private set; }
 
         LinkHost host;
         Transform panel;
@@ -54,6 +58,8 @@ namespace SpatialLauncher.SpatialWindows
             NewCodeButton = CreateControl<WindowButton>("NewCode", transform, CreateMaterial(ButtonColor));
             newCodeLabel = CreateLabel("NewCodeLabel", transform, "New code", TextRole.Headline, TextAlignmentOptions.Center);
             NewCodeButton.Clicked += Begin;
+            Scanner = new PairQrScanner();
+            Scanner.Found += OnQrFound;
             if (host != null)
             {
                 host.PairingEnded += OnPairingEnded;
@@ -63,10 +69,12 @@ namespace SpatialLauncher.SpatialWindows
             Relayout();
         }
 
-        /// <summary>The instructions: the agent command, and in the editor the loopback address to pair with.</summary>
+        /// <summary>The instructions, and in the editor the loopback address to pair with.</summary>
         public static string CommandLines()
         {
-            string text = "On the laptop run: agent.py --pair";
+            string text = PairQrScanner.Supported
+                ? "Look at the QR code in the laptop app, or type this code there."
+                : "Type this code in the laptop app (Pair a new headset).";
 #if UNITY_EDITOR
             text += " --headset 127.0.0.1:" + LinkListener.LinkPort;
 #endif
@@ -79,6 +87,7 @@ namespace SpatialLauncher.SpatialWindows
             Expired = false;
             Paired = false;
             Confirming = false;
+            Scanned = false;
             if (host == null)
             {
                 var service = LinkService.Current;
@@ -93,6 +102,17 @@ namespace SpatialLauncher.SpatialWindows
             Refresh();
         }
 
+        void OnQrFound(string text)
+        {
+            if (host == null || !host.Pairing || Expired || Paired || Scanned) return;
+            var armed = host.ArmQrPairing(text);
+            if (armed == null) return; // some other QR code in view
+            Scanned = true;
+            codeLabel.text = "";
+            status.text = "Found the laptop's QR code. Pairing...";
+            Refresh();
+        }
+
         void OnPairingEnded(PairCodeEnd reason)
         {
             Expired = true;
@@ -100,7 +120,10 @@ namespace SpatialLauncher.SpatialWindows
             {
                 case PairCodeEnd.Expired: status.text = "Code expired"; break;
                 case PairCodeEnd.StruckOut: status.text = "Too many wrong codes. Start again with a new code."; break;
-                case PairCodeEnd.Used: Confirming = true; status.text = "Code used. Confirm on the headset..."; break;
+                case PairCodeEnd.Used:
+                    Confirming = true;
+                    status.text = Scanned ? "Laptop recognised. Finishing..." : "Code used. Confirm on the headset...";
+                    break;
                 default: status.text = "Pairing ended"; break;
             }
             Refresh();
@@ -122,6 +145,7 @@ namespace SpatialLauncher.SpatialWindows
 
         void Update()
         {
+            if (Scanner != null && host != null && host.Pairing && !Expired && !Paired && !Scanned) Scanner.Tick(Time.unscaledTime);
             Refresh();
         }
 
@@ -164,6 +188,7 @@ namespace SpatialLauncher.SpatialWindows
 
         protected override void OnDestroy()
         {
+            Scanner?.Dispose();
             if (host != null)
             {
                 host.PairingEnded -= OnPairingEnded;

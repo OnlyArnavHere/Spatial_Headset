@@ -16,9 +16,13 @@ RSASSA-PKCS1-v1_5 with SHA-256 (identity.sign / identity.verify), the name rules
 except U+0020, "bad name" otherwise), enc(x) = u32 BE length || bytes (strings as UTF-8), and error frames
 {"v":2,"type":"error","reason":...} followed by close. A "v" other than the integer 2 is "unsupported version".
 
-The code. 12 characters of Crockford base32 (alphabet 0123456789ABCDEFGHJKMNPQRSTVWXYZ, 60 bits) from a CSPRNG, shown
-as XXXX-XXXX-XXXX. When typed: spaces and dashes are dropped, case is ignored, I and L read as 1, O reads as 0, U and
-anything else outside the alphabet is refused; exactly 12 characters must remain. The canonical form (12 uppercase
+The code. 8 characters of Crockford base32 (alphabet 0123456789ABCDEFGHJKMNPQRSTVWXYZ, 40 bits) from a CSPRNG, shown
+as XXXX-XXXX (headsets before 0.2 showed 12, XXXX-XXXX-XXXX; both sides still accept that length when typed). Why 40
+bits is enough: P3 hands a man in the middle one offline guess check, but he must find the code before the agent's 10 s
+read of P4 runs out (2^40 PBKDF2 runs of 100000 iterations is far beyond that), and online guessing gets 3 tries per
+code. Do not go shorter without a PAKE. When typed: spaces and dashes are dropped, case is ignored, I and L read as 1,
+O reads as 0, U and anything else outside the alphabet is refused; exactly 8 (or 12) characters must remain. The
+canonical form (8 or 12 uppercase
 alphabet characters, no dashes) is what feeds the key derivation, as ASCII. A code lasts 120 s, works once (it is
 consumed by the first correct proof, whatever happens afterwards, including a decline or a lost message), and is
 invalidated by 3 wrong proofs in total, from any address. Issuing a new code invalidates the old one.
@@ -69,6 +73,22 @@ includes mac; "bad name" also covers a name_a that is empty after strip), plus "
 said no, or P5 timed out) and the local-only reasons of handshake.py.
 
 Known-answer vectors for K, k_a, k_h and the two MACs are in test_pair_protocol.py.
+
+QR pairing (the other direction: the laptop shows the code, the headset's camera reads it). The laptop makes a code of
+20 characters (100 bits, pairing.QR_CODE_LEN) and shows a QR code with the text "SLPAIR:<code>:<fp_a>", where fp_a is
+identity.fingerprint(spki_a). The headset that scans it replaces its code with that one (same 120 s, once, 3 strikes)
+and re-advertises under the instance name "SL-" + qr_id, qr_id = hex(SHA-256("sl-qr-id:" || code))[:16]; the laptop
+dials only that instance (and, over the USB cable, the phone on the cable). The exchange is P1-P6 above with these
+differences:
+  P1 carries "qr": qr_id. The headset answers "not pairing" (no strike, and the attempt is not counted by the rate
+     limit) unless its active code came from a QR whose qr_id matches and fingerprint(spki_a) equals the QR's fp_a.
+     A QR-armed headset also says "not pairing" to a P1 without "qr".
+  P2 carries "qr": true. The agent stops with "no qr" (local) before P3 when it asked with qr and P2 lacks it, so an
+     older headset (which ignores "qr") never gets a proof and never counts a strike.
+  P5 is sent with ok=true without asking: scanning the laptop's screen was the consent, and the laptop's key is
+     already the one the QR named.
+A 100-bit code needs no PAKE: one offline check from P3 is hopeless. qr_id is a hash of the code, so advertising it
+gives nothing away.
 """
 import asyncio
 import hashlib
@@ -157,9 +177,9 @@ def _channel(reader, writer, read_timeout: float) -> Channel:
 async def agent_pair(reader, writer, ident: identity.Identity, store: pairing.PairStore, code_text: str,
                      name_a: str, *, iterations: int = PAIR_ITERATIONS, read_timeout: float = AGENT_READ_TIMEOUT,
                      confirm_timeout: float = AGENT_CONFIRM_TIMEOUT,
-                     total_timeout: float = AGENT_TOTAL_TIMEOUT) -> PairResult:
-    """Runs P1-P6 as the connecting agent with the code the user typed. Pins the headset only after the user
-    confirmed on the headset (P5). Raises HandshakeError."""
+                     total_timeout: float = AGENT_TOTAL_TIMEOUT, qr: bool = False) -> PairResult:
+    """Runs P1-P6 as the connecting agent with the code the user typed (or, qr=True, the code of the QR it shows).
+    Pins the headset only after the headset confirmed (P5). Raises HandshakeError."""
     try:
         code = pairing.parse_code(code_text)
     except ValueError:
@@ -173,13 +193,14 @@ async def agent_pair(reader, writer, ident: identity.Identity, store: pairing.Pa
         writer.close()
         raise
     ch = _channel(reader, writer, read_timeout)
-    body = _agent_body(ch, ident, store, code, name_a, iterations, confirm_timeout)
+    body = _agent_body(ch, ident, store, code, name_a, iterations, confirm_timeout, qr)
     return await _run(ch, body, total_timeout)
 
 
-async def _agent_body(ch: Channel, ident, store, code, name_a, iterations, confirm_timeout):
+async def _agent_body(ch: Channel, ident, store, code, name_a, iterations, confirm_timeout, qr=False):
     na = secrets.token_bytes(NONCE_LEN)
-    await ch.write("pair", nonce=_b64s(na), spki=_b64s(ident.spki_der), name=name_a)
+    extra = {"qr": pairing.qr_id(code)} if qr else {}
+    await ch.write("pair", nonce=_b64s(na), spki=_b64s(ident.spki_der), name=name_a, **extra)
 
     m2 = await ch.read("pair-hello")
     nh = _b64(m2, "nonce", exact=NONCE_LEN)
@@ -188,6 +209,8 @@ async def _agent_body(ch: Channel, ident, store, code, name_a, iterations, confi
     name_h = validate_name(m2.get("name"))
     if hmac.compare_digest(nh, na):
         raise HandshakeError("replayed nonce", auth=True)
+    if qr and m2.get("qr") is not True:
+        raise HandshakeError("no qr")  # an older headset: never send it a proof, so no strike
     name = name_h.strip() or default_name(spki_h)
     try:
         store.check_can_add(name, spki_h)  # before any proof, so a clash costs nobody a code
@@ -263,18 +286,26 @@ async def _headset_body(ch: Channel, headset, issuer, add_cb, confirm_cb, name_h
     name_a = validate_name(m1.get("name"))
     if not name_a.strip():
         raise HandshakeError("bad name")  # before "not pairing": costs no strike
+    asked_qr = m1.get("qr")
+    armed_qr = getattr(issuer, "qr_id", None)
+    code_at_hello = issuer.code
     if not issuer.active:
-        raise HandshakeError("not pairing")
+        raise _not_pairing(asked_qr is not None)
+    if asked_qr is not None or armed_qr is not None:
+        if not (isinstance(asked_qr, str) and armed_qr is not None and hmac.compare_digest(asked_qr, armed_qr)
+                and identity.fingerprint(spki_a) == issuer.qr_fingerprint):
+            raise _not_pairing(asked_qr is not None)
 
     nh = secrets.token_bytes(NONCE_LEN)
-    await ch.write("pair-hello", nonce=_b64s(nh), spki=_b64s(headset.spki_der), name=name_h)
+    extra = {"qr": True} if armed_qr is not None else {}
+    await ch.write("pair-hello", nonce=_b64s(nh), spki=_b64s(headset.spki_der), name=name_h, **extra)
     t_p = transcript(na, nh, spki_a, headset.spki_der, name_a, name_h)
 
     m3 = await ch.read("pair-proof")
     sig = _b64(m3, "sig", exact=SIG_LEN)
     mac = _b64(m3, "mac", exact=32)
     code = issuer.code
-    if code is None:
+    if code is None or code != code_at_hello:  # spent, expired or replaced (by a scanned QR, say) since P2
         raise HandshakeError("not pairing")
     if not identity.verify(spki_a, sig, agent_sig_message(t_p)):  # cheap, and before PBKDF2
         raise HandshakeError("bad signature", auth=True)
@@ -291,10 +322,13 @@ async def _headset_body(ch: Channel, headset, issuer, add_cb, confirm_cb, name_h
     await ch.write("pair-proof", sig=_b64s(identity.sign(headset.key, headset_sig_message(t_p))),
                    mac=_b64s(headset_mac(k_h, t_p)))
 
-    try:
-        ok = bool(await asyncio.wait_for(confirm_cb(confirm_prompt(name_a, spki_a)), confirm_timeout))
-    except asyncio.TimeoutError:
-        ok = False
+    if armed_qr is not None:
+        ok = True  # the user scanned this laptop's QR, which named spki_a's fingerprint
+    else:
+        try:
+            ok = bool(await asyncio.wait_for(confirm_cb(confirm_prompt(name_a, spki_a)), confirm_timeout))
+        except asyncio.TimeoutError:
+            ok = False
     await ch.write("pair-confirm", ok=ok, sig=_b64s(identity.sign(headset.key, confirm_message(ok, t_p))))
     if not ok:
         raise HandshakeError("declined", remote=True)  # remote: the agent has been told already
@@ -308,9 +342,15 @@ async def _headset_body(ch: Channel, headset, issuer, add_cb, confirm_cb, name_h
     return PairHeadsetResult(spki_a, name_a)
 
 
+def _not_pairing(qr_probe: bool) -> HandshakeError:
+    e = HandshakeError("not pairing")
+    e.qr_probe = qr_probe  # the laptop is checking whether its QR was scanned: the attempt is given back
+    return e
+
+
 async def serve_pair_connection(reader, writer, gate: HeadsetGate, *args, **kw) -> PairHeadsetResult:
     """asyncio.start_server callback body: applies the per-IP gate, then headset_pair(reader, writer, *args, **kw).
-    Refused sources are dropped without a reply."""
+    Refused sources are dropped without a reply. A QR check answered "not pairing" doesn't count against the rate."""
     peer = writer.get_extra_info("peername")
     source = peer[0] if peer else "?"
     if not gate.enter(source):
@@ -318,5 +358,9 @@ async def serve_pair_connection(reader, writer, gate: HeadsetGate, *args, **kw) 
         raise HandshakeError("rate limited")
     try:
         return await headset_pair(reader, writer, *args, **kw)
+    except HandshakeError as e:
+        if getattr(e, "qr_probe", False):
+            gate.refund(source)
+        raise
     finally:
         gate.leave(source)

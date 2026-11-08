@@ -21,19 +21,26 @@ namespace SpatialLauncher.LaptopLink
     public sealed class IssuedPairCode
     {
         public long Id { get; }
-        /// <summary>Canonical 12 characters (feeds the key derivation).</summary>
+        /// <summary>Canonical 8 characters, or 20 from a scanned QR (feeds the key derivation).</summary>
         public string Code { get; }
         public string Formatted { get { return PairCode.Format(Code); } }
+        /// <summary>For a code read from a laptop's QR: that laptop's fingerprint (only it may pair). Null for a shown code.</summary>
+        public string QrFingerprint { get; }
+        /// <summary>The QR's id (<see cref="PairCode.QrId"/>), or null for a shown code.</summary>
+        public string QrId { get; }
+        public bool FromQr { get { return QrFingerprint != null; } }
 
-        public IssuedPairCode(long id, string code)
+        public IssuedPairCode(long id, string code, string qrFingerprint = null)
         {
             Id = id;
             Code = code;
+            QrFingerprint = qrFingerprint;
+            QrId = qrFingerprint != null ? PairCode.QrId(code) : null;
         }
     }
 
     /// <summary>
-    /// The headset's pairing-code policy: one active code that lasts 120 s (Stopwatch), works once (the first correct
+    /// The headset's pairing-code policy (a shown code, or one read from a laptop's QR): one active code that lasts 120 s (Stopwatch), works once (the first correct
     /// proof spends it, whatever happens afterwards) and dies after 3 wrong proofs in total from any address. Issuing a
     /// new code kills the old one. <see cref="TryApplyProof"/> checks "this code is still active" and applies the
     /// strike or consume as one step under a lock, so it is safe from the worker thread that ran the key derivation.
@@ -66,6 +73,21 @@ namespace SpatialLauncher.LaptopLink
         /// <summary>A fresh code; any old one is killed.</summary>
         public IssuedPairCode Issue()
         {
+            return Install(PairCode.New(), null);
+        }
+
+        /// <summary>
+        /// The code from a laptop's QR (<see cref="PairCode.TryParseQr"/>) replaces any code, with the same lifetime and
+        /// strike rules; only the laptop with <paramref name="fingerprint"/> may use it.
+        /// </summary>
+        public IssuedPairCode ArmQr(string code, string fingerprint)
+        {
+            if (code == null || fingerprint == null) throw new ArgumentNullException(code == null ? "code" : "fingerprint");
+            return Install(code, fingerprint);
+        }
+
+        IssuedPairCode Install(string code, string qrFingerprint)
+        {
             long replacedId = 0;
             bool replaced = false;
             IssuedPairCode issued;
@@ -76,7 +98,7 @@ namespace SpatialLauncher.LaptopLink
                     replaced = true;
                     replacedId = active.Id;
                 }
-                issued = new IssuedPairCode(++nextId, PairCode.New());
+                issued = new IssuedPairCode(++nextId, code, qrFingerprint);
                 active = issued;
                 expires = clock() + ttl;
                 wrong = 0;

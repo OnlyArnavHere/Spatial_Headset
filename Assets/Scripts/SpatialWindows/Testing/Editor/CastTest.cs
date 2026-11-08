@@ -9,7 +9,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     /// <summary>
     /// Play-mode test for Cast and Wired (USB) mode. Cast: the launcher's Cast icon opens the picker, the media
     /// message whitelist, and (with SPATIAL_LAUNCHER_WEBRTC) the input sink's cast-only gating against a fake control
-    /// channel. Wired: the hotspot help and the Settings > Laptop rows.
+    /// channel. Wired: the cable help and the Settings > Laptop rows.
     /// Results use a [CastTest] prefix.
     /// </summary>
     static class CastTest
@@ -44,7 +44,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 CheckProtocol();
                 CheckGating();
                 yield return CheckCastPicker(launcher, opened);
-                CheckHotspotHelp();
+                CheckCableHelp();
                 yield return CheckWiredSettings(launcher);
             }
             finally
@@ -130,10 +130,11 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 "the Cast icon opens the laptop picker for a cast");
         }
 
-        static void CheckHotspotHelp()
+        static void CheckCableHelp()
         {
-            Check(UsbHotspot.Help.Contains("Personal Hotspot") && UsbHotspot.Help.Contains("172.20.10.1") && UsbHotspot.PhoneAddress == "172.20.10.1",
-                "the wired help says to turn on Personal Hotspot, plug in by USB and that agent.py dials 172.20.10.1");
+            Check(UsbCable.Help.Contains("cable") && UsbCable.Help.Contains("Trust") && UsbCable.Help.Contains("No Wi-Fi")
+                  && !UsbCable.Help.Contains("Hotspot"),
+                "the wired help says to plug in the cable, tap Trust, and that no Wi-Fi is needed");
         }
 
         static IEnumerator CheckWiredSettings(LauncherWindow launcher)
@@ -152,7 +153,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 wired.Press(wired.transform.position);
                 wired.Release(true);
                 yield return 0.1f;
-                Check(SettingsStore.Current.laptop.wired && content.ValueText("Laptop", "Wired help").Contains("agent.py dials 172.20.10.1"),
+                Check(SettingsStore.Current.laptop.wired && content.ValueText("Laptop", "Wired help") == UsbCable.Help,
                     $"choosing Wired shows how to connect (\"{content.ValueText("Laptop", "Wired help")}\")");
                 Check(content.Control("Laptop", "Connection", "Open Laptop picker") != null, "Connection opens the Laptop picker");
 

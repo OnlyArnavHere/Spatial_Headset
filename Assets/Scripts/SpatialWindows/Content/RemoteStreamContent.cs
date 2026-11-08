@@ -65,6 +65,8 @@ namespace SpatialLauncher.SpatialWindows
         public WindowButton KeysButton { get; private set; }
         /// <summary>The Keys button was clicked.</summary>
         public event Action KeyboardRequested;
+        /// <summary>A text field on the laptop got (true) or lost (false) focus in this window: the keyboard pops up or goes away.</summary>
+        public event Action<bool> TextFocusChanged;
         /// <summary>Where keyboard input for this screen goes: the input sink, if it takes keys (null otherwise).</summary>
         public IRemoteKeyboardSink KeyboardSink => IsCast ? null : Source?.Sink as IRemoteKeyboardSink;
         /// <summary>A view-only Cast window with media controls instead of pointer and keyboard input.</summary>
@@ -156,11 +158,21 @@ namespace SpatialLauncher.SpatialWindows
             BuildPanel();
             video.Start();
             session.Control.StateChanged += RefreshStatus;
+            session.Control.TextFocusChanged += OnTextFocus;
             session.Ended += OnLinkEnded;
             IsActive = !session.IsEnded;
             if (IsActive) ConsentGate.Current?.BeginLive(this);
             RefreshStatus();
             Relayout();
+        }
+
+        // The agent names the window the headset clicked in last; without one, the front-most laptop window takes it.
+        void OnTextFocus(bool editable, int slot)
+        {
+            if (this == null || IsCast) return;
+            if (slot >= 0 ? slot != Slot : KeyboardRouting.FindTarget(RemoteKeyboard.Current != null && RemoteKeyboard.Current.Manager != null ? RemoteKeyboard.Current.Manager.Windows : null) != this)
+                return;
+            TextFocusChanged?.Invoke(editable);
         }
 
         void OnLinkEnded(string reason)
@@ -263,7 +275,8 @@ namespace SpatialLauncher.SpatialWindows
         void Build(RemoteStreamSource source)
         {
             Source = source;
-            Surface = CreateSurface("RemoteScreen", transform, Source);
+            // Edge to edge: the picture takes the window's own rounded corners (no padding, no bezel).
+            Surface = CreateSurface("RemoteScreen", transform, Source, UITheme.WindowRadius);
             Surface.EmptyColor = PlaceholderColor;
 
             statusLabel = CreateLabel("Status", transform, "", TextRole.Title, TextAlignmentOptions.Center);
@@ -272,6 +285,7 @@ namespace SpatialLauncher.SpatialWindows
             statusLabel.textWrappingMode = TextWrappingModes.Normal;
 
             Source.Changed += RefreshStatus;
+            Source.Changed += FitWindowToPicture;
             Source.Start();
             RefreshStatus();
             Relayout();
@@ -279,7 +293,7 @@ namespace SpatialLauncher.SpatialWindows
 
         void BuildPanel()
         {
-            panel = CreateQuad("ConnectPanel", transform, CreateMaterial(PanelColor));
+            panel = CreateQuad("ConnectPanel", transform, CreateRounded(PanelColor, UITheme.WindowRadius)); // edge to edge: the window's corners
             badgeLabel = CreateLabel("Badge", transform, "", TextRole.Body, TextAlignmentOptions.MidlineLeft);
             badgeLabel.richText = false;
 
@@ -373,8 +387,33 @@ namespace SpatialLauncher.SpatialWindows
 #endif
         }
 
+        /// <summary>Bezel-less: the picture runs to the window's edges, with no padding around it.</summary>
+        protected override float ContentPadding => 0f;
+
+        bool fitting;
+
+        /// <summary>
+        /// Keeps the window exactly as tall as the picture (at the window's width) plus the panel below it, so there are no
+        /// empty bars beside or above the picture: when the stream's aspect changes, and after a resize.
+        /// </summary>
+        void FitWindowToPicture()
+        {
+            if (fitting || this == null || Window == null || Source == null) return;
+            float aspect = Source.Aspect;
+            if (!(aspect > 0.05f && aspect < 20f)) return;
+            float below = panel != null ? ConnectPanelHeight + (IsCast ? CastBarHeight : 0f) : 0f;
+            float width = Window.Size.x;
+            float height = (width - ContentPadding * 2f) / aspect + below + ContentPadding * 2f;
+            if (Mathf.Abs(height - Window.Size.y) < 0.002f) return;
+            fitting = true;
+            try { Window.SetSize(new Vector2(width, height)); }
+            finally { fitting = false; }
+        }
+
         protected override void Layout(Vector2 size)
         {
+            FitWindowToPicture();
+            if (Window != null && Mathf.Abs(Window.Size.y - ContentPadding * 2f - size.y) > 0.0005f) return; // refitted: laid out again already
             if (panel == null)
             {
                 Surface.Fit(size);
@@ -448,6 +487,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Link != null)
             {
                 Link.Control.StateChanged -= RefreshStatus;
+                Link.Control.TextFocusChanged -= OnTextFocus;
                 Link.Ended -= OnLinkEnded;
             }
 #endif
@@ -455,6 +495,7 @@ namespace SpatialLauncher.SpatialWindows
             if (Source != null)
             {
                 Source.Changed -= RefreshStatus;
+                Source.Changed -= FitWindowToPicture;
                 Source.Stop();
             }
             base.OnDestroy();

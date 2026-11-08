@@ -11,7 +11,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
     /// plane) and its pipeline status; the status HUD's lines and its layout (once, or once per eye in Stereo); and
     /// StereoPassthrough's rules and geometry (the whole camera image from AR Foundation's display matrix, the plane
     /// matching the camera's frustum). Run in the editor test scene; in DeviceMain it also switches HoloKit to Stereo and
-    /// checks the HUD is drawn in each eye and passthrough reacts. Also: the one-euro filter on 2D joints, two-hand
+    /// checks HoloKit's bar and buttons are hidden and passthrough is locked to the eyes and reacts. Also: the one-euro filter on 2D joints, two-hand
     /// identity matching, the tracking rate setting (Settings > Hands, with its heat note) and the camera format lines.
     /// Results use a [DeviceFixesTest] prefix.
     /// </summary>
@@ -404,13 +404,10 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
         static IEnumerator CheckScene()
         {
             var launcher = Object.FindFirstObjectByType<LauncherWindow>();
-            var hud = launcher != null ? launcher.GetComponent<DeviceStatusHud>() : null;
             var passthrough = launcher != null ? launcher.GetComponent<StereoPassthrough>() : null;
-            Check(hud != null && passthrough != null, "the launcher adds the status HUD and stereo passthrough");
-            if (hud == null || passthrough == null) yield break;
-
-            bool wasVisible = hud.Visible;
-            hud.Visible = true;
+            Check(passthrough != null && launcher.GetComponent<DeviceStatusHud>() == null && launcher.GetComponent<StereoChrome>() != null,
+                "the launcher adds stereo passthrough and StereoChrome, and no status HUD");
+            if (passthrough == null) yield break;
             // These checks are for zoom 1 (Mono leaves the camera background alone); PassthroughZoomTest covers zoom.
             float zoom = SettingsStore.Current.display.passthroughZoom;
             SettingsStore.Update(x => x.display.passthroughZoom = 1f);
@@ -418,8 +415,6 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             try
             {
                 yield return 0.5f;
-                Check(hud.Text.Contains("Mode: ") && hud.Text.Contains("Passthrough: ") && hud.Panels.Count == 1,
-                    $"the HUD shows its lines on screen once (\"{OneLine(hud.Text)}\")");
 
                 if (holoKit == null)
                 {
@@ -437,18 +432,39 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 // DeviceMain: switch HoloKit to Stereo and back.
                 holoKit.ScreenRenderMode = ScreenRenderMode.Stereo;
                 yield return 0.5f;
-                Check(hud.Panels.Count == 2 && hud.Text.Contains("Mode: Stereo"),
-                    $"in Stereo the HUD is drawn in both eyes ({hud.Panels.Count} panels)");
+                var uiCanvas = Object.FindFirstObjectByType<HoloKit.UI.HoloKitDefaultUICanvas>(FindObjectsInactive.Include);
+                Check(holoKit.StereoBar == null && (uiCanvas == null || !uiCanvas.gameObject.activeSelf),
+                    "in Stereo there is no HoloKit bar along the top and its buttons are hidden");
+                Check(holoKit.AlignmentGuide == null || !holoKit.AlignmentGuide.gameObject.activeSelf,
+                    "in Stereo HoloKit's alignment guide (outline and marker line) is hidden");
+                var eyes = new List<Camera>();
+                foreach (var eye in holoKit.CenterEyePose.GetComponentsInChildren<Camera>())
+                    if (eye.cullingMask != 0 && eye.isActiveAndEnabled) eyes.Add(eye);
+                eyes.Sort((a, b) => a.rect.x.CompareTo(b.rect.x));
+                Check(eyes.Count == 2 && eyes[0].rect == new Rect(0f, 0f, 0.5f, 1f) && eyes[1].rect == new Rect(0.5f, 0f, 0.5f, 1f),
+                    $"in Stereo each eye fills its half of the screen ({string.Join(", ", eyes.ConvertAll(e => e.rect.ToString()))})");
+                var tracking = Object.FindFirstObjectByType<LowLatencyTrackingManager>(FindObjectsInactive.Include);
+                var rotationField = typeof(LowLatencyTrackingManager).GetField("m_RotationSmoothing",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                Check(tracking == null || (rotationField != null && Mathf.Approximately((float)rotationField.GetValue(tracking), StereoChrome.RotationSmoothing)),
+                    "HoloKit's predicted pose smooths ARKit's corrections over 50 ms (steadier windows)");
+                Check(SettingsStore.Current.display.ipdMm >= 54f && new DisplaySettings().ipdMm == 63f,
+                    "the default eye distance is the 63 mm standard");
                 Check(passthrough.Status != "off (mono)" && passthrough.Status != "off (no HoloKit camera)",
                     $"in Stereo, passthrough runs or waits for the feed ({passthrough.Status})");
                 if (passthrough.Showing)
                 {
                     // XR Simulation's feed in the editor: the plane fills the AR camera's view at its distance.
-                    var cam = passthrough.Plane.parent.GetComponent<Camera>();
+                    // In Stereo the plane hangs from HoloKit's Stereo Tracked Pose (the eyes' pose), not the AR camera.
+                    var parent = passthrough.Plane.parent;
                     var bounds = passthrough.Plane.GetComponent<MeshRenderer>().bounds;
-                    var centre = cam.transform.InverseTransformPoint(bounds.center);
+                    var centre = parent.InverseTransformPoint(bounds.center);
+                    Check(parent == holoKit.CenterEyePose.parent,
+                        $"in Stereo the plane is locked to the eyes' pose (parent {parent.name})");
                     Check(passthrough.Feed != null && passthrough.Feed.IsCreated() && Mathf.Abs(centre.z - passthrough.Distance) < 0.01f,
-                        $"the feed is copied and the plane sits {centre.z:F2} m in front of the AR camera ({passthrough.Status})");
+                        $"the feed is copied and the plane sits {centre.z:F2} m in front of the eyes ({passthrough.Status})");
+                    Check(Mathf.Approximately(passthrough.ShownZoom, passthrough.Zoom) && Mathf.Approximately(passthrough.Zoom, 1f),
+                        $"in Stereo the image stays at real size, not enlarged to fill the eyes ({passthrough.ShownZoom:F2}x)");
                     var immersion = launcher.Immersion;
                     float level = immersion.Level;
                     immersion.SetLevel(1f);
@@ -460,12 +476,13 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 }
                 holoKit.ScreenRenderMode = ScreenRenderMode.Mono;
                 yield return 0.3f;
-                Check(!passthrough.Showing && passthrough.Status == "off (mono)" && hud.Panels.Count == 1,
-                    $"back in Mono, passthrough is off and the HUD is drawn once ({passthrough.Status})");
+                Check(!passthrough.Showing && passthrough.Status == "off (mono)",
+                    $"back in Mono, passthrough is off ({passthrough.Status})");
+                var monoCanvas = Object.FindFirstObjectByType<HoloKit.UI.HoloKitDefaultUICanvas>(FindObjectsInactive.Include);
+                Check(monoCanvas == null || monoCanvas.gameObject.activeSelf, "in Mono HoloKit's Stereo button is back");
             }
             finally
             {
-                hud.Visible = wasVisible;
                 SettingsStore.Update(x => x.display.passthroughZoom = zoom);
                 if (holoKit != null) holoKit.ScreenRenderMode = ScreenRenderMode.Mono;
             }

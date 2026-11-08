@@ -166,6 +166,9 @@ class LaunchTests(unittest.TestCase):
             self.assertIn("Spatial Launcher Agent", log_text)  # startup line is written and flushed
             self.assertIn("Quit requested", log_text)
             self.assertIn("Exiting with code 0", log_text)
+            from gui import web_app
+            if web_app.available():
+                self.assertIn("Window: web view", log_text)  # the HTML window, not the Tk fallback
             # nothing of ours may be left behind (MediaMTX runs from this folder's .runtime)
             self.assertEqual(_running_with(str(HERE / ".runtime")), [])
 

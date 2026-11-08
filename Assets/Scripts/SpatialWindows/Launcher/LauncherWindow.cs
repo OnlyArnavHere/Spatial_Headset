@@ -103,7 +103,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!TryGetComponent<HoloKitCameraFix>(out _)) gameObject.AddComponent<HoloKitCameraFix>();
             if (!TryGetComponent<StereoPassthrough>(out _)) gameObject.AddComponent<StereoPassthrough>();
             if (!TryGetComponent<BackdropBlur>(out _)) gameObject.AddComponent<BackdropBlur>();
-            if (!TryGetComponent<DeviceStatusHud>(out _)) gameObject.AddComponent<DeviceStatusHud>();
+            if (!TryGetComponent<StereoChrome>(out _)) gameObject.AddComponent<StereoChrome>();
             if (!TryGetComponent<PassthroughZoomControl>(out _)) gameObject.AddComponent<PassthroughZoomControl>();
             if (!TryGetComponent<ConsentGate>(out _)) gameObject.AddComponent<ConsentGate>();
             if (!TryGetComponent<LaptopLink.LinkService>(out _)) gameObject.AddComponent<LaptopLink.LinkService>();
@@ -296,12 +296,20 @@ namespace SpatialLauncher.SpatialWindows
 
             var content = new GameObject().AddComponent<RemoteStreamContent>();
             content.InitLinked(window, manager.WindowMaterial, connectionSettings, session, opened.Slot, target, cast);
-            if (!cast) content.KeyboardRequested += () => OpenKeyboard();
+            if (!cast)
+            {
+                content.KeyboardRequested += () => OpenKeyboard();
+                content.TextFocusChanged += editable =>
+                {
+                    if (editable) keyboard.OpenFor(window, automatic: true);
+                    else keyboard.CloseIfAutomatic(window);
+                };
+            }
             return window;
         }
 #endif
 
-        /// <summary>The pairing screen: a code to type into <c>agent.py --pair</c>. Closing it ends pairing mode.</summary>
+        /// <summary>The pairing screen: reads the laptop's QR code, or shows a code to type there. Closing it ends pairing mode.</summary>
         public SpatialWindow OpenPairing()
         {
             if (PairingWindow != null)

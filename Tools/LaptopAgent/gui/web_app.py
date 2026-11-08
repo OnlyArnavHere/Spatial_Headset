@@ -11,7 +11,6 @@ import sys
 import threading
 
 import autostart
-import network
 import settings as settings_mod
 from gui.main_window import LogQueueHandler, next_toggles, permission_text, status_text
 
@@ -27,10 +26,14 @@ class Bridge:
 
     def __init__(self, controller, saved: settings_mod.Settings, *, save=settings_mod.save, login=None,
                  wired_report=None, show_permissions: bool | None = None, open_settings=None,
-                 on_relaunch=None, on_quit=None, attach_log: bool = True, version: str = ""):
+                 on_relaunch=None, on_quit=None, attach_log: bool = True, version: str = "",
+                 on_minimize=None, on_close=None, on_shape=None):
         self._c, self._save, self._login = controller, save, login or autostart
         self._wired_report, self._open_settings = wired_report or _usb_report, open_settings
         self._on_relaunch, self._on_quit = on_relaunch, on_quit
+        self._on_minimize, self._on_close, self._on_shape = on_minimize, on_close, on_shape
+        # True when the OS blurs what is behind the window (gui/glass.py); False: the page draws a solid panel.
+        self.glass: bool | None = None
         self._show_permissions = (sys.platform == "darwin") if show_permissions is None else show_permissions
         self._lock = threading.RLock()
         self._settings = saved
@@ -70,7 +73,7 @@ class Bridge:
                 "status": {"state": self._status.get("state", "idle"), "text": status_text(self._status),
                            "encoder": self._status.get("encoder") or "", "message": self._status.get("message", "")},
                 "settings": {k: getattr(self._settings, k) for k in
-                             ("allow_control", "cast_only", "start_at_login", "headset_address", "wired")},
+                             ("allow_control", "cast_only", "start_at_login", "wired")},
                 "login": {"enabled": state == autostart.ENABLED, "available": state != autostart.UNAVAILABLE,
                           "message": login_message or ("Available in the installed app"
                                                        if state == autostart.UNAVAILABLE else "")},
@@ -84,6 +87,8 @@ class Bridge:
                 "kill_switch": _kill_switch(),
                 "laptop": socket.gethostname(),
                 "version": self._version,
+                "glass": self.glass,
+                "platform": sys.platform,
                 "log": self._log[first:] if since <= self._log_seq else self._log,
                 "log_seq": self._log_seq,
             }
@@ -233,11 +238,6 @@ class Bridge:
                     self._wired_text = ""
             return error
 
-    def set_address(self, text: str) -> str:
-        with self._lock:
-            return self._commit(settings_mod.Settings(**{**vars(self._settings),
-                                                         "headset_address": (text or "").strip()}))
-
     def _commit(self, new: settings_mod.Settings) -> str:
         try:
             new.validate()
@@ -274,6 +274,24 @@ class Bridge:
         if row is not None and self._open_settings is not None:
             self._open_settings(row.url)
 
+    def minimize(self) -> None:
+        """The window's minimize button (the window has no title bar of its own)."""
+        if self._on_minimize is not None:
+            threading.Thread(target=self._on_minimize, daemon=True, name="minimize").start()
+
+    def set_shape(self, shape) -> None:
+        """The page's tile shapes ([[left, top, width, height, radius], ...] CSS px), so the glass fits them (macOS)."""
+        if self._on_shape is not None and isinstance(shape, list):
+            try:
+                self._on_shape(shape)
+            except Exception:
+                log.debug("Glass shape failed", exc_info=True)
+
+    def close_window(self) -> None:
+        """The window's close button: hides it to the tray (Windows) or the Dock (macOS); the agent keeps running."""
+        if self._on_close is not None:
+            threading.Thread(target=self._on_close, daemon=True, name="close").start()
+
     def relaunch(self) -> None:
         if self._on_relaunch is not None:
             self._on_relaunch()
@@ -309,8 +327,7 @@ class SessionWatch(logging.Handler):
         with self._guard:
             if record.msg == self.LINKED and len(args) >= 2:
                 host = str(args[1])
-                self._live[str(args[0])] = ("USB cable" if host.startswith("usb:") else
-                                            "Personal Hotspot" if host.startswith("172.20.10.") else "Wi-Fi")
+                self._live[str(args[0])] = "USB cable" if host.startswith("usb:") else "Wi-Fi"
             elif record.msg == self.ENDED and args:
                 self._live.pop(str(args[0]), None)
 
@@ -345,6 +362,25 @@ def _reveal(folder: str) -> None:
         log.warning("Couldn't open %s", folder)
 
 
+def _lift_windows(window) -> bool:
+    """Brings the window to the front with Win32 calls (they release the GIL). False when it has no handle yet."""
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    try:
+        import ctypes
+        hwnd = ctypes.c_void_p(int(native.Handle.ToInt64()))  # reading the handle sends no message
+        user32 = ctypes.windll.user32
+        flags = 0x0001 | 0x0002 | 0x0040  # NOSIZE | NOMOVE | SHOWWINDOW
+        user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, flags)  # HWND_TOPMOST
+        user32.SetWindowPos(hwnd, ctypes.c_void_p(-2), 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        logging.getLogger("window").debug("Win32 lift failed", exc_info=True)
+        return False
+
+
 class WebRoot:
     """What app.App needs from its window (withdraw, deiconify, lift, focus_force, after, destroy) on a pywebview
     window. after() uses timers: App.poll then runs on a timer thread, and every call it makes is thread-safe."""
@@ -365,6 +401,11 @@ class WebRoot:
         self.window.restore()
 
     def lift(self) -> None:
+        # On Windows, pywebview's on_top sets Form.TopMost from this (non-GUI) thread. Through pythonnet that property set
+        # keeps the GIL while it waits for the GUI thread, which needs the GIL to answer: both wait forever and the window
+        # stops responding (seen when a second launch asked the running app to show itself). ctypes releases the GIL.
+        if sys.platform == "win32" and _lift_windows(self.window):
+            return
         self.window.on_top = True
         self.window.on_top = False
 

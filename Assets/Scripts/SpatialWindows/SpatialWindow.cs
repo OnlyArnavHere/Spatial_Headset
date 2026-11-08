@@ -147,6 +147,39 @@ namespace SpatialLauncher.SpatialWindows
         // Focus presentation: how far the visuals sit towards the viewer, and their scale.
         float targetDepth, currentDepth;
         float targetScale = 1f, currentScale = 1f;
+        Vector3 dockOffset, dockedAt;
+
+        /// <summary>
+        /// The window this one is docked to (the virtual keyboard under the window it types into), or null. A docked
+        /// window never takes focus from its owner (<see cref="WindowManager.Focus"/> focuses the owner instead), comes
+        /// forward and recedes with it, and follows it when it moves. Dragging the docked window itself just changes
+        /// where it sits relative to the owner.
+        /// </summary>
+        public SpatialWindow DockedTo { get; private set; }
+        /// <summary>The depth offset the visuals are animating to (see <see cref="SetPresentation"/>).</summary>
+        public float TargetDepth => targetDepth;
+        /// <summary>The scale the visuals are animating to (see <see cref="SetPresentation"/>).</summary>
+        public float TargetScale => targetScale;
+
+        /// <summary>Docks this window to <paramref name="owner"/> where it is now, or undocks it (null). Use <see cref="WindowManager.Dock"/>.</summary>
+        internal void DockTo(SpatialWindow owner)
+        {
+            DockedTo = owner == this ? null : owner;
+            if (DockedTo == null) return;
+            dockOffset = DockedTo.transform.InverseTransformPoint(transform.position);
+            dockedAt = transform.position;
+        }
+
+        void FollowDock()
+        {
+            if (DockedTo == null) return;
+            if (DockedTo.Equals(null)) { DockedTo = null; return; } // the owner was destroyed
+            var owner = DockedTo.transform;
+            // Moved by something else since the last frame (the user dragged it): keep the new place, relative to the owner.
+            if ((transform.position - dockedAt).sqrMagnitude > 1e-8f) dockOffset = owner.InverseTransformPoint(transform.position);
+            transform.position = owner.TransformPoint(dockOffset);
+            dockedAt = transform.position;
+        }
         WindowMotion motion;
 
         // Body-locked pose, relative to the head's yaw frame.
@@ -602,7 +635,8 @@ namespace SpatialLauncher.SpatialWindows
             UpdateReveal(Time.unscaledDeltaTime);
             if (head == null) return;
 
-            if (!worldLocked)
+            if (DockedTo != null) FollowDock();
+            else if (!worldLocked)
             {
                 var yaw = HeadYaw();
                 var targetPosition = head.position + yaw * headLocalPosition;
@@ -612,12 +646,19 @@ namespace SpatialLauncher.SpatialWindows
                     transform.rotation = Quaternion.Slerp(transform.rotation, yaw * headLocalRotation, t);
             }
 
-            if (billboard) FaceHead();
+            // A world-locked window turns to face the head only when it moves (spawned, dragged, following its dock), not
+            // every frame: turning with each small head movement made every window sway, which made people sick.
+            if (billboard && (!worldLocked || !faced || (transform.position - facedFrom).sqrMagnitude > 1e-6f)) FaceHead();
         }
+
+        Vector3 facedFrom;
+        bool faced;
 
         void FaceHead()
         {
             if (head == null) return;
+            facedFrom = transform.position;
+            faced = true;
             var away = transform.position - head.position;
             if (billboardYawOnly) away.y = 0f;
             if (away.sqrMagnitude < 1e-6f) return;

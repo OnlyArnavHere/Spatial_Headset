@@ -56,7 +56,7 @@ def make(settings=None):
     c = FakeController()
     saved = []
     b = web_app.Bridge(c, settings or Settings(), save=saved.append, login=LOGIN, show_permissions=False,
-                       attach_log=False, wired_report=lambda: SimpleNamespace(lines=lambda: ["hotspot ok"]))
+                       attach_log=False, wired_report=lambda: "cable ok")
     return b, c, saved
 
 
@@ -152,18 +152,13 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(s["cast_only"])
         self.assertTrue(saved[-1].allow_control)
 
-    def test_bad_address_is_refused_with_a_message(self):
-        b, c, saved = make()
-        self.assertNotEqual(b.set_address("not an address!!"), "")
-        self.assertEqual(saved, [])
-
-    def test_wired_on_runs_the_hotspot_check(self):
+    def test_wired_on_runs_the_cable_check(self):
         b, c, _ = make()
         b.set_toggle("wired", True)
         deadline = time.time() + 3
-        while time.time() < deadline and b.poll(0)["wired_text"] != "hotspot ok":
+        while time.time() < deadline and b.poll(0)["wired_text"] != "cable ok":
             time.sleep(0.02)
-        self.assertEqual(b.poll(0)["wired_text"], "hotspot ok")
+        self.assertEqual(b.poll(0)["wired_text"], "cable ok")
 
     def test_log_lines_arrive_once(self):
         b, c, _ = make()
@@ -177,6 +172,38 @@ class BridgeTests(unittest.TestCase):
     def test_the_page_ships_with_the_app(self):
         self.assertTrue(all(__import__("os").path.isfile(__import__("os").path.join(web_app.WEB_DIR, f))
                             for f in ("index.html", "app.css", "app.js")))
+
+
+class LiftTests(unittest.TestCase):
+    class Window:
+        def __init__(self, native):
+            self.native = native
+            self.on_top_sets = []
+
+        @property
+        def on_top(self):
+            return False
+
+        @on_top.setter
+        def on_top(self, value):
+            self.on_top_sets.append(value)
+
+    def test_windows_lift_never_sets_on_top_from_another_thread(self):
+        # Setting pywebview's on_top off the GUI thread deadlocked the window on Windows (a second launch froze it).
+        lifted = []
+        original, platform = web_app._lift_windows, web_app.sys.platform
+        web_app._lift_windows = lambda window: lifted.append(window) or True
+        web_app.sys.platform = "win32"
+        try:
+            window = self.Window(native=object())
+            web_app.WebRoot(window).lift()
+        finally:
+            web_app._lift_windows, web_app.sys.platform = original, platform
+        self.assertEqual(lifted, [window])
+        self.assertEqual(window.on_top_sets, [])
+
+    def test_lift_without_a_handle_is_refused(self):
+        self.assertFalse(web_app._lift_windows(self.Window(native=None)))
 
 
 if __name__ == "__main__":
