@@ -74,8 +74,8 @@ Settings > Control Center if missing).
 1. **Mono AR (phone in hand).** The app starts in landscape with the camera view, and the Home launcher floats in front
    of you; open the Image and Video windows.
    *Capture:* a screen recording walking around the windows (do they stay put in the room?).
-2. **HoloKit stereo view.** Tap HoloKit's on-screen **Stereo** button, then put the phone in the headset. The stereo
-   bar along the phone's top edge has **MONO** to come back.
+2. **HoloKit stereo view.** Tap HoloKit's on-screen **Stereo** button, then put the phone in the headset. To come
+   back, pinch Settings > Display > **Leave Stereo** (there is no bar along the top any more).
    *Capture:* a short video filmed through one lens, a screen recording, and a note of how sharp and comfortable it
    is and whether the two images line up (double vision means the phone model's calibration is off).
 3. **Passthrough.** In the headset, look at the room: it's the single rear camera, so it's flat (mono).
@@ -129,7 +129,7 @@ Voice > On-device only), and any error the keyboard's status line shows.
 | No Stereo button | The HoloKit canvas is missing | Check iOS Device Build flags it; HoloKit starts in mono |
 | Stereo images don't line up | Phone model not in HoloKit's list | Note the model; see HoloKit's Phone_Calibration_Guide |
 | No hand cursor | Not LiDAR, iOS < 18, hand too close/far, dim light | Check the model and iOS; 30–60 cm; more light |
-| Laptop window: "Can't reach …" | Different network, firewall, wrong address, Local Network denied | Same Wi-Fi; Windows network Private and allow the prompts; use the address the agent prints; Settings > Privacy & Security > Local Network > (app) on. Guest networks often block devices from each other: use the phone's hotspot instead (laptop joins it) |
+| Laptop window: "Can't reach …" | Different network, firewall, Local Network denied | Same Wi-Fi; Windows network Private and allow the prompts; or use the USB cable (see [wired.md](wired.md)); Settings > Privacy & Security > Local Network > (app) on. Guest networks often block devices from each other: use the phone's hotspot instead (laptop joins it) |
 | Laptop window: pairing code rejected | Expired (2 minutes), already used, or 3 wrong tries | Start Pair new laptop again; see [connect.md](connect.md) (replaces the old token) |
 | Laptop window: connected, but no picture | Captured window minimized, or the phone can't decode the stream | Restore the window; restart the agent with `--encoder x264` |
 | App gets slow after a few minutes | Heat: HoloKit lowers the stereo frame rate | That's the temperature test's result: note it, let the phone cool |

@@ -5,6 +5,7 @@ so window and monitor rectangles match what Windows Graphics Capture records and
 """
 import ctypes
 import ctypes.wintypes as wt
+import os
 import sys
 
 if sys.platform != "win32":
@@ -83,11 +84,17 @@ _WS_EX_TOOLWINDOW = 0x00000080
 
 
 def list_windows() -> list[Window]:
-    """Visible, titled, top-level windows a user would recognise (no tool windows, no cloaked UWP shells)."""
+    """Visible, titled, top-level windows a user would recognise (no tool windows, no cloaked UWP shells), and never
+    this agent's own window (it is hidden from capture, so streaming it would show nothing)."""
     windows: list[Window] = []
+    own_pid = os.getpid()
 
     def collect(hwnd, _data):
         if not user32.IsWindowVisible(hwnd) or user32.GetWindowTextLengthW(hwnd) == 0:
+            return True
+        pid = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == own_pid:
             return True
         if user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TOOLWINDOW:
             return True

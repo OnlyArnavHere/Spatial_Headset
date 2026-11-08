@@ -1,7 +1,7 @@
 """The status window: running or idle, paired headsets, the settings toggles, the log.
 
 Tk objects are touched on the main thread only. Everything from other threads (the controller's events, log records,
-the slow wired-network check) comes through queues that poll() drains with root.after.
+the slow USB cable check) comes through queues that poll() drains with root.after.
 Importing this module opens no window; the helpers below are plain functions.
 """
 import logging
@@ -13,13 +13,13 @@ from tkinter import messagebox, ttk
 
 import autostart
 import hostos
-import network
 import settings as settings_mod
 from hostos import _macos_perms
+from gui import theme
 from gui.pair_dialog import PairDialog
 
 log = logging.getLogger("window")
-PAD = 12
+PAD = theme.PAD
 POLL_MS = 200
 LOG_LINES = 500
 
@@ -79,7 +79,7 @@ class LogQueueHandler(logging.Handler):
 
 class MainWindow:
     def __init__(self, root: tk.Misc, controller, settings: settings_mod.Settings | None = None, *,
-                 save=settings_mod.save, wired_report=network.wired_report, kill_switch: str | None = None,
+                 save=settings_mod.save, wired_report=None, kill_switch: str | None = None,
                  poll_ms: int = POLL_MS, attach_log: bool = True, login=None, show_permissions: bool | None = None,
                  open_settings=_macos_perms.open_settings, on_relaunch=None):
         self.root, self.controller, self._save = root, controller, save
@@ -88,7 +88,7 @@ class MainWindow:
         self._show_permissions = (sys.platform == "darwin") if show_permissions is None else show_permissions
         self._perm_widgets: dict = {}
         self._perm_tick = 0
-        self._wired_report, self._poll_ms = wired_report, poll_ms
+        self._wired_report, self._poll_ms = wired_report or _usb_report, poll_ms
         self.settings = settings or settings_mod.Settings()
         self.dialog: PairDialog | None = None
         self._wired_results: queue.Queue = queue.Queue()
@@ -98,7 +98,8 @@ class MainWindow:
         if attach_log:
             logging.getLogger().addHandler(self.log_handler)
         root.title("Spatial Launcher Agent")
-        root.minsize(520, 560)
+        root.minsize(560, 640)
+        theme.apply(root)
         self._build(kill_switch if kill_switch is not None else hostos.KILL_SWITCH)
         self.refresh_pairs()
         self._show_status(self.controller.status())
@@ -111,7 +112,10 @@ class MainWindow:
     # --- layout --------------------------------------------------------------------------------------------------
 
     def _build(self, kill_switch: str) -> None:
-        outer = ttk.Frame(self.root, padding=PAD)
+        head = ttk.Frame(self.root, padding=(PAD + 4, PAD + 4, PAD + 4, 0))
+        head.pack(fill="x")
+        ttk.Label(head, text="Spatial Launcher Agent", style="Title.TLabel").pack(anchor="w")
+        outer = ttk.Frame(self.root, padding=(PAD + 4, 6, PAD + 4, PAD + 4))
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(5, weight=1)
@@ -120,9 +124,9 @@ class MainWindow:
         top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(0, weight=1)
         self.status = tk.StringVar()
-        ttk.Label(top, textvariable=self.status, font=("TkDefaultFont", 11, "bold"), wraplength=330,
+        ttk.Label(top, textvariable=self.status, style="Status.TLabel", wraplength=330,
                   justify="left").grid(row=0, column=0, sticky="w")
-        self.start_button = ttk.Button(top, text="Start", command=self.controller.start)
+        self.start_button = ttk.Button(top, text="Start", style="Accent.TButton", command=self.controller.start)
         self.start_button.grid(row=0, column=1, padx=(8, 0))
         self.stop_button = ttk.Button(top, text="Stop all", command=self.controller.stop_all)
         self.stop_button.grid(row=0, column=2, padx=(8, 0))
@@ -131,8 +135,9 @@ class MainWindow:
         pairs.grid(row=1, column=0, sticky="ew", pady=(PAD, 0))
         pairs.columnconfigure(0, weight=1)
         self.pair_list = tk.Listbox(pairs, height=4, activestyle="none", exportselection=False)
+        theme.style_list(self.pair_list)
         self.pair_list.grid(row=0, column=0, rowspan=3, sticky="ew")
-        ttk.Button(pairs, text="Pair new headset...", command=self.open_pair_dialog).grid(
+        ttk.Button(pairs, text="Pair new headset...", style="Accent.TButton", command=self.open_pair_dialog).grid(
             row=0, column=1, padx=(8, 0), sticky="ew")
         ttk.Button(pairs, text="Remove", command=self.remove_selected).grid(
             row=1, column=1, padx=(8, 0), pady=(6, 0), sticky="ew")
@@ -146,7 +151,7 @@ class MainWindow:
                      for name in ("allow_control", "cast_only", "start_at_login", "wired")}
         rows = [("allow_control", "Allow control (mouse and keyboard from the headset; asked each time)"),
                 ("cast_only", "Cast only (view plus play/pause, seek and volume)"),
-                ("start_at_login", "Start when I log in (available in the installed app)")]
+                ("start_at_login", "Start when I log in")]
         for i, (name, text) in enumerate(rows):
             button = ttk.Checkbutton(options, text=text, variable=self.vars[name],
                                      command=lambda n=name: self.on_toggle(n))
@@ -154,25 +159,17 @@ class MainWindow:
             if name == "start_at_login":
                 self.login_button = button
         self.login_note = tk.StringVar()
-        ttk.Label(options, textvariable=self.login_note, foreground="gray30", wraplength=470).grid(
+        ttk.Label(options, textvariable=self.login_note, style="Muted.TLabel", wraplength=470).grid(
             row=2, column=1, columnspan=2, sticky="e")
-        ttk.Label(options, text="Headset address").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        self.address = tk.StringVar(value=self.settings.headset_address)
-        entry = ttk.Entry(options, textvariable=self.address)
-        entry.grid(row=3, column=1, sticky="ew", padx=8, pady=(8, 0))
-        entry.bind("<Return>", lambda _e: self.on_address())
-        ttk.Button(options, text="Apply", command=self.on_address).grid(row=3, column=2, pady=(8, 0))
-        ttk.Label(options, text="Leave empty to find headsets automatically.", foreground="gray40").grid(
-            row=4, column=1, columnspan=2, sticky="w", padx=8)
-        ttk.Checkbutton(options, text="Wired (USB Personal Hotspot)", variable=self.vars["wired"],
+        ttk.Checkbutton(options, text="Wired (USB cable, no Wi-Fi needed)", variable=self.vars["wired"],
                         command=lambda: self.on_toggle("wired")).grid(row=5, column=0, columnspan=3, sticky="w",
                                                                       pady=(8, 2))
         self.wired_text = tk.StringVar()
         ttk.Label(options, textvariable=self.wired_text, wraplength=470, justify="left",
-                  foreground="gray30").grid(row=6, column=0, columnspan=3, sticky="w")
+                  style="Muted.TLabel").grid(row=6, column=0, columnspan=3, sticky="w")
 
         self.permission_note = tk.StringVar()
-        ttk.Label(outer, textvariable=self.permission_note, foreground="#9a3412", wraplength=480,
+        ttk.Label(outer, textvariable=self.permission_note, style="Warn.TLabel", wraplength=480,
                   justify="left").grid(row=6, column=0, sticky="w")
         if self._show_permissions:
             self._build_permissions(outer)
@@ -183,7 +180,8 @@ class MainWindow:
         self.download_bar = ttk.Progressbar(self.download_frame, mode="determinate", maximum=100)
         self.download_bar.pack(fill="x", pady=(2, 0))
         self.download_frame.grid_remove()
-        ttk.Label(outer, text=f"Emergency stop: press {kill_switch} anywhere to end every session.").grid(
+        ttk.Label(outer, text=f"Emergency stop: press {kill_switch} anywhere to end every session.",
+                  style="Muted.TLabel").grid(
             row=3, column=0, sticky="w", pady=(PAD, 0))
         ttk.Label(outer, text="Log").grid(row=4, column=0, sticky="w", pady=(PAD, 2))
         logframe = ttk.Frame(outer)
@@ -191,7 +189,9 @@ class MainWindow:
         logframe.columnconfigure(0, weight=1)
         logframe.rowconfigure(0, weight=1)
         self.log_text = tk.Text(logframe, height=8, wrap="word", state="disabled", relief="flat",
-                                borderwidth=1, highlightthickness=1)
+                                borderwidth=1, highlightthickness=1, padx=8, pady=6,
+                                font=("Consolas", 9) if sys.platform == "win32" else "TkFixedFont")
+        theme.style_list(self.log_text)
         self.log_text.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(logframe, command=self.log_text.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -205,7 +205,7 @@ class MainWindow:
             label = ttk.Label(box, text=name)
             label.grid(row=i, column=0, sticky="w", pady=2)
             state = tk.StringVar()
-            ttk.Label(box, textvariable=state, foreground="gray30").grid(row=i, column=1, sticky="w", padx=8)
+            ttk.Label(box, textvariable=state, style="Muted.TLabel").grid(row=i, column=1, sticky="w", padx=8)
             frame = ttk.Frame(box)
             frame.grid(row=i, column=2, sticky="e")
             self._perm_widgets[name] = state
@@ -318,10 +318,6 @@ class MainWindow:
         elif name == "wired":
             self.wired_text.set("")
 
-    def on_address(self) -> None:
-        text = self.address.get().strip()
-        self._commit(settings_mod.Settings(**{**vars(self.settings), "headset_address": text}))
-
     def _commit(self, new: settings_mod.Settings) -> bool:
         try:
             new.validate()
@@ -336,7 +332,6 @@ class MainWindow:
             self._save(new)
         except ValueError as e:
             messagebox.showerror("Settings", str(e), parent=self.root)
-            self.address.set(self.settings.headset_address)
             for key in self.vars:
                 self.vars[key].set(getattr(self.settings, key))
             return False
@@ -344,15 +339,15 @@ class MainWindow:
             # apply() ran before save(), so the new settings are in effect for this run; only the file failed
             messagebox.showerror("Settings", f"Couldn't save settings: {e}", parent=self.root)
         self.settings = new
-        self.address.set(new.headset_address)
         return True
 
     def _check_wired(self) -> None:
-        self.wired_text.set("Checking the USB hotspot...")
+        self.wired_text.set("Looking for the iPhone on the USB cable...")
 
         def work() -> None:
             try:
-                lines = "\n".join(self._wired_report().lines())
+                report = self._wired_report()
+                lines = report if isinstance(report, str) else "\n".join(report.lines())
             except Exception as e:
                 lines = f"Couldn't check: {e}"
             self._wired_results.put(lines)
@@ -438,3 +433,8 @@ class MainWindow:
             except tk.TclError:
                 pass
         logging.getLogger().removeHandler(self.log_handler)
+
+
+def _usb_report() -> str:
+    import usbmux
+    return usbmux.describe()

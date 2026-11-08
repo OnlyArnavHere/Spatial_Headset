@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spatial Launcher Agent</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- A desktop widget, not an app window: glass tiles straight on the desktop, like Control Center. Each .t is one
+     tile; the page reports their shapes so the glass is cut to them where the OS allows (gui/glass.py). -->
+<main class="widget pywebview-drag-region" id="widget">
+
+  <!-- Status. data-state: off, waiting, live, error. The whole widget drags from anywhere but its controls. -->
+  <section class="t pill status pywebview-drag-region" id="w-status" data-state="off" aria-live="polite">
+    <span class="ring-wrap pywebview-drag-region">
+      <svg class="ring" viewBox="0 0 48 48" aria-hidden="true"><circle class="ring-track" cx="24" cy="24" r="21"/><circle class="ring-fill" cx="24" cy="24" r="21"/></svg>
+      <span class="ring-icon" data-icon="headset"></span>
+    </span>
+    <span class="status-copy pywebview-drag-region">
+      <b id="st-title">Off</b>
+      <small id="st-sub">Turn on so your headset can connect</small>
+    </span>
+    <button class="power" id="power" type="button" title="Turn on" aria-label="Turn on"><span data-icon="power"></span></button>
+    <span class="progress" id="dl" hidden><span id="dl-bar"></span></span>
+  </section>
+
+  <!-- What the headset may do, and the cable: round buttons -->
+  <div class="rounds">
+    <button class="t round" type="button" data-mode="view" title="Watch: the headset only sees the windows you share"><span data-icon="eye"></span><em>Watch</em></button>
+    <button class="t round" type="button" data-mode="control" title="Control: the headset can ask to use the mouse and keyboard (you approve each time)"><span data-icon="pointer"></span><em>Control</em></button>
+    <button class="t round" type="button" data-mode="cast" title="Cast: watch, plus play, pause, seek and volume"><span data-icon="cast"></span><em>Cast</em></button>
+    <label class="t round tg" id="wired-w" title="USB cable: connect over the iPhone's cable, no Wi-Fi needed">
+      <input type="checkbox" class="sw-hidden" data-setting="wired" aria-label="Connect over the USB cable">
+      <span data-icon="usb"></span><em id="wired-value">Cable</em>
+    </label>
+  </div>
+
+  <!-- Pair, and the headsets -->
+  <button class="t pill small-pill" id="qr-open" type="button" title="Pair a headset: show a QR code to look at">
+    <span class="pill-icon" data-icon="qr"></span><span class="pill-copy"><b>Pair</b><small>QR code</small></span>
+  </button>
+  <button class="t pill small-pill" id="heads-open" type="button" title="Paired headsets">
+    <span class="pill-icon" data-icon="headset"></span><span class="pill-copy"><b id="heads-title">Headsets</b><small id="heads-sub">None yet</small></span>
+  </button>
+
+  <!-- Settings, minimize, close -->
+  <div class="foot">
+    <button class="t chipbtn" id="more-open" type="button">Settings</button>
+    <button class="t mini" id="win-min" type="button" title="Minimize" aria-label="Minimize"><span data-icon="minus"></span></button>
+    <button class="t mini" id="win-close" type="button" title="Quit (paired headsets are kept)" aria-label="Quit"><span data-icon="x"></span></button>
+  </div>
+</main>
+
+<!-- Pairing: one glass card over the widget -->
+<section class="t card" id="pair-live" hidden>
+  <div class="qr" id="qr" role="img" aria-label="Pairing QR code" hidden></div>
+  <p class="pair-prompt"><span class="spinner" id="pair-spin"></span><span id="pair-prompt"></span></p>
+  <form class="code-form" id="code-form" autocomplete="off" hidden>
+    <input id="code" placeholder="XXXX-XXXX" maxlength="40" spellcheck="false" aria-label="Code shown on the headset">
+    <button class="btn ink" type="submit">Pair</button>
+  </form>
+  <p class="pair-status" id="pair-status"></p>
+  <div class="row">
+    <button class="btn plain" id="pair-switch" type="button">Type a code instead</button>
+    <button class="btn plain" id="pair-cancel" type="button">Cancel</button>
+  </div>
+</section>
+
+<!-- Settings and the paired headsets: one glass card over the widget -->
+<section class="t card sheet" id="sheet" hidden role="dialog" aria-labelledby="sheet-title">
+  <div class="sheet-head pywebview-drag-region">
+    <b id="sheet-title">Settings</b>
+    <button class="btn plain" id="sheet-close" type="button">Done</button>
+  </div>
+  <div class="sheet-body">
+    <h3>Headsets</h3>
+    <ul class="heads" id="heads"></ul>
+    <p class="w-error" id="pairs-error" hidden></p>
+    <button class="btn plain wide" id="type-open" type="button">Pair by typing a code</button>
+
+    <label class="line tg" id="login-w">
+      <span>Open at login<small id="login-value">Off</small></span>
+      <input type="checkbox" class="sw" data-setting="start_at_login" aria-label="Open when I log in">
+    </label>
+    <p class="note-line" id="mode-note"></p>
+    <pre class="note" id="wired-text" hidden></pre>
+    <span id="wired-group" hidden></span>
+
+    <div id="perm-group" hidden>
+      <h3>macOS permissions</h3>
+      <div id="perms"></div>
+      <button class="btn plain" id="relaunch" type="button">Quit and reopen</button>
+    </div>
+
+    <div class="kv"><span>Emergency stop</span><b id="kill">Ctrl+Alt+Shift+Q</b></div>
+    <div class="kv"><span>Laptop</span><b id="laptop"></b></div>
+    <div class="kv"><span>Version</span><b id="version"></b></div>
+    <button class="row-btn" id="open-logs" type="button">Open log folder</button>
+    <button class="row-btn danger" id="quit" type="button">Quit Spatial Launcher Agent</button>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

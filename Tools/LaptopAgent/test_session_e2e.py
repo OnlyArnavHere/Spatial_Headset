@@ -60,6 +60,15 @@ async def until(condition, timeout: float, what: str, step: float = 0.05):
     raise AssertionError(f"timed out after {timeout:g} s waiting for {what}")
 
 
+def found_by_bonjour(*found):
+    """Bonjour stand-in for the runner and for --pair: these headsets show up once, then nothing more."""
+    async def browse(pairing=False, **_kw):
+        for item in found:
+            yield item
+        await asyncio.sleep(3600)
+    return browse
+
+
 class FakeStreams(StreamManager):
     """The real StreamManager over made-up windows, each captured by an ffmpeg test pattern."""
 
@@ -160,7 +169,8 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
 
     async def start_runner(self, ident=None, store=None, port=None, **options) -> session.LinkRunner:
         runner = session.LinkRunner(ident or self.agent_ident, store or self.store, self.streams, self.rtsp_port,
-                                    max_windows=2, pinned=[("127.0.0.1", port or self.port)], **options)
+                                    max_windows=2, discover=True,
+                                    browse=found_by_bonjour(("127.0.0.1", port or self.port)), **options)
         task = asyncio.ensure_future(runner.run())
 
         async def stop():
@@ -248,18 +258,18 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
                                            gate=handshake.HeadsetGate(attempts=1000), echo=lambda *a: None)
         port = await headset.start()
         self.addAsyncCleanup(headset.stop)
-        typed = iter(["not a code", "AAAA-AAAA-AAAA", headset.code.lower()])  # bad format, wrong code, right code
+        typed = iter(["nope", "AAAA-AAAA", headset.code.lower()])  # bad format, wrong code, right code
         prompts, said = [], []
 
         def read_line(prompt):
             prompts.append(prompt)
             return next(typed)
 
-        code = await agent.pair_command(("127.0.0.1", port), ident, store, "Test Laptop", read_line=read_line,
-                                        say=said.append)
+        code = await agent.pair_command(ident, store, "Test Laptop", read_line=read_line, say=said.append,
+                                        browse=found_by_bonjour(("127.0.0.1", port)), find_seconds=0.2)
         self.assertEqual(code, 0, said)
         self.assertEqual(len(prompts), 3)
-        self.assertTrue(all(p.startswith("Enter the code shown on the headset (XXXX-XXXX-XXXX)") for p in prompts))
+        self.assertTrue(all(p.startswith("Enter the code shown on the headset (XXXX-XXXX)") for p in prompts))
         self.assertTrue(any("wrong" in s for s in said), said)
         self.assertIn("Waiting for you to confirm on the headset...", said)
         self.assertTrue(said[-1].startswith("Paired with Pair Headset ("), said)
@@ -509,12 +519,12 @@ class PairDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, ("10.0.0.6", 47810))
         result, said, asked = await self.find(found, "9", seconds=0.3)
         self.assertIsNone(result)
-        self.assertTrue(any("--headset" in s for s in said))
+        self.assertTrue(any("Run --pair again" in s for s in said))
 
     async def test_none_found_prints_a_hint_and_gives_up(self):
         result, said, _ = await self.find(self.browse_of(), seconds=0.2, give_up=0.5)
         self.assertIsNone(result)
-        self.assertTrue(any("Pair new laptop" in s and "--headset" in s for s in said))
+        self.assertTrue(any("Pair new laptop" in s and "same Wi-Fi" in s for s in said))
 
     async def test_a_late_headset_is_found_while_waiting(self):
         result, said, _ = await self.find(self.browse_of(("10.0.0.7", 1234), delay=0.5), seconds=0.2, give_up=3)
@@ -528,8 +538,9 @@ class PairDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             port = await headset.start()
             try:
                 store, said = pairing.PairStore(tmp / "a"), []
-                code = await agent.pair_command(("127.0.0.1", port), new_identity(), store, "Laptop",
-                                                read_line=lambda prompt: headset.code, say=said.append)
+                code = await agent.pair_command(new_identity(), store, "Laptop", read_line=lambda prompt: headset.code,
+                                                say=said.append, browse=self.browse_of(("127.0.0.1", port)),
+                                                find_seconds=0.2)
             finally:
                 await headset.stop()
             self.assertEqual(code, 1)

@@ -21,13 +21,12 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(s.cast_only)
         self.assertFalse(s.start_at_login)
         self.assertFalse(s.wired)
-        self.assertEqual(s.headset_address, "")
 
     def test_missing_file_gives_defaults(self):
         self.assertEqual(settings.load(self.path), Settings())
 
     def test_round_trip(self):
-        original = Settings(allow_control=True, headset_address="192.168.1.5:4000", wired=True)
+        original = Settings(allow_control=True, wired=True)
         settings.save(original, self.path)
         self.assertEqual(settings.load(self.path), original)
 
@@ -40,10 +39,10 @@ class SettingsTests(unittest.TestCase):
         self.path.write_text(json.dumps({"cast_only": True, "future": 1}))
         self.assertEqual(settings.load(self.path), Settings(cast_only=True))
 
-    def test_bad_address_is_rejected_on_save(self):
-        with self.assertRaises(ValueError):
-            settings.save(Settings(headset_address="not a host:::"), self.path)
-        self.assertFalse(self.path.exists())
+    def test_old_headset_address_key_is_ignored(self):
+        self.path.parent.mkdir()
+        self.path.write_text(json.dumps({"wired": True, "headset_address": "192.168.1.5"}))
+        self.assertEqual(settings.load(self.path), Settings(wired=True))
 
     def test_control_and_cast_only_exclude_each_other(self):
         with self.assertRaises(ValueError):
@@ -63,9 +62,6 @@ class SettingsTests(unittest.TestCase):
         loaded = settings.load(self.path)
         self.assertFalse(loaded.allow_control)
         self.assertTrue(loaded.cast_only)
-
-    def test_address_is_trimmed(self):
-        self.assertEqual(Settings(headset_address=" 10.0.0.2 ").validate().headset_address, "10.0.0.2")
 
 
 if __name__ == "__main__":

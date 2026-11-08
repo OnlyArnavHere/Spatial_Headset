@@ -256,8 +256,8 @@ namespace SpatialLauncher.SpatialWindows
             Value("Network", () => DeviceStatus.Network);
             Choice("Link", new[] { "Wi-Fi", "Wired (USB)" }, () => S.laptop.wired ? 1 : 0,
                 i => SettingsStore.Update(x => x.laptop.wired = i == 1));
-            Value("Wired help", () => S.laptop.wired ? UsbHotspot.Help + " " + HotspotState()
-                : "Wi-Fi: phone and laptop on the same network. Wired (USB): Personal Hotspot over the cable.");
+            Value("Wired help", () => S.laptop.wired ? UsbCable.Help
+                : "Wi-Fi: phone and laptop on the same network. Wired (USB): the phone's cable, no network needed.");
             for (int i = 0; i < PairedSlots; i++) PairedRow(i);
         }
 
@@ -268,9 +268,6 @@ namespace SpatialLauncher.SpatialWindows
             if (host == null) return "The laptop link is unavailable";
             return host.Listener.IsListening ? "Listening for a laptop (open Laptop and pick a paired one)" : "Not listening";
         }
-
-        /// <summary>Whether the phone's Personal Hotspot is on.</summary>
-        public static string HotspotState() => UsbHotspot.PhoneHotspotAddress() != null ? "Hotspot on." : "Hotspot off.";
 
         void BuildDisplay(Section s)
         {
@@ -289,8 +286,7 @@ namespace SpatialLauncher.SpatialWindows
             Choice("Zoom preset", DisplaySettings.ZoomPresetNames, () => DisplaySettings.ZoomPresetIndex(S.display.passthroughZoom),
                 i => SettingsStore.Update(x => x.display.passthroughZoom = DisplaySettings.ZoomPresets[i]));
             Value("Field of view", PassthroughView);
-            Choice("TRIGGER button", new[] { "Zoom", "Switcher" }, () => S.display.triggerSwitcher ? 1 : 0,
-                i => SettingsStore.Update(x => x.display.triggerSwitcher = i == 1));
+            Buttons("Headset view", ("Leave Stereo", StereoChrome.LeaveStereo, () => StereoChrome.InStereo ? "Leave Stereo" : "In Mono"));
         }
 
         string PassthroughView()
@@ -298,7 +294,7 @@ namespace SpatialLauncher.SpatialWindows
             var passthrough = Service != null ? Service.GetComponent<StereoPassthrough>() : null;
             if (passthrough != null && passthrough.ImageFov is Vector2 image && passthrough.CameraFov is Vector2 camera)
                 return $"Image {image.x:0}° x {image.y:0}° (camera {camera.x:0}° x {camera.y:0}°). 1.00x is real size.";
-            return "1.00x is real size; Wide fits more of the room. F5, or ZOOM in Stereo, steps the presets.";
+            return "1.00x is real size; Wide fits more of the room. F5 steps the presets.";
         }
 
         void BuildHands(Section s)
@@ -333,9 +329,10 @@ namespace SpatialLauncher.SpatialWindows
             Toggle("Palm push/pull", () => S.hands.palmPush, v => SettingsStore.Update(x => x.hands.palmPush = v));
             Toggle("Two-hand stretch", () => S.hands.twoHandStretch, v => SettingsStore.Update(x => x.hands.twoHandStretch = v));
             Toggle("Cross to hide all", () => S.hands.crossSweepHide, v => SettingsStore.Update(x => x.hands.crossSweepHide = v));
+            Toggle("Cross to stop the laptop", () => S.hands.panicGesture, v => SettingsStore.Update(x => x.hands.panicGesture = v));
             Toggle("Pinch and hold to switch", () => S.hands.pinchHoldSwitcher, v => SettingsStore.Update(x => x.hands.pinchHoldSwitcher = v));
             Toggle("Debug overlay", () => S.hands.debugOverlay, v => SettingsStore.Update(x => x.hands.debugOverlay = v));
-            Value("Note", () => "While a remote screen is live, cross and sweep always stops it (panic stop), even when off here.");
+            Value("Note", () => "Cross to stop the laptop: cross and sweep disconnects a live laptop (panic stop). Off by default; F8 always stops.");
         }
 
         void BuildWindows(Section s)

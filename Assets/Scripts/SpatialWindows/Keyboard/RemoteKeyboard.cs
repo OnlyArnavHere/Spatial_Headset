@@ -6,9 +6,13 @@ using UnityEngine.InputSystem;
 namespace SpatialLauncher.SpatialWindows
 {
     /// <summary>
-    /// Keyboard input for laptop stream windows. <see cref="Open"/> shows the floating virtual keyboard
-    /// (<see cref="VirtualKeyboardContent"/>), usable with the mouse or a pinch; its keys go to the front-most stream
-    /// window (<see cref="KeyboardRouting"/>). In the editor the physical keyboard is also forwarded while a stream window
+    /// Keyboard input for laptop stream windows. <see cref="Open"/> shows the virtual keyboard
+    /// (<see cref="VirtualKeyboardContent"/>), usable with the mouse or a pinch, docked under the window it types into
+    /// (<see cref="WindowManager.Dock"/>): pressing its keys never takes focus from that window, so neither one moves
+    /// back or forth, and it follows that window around. <see cref="OpenFor"/> with automatic: true is how it pops up by
+    /// itself when a text field gets focus (a local <see cref="WindowTextField"/>, or a text field on the laptop, which
+    /// the agent reports); <see cref="CloseIfAutomatic"/> puts such a keyboard away again when the focus leaves. Its keys
+    /// go to the window it is docked to (else the front-most stream window, <see cref="KeyboardRouting"/>). In the editor the physical keyboard is also forwarded while a stream window
     /// (or the virtual keyboard) has focus; single-key shortcuts stand down meanwhile (<see cref="KeyboardShortcuts"/>).
     /// What a stream window does with the keys is up to its sink: the laptop agent types them only when started with
     /// --input --keyboard.
@@ -29,8 +33,20 @@ namespace SpatialLauncher.SpatialWindows
 
         public SpatialWindow KeyboardWindow { get; private set; }
         public VirtualKeyboardContent KeyboardContent { get; private set; }
-        /// <summary>The stream window keys go to now, or null.</summary>
-        public RemoteStreamContent Target => manager != null ? KeyboardRouting.FindTarget(manager.Windows) : null;
+        /// <summary>The stream window keys go to now, or null: the one the keyboard is docked to, else the front-most.</summary>
+        public RemoteStreamContent Target
+        {
+            get
+            {
+                var owner = KeyboardWindow != null ? KeyboardWindow.DockedTo : null;
+                var docked = owner != null ? owner.GetComponentInChildren<RemoteStreamContent>() : null;
+                if (docked != null) return docked;
+                return manager != null ? KeyboardRouting.FindTarget(manager.Windows) : null;
+            }
+        }
+
+        /// <summary>The keyboard was opened by a text field getting focus (not by the Keys button), so it closes when the focus leaves.</summary>
+        public bool OpenedAutomatically { get; private set; }
 
         public WindowManager Manager
         {
@@ -70,37 +86,88 @@ namespace SpatialLauncher.SpatialWindows
             if (manager == null) manager = GetComponent<WindowManager>();
         }
 
-        void OnEnable() => Current = this;
+        void OnEnable()
+        {
+            Current = this;
+            WindowTextField.FocusChanged += OnTextFieldFocus;
+        }
 
         void OnDisable()
         {
             if (Current == this) Current = null;
+            WindowTextField.FocusChanged -= OnTextFieldFocus;
             Subscribe(null);
             ReleaseHeld();
         }
 
-        /// <summary>Opens the virtual keyboard (under the laptop window it types into), or brings it to the front.</summary>
+        /// <summary>The Keys button: opens the keyboard under the front-most laptop window (or wherever it is already).</summary>
         public SpatialWindow Open()
         {
             if (KeyboardWindow != null)
             {
+                OpenedAutomatically = false; // asked for: it stays until closed
                 manager.Focus(KeyboardWindow);
                 return KeyboardWindow;
             }
-
             var target = Target;
-            KeyboardWindow = manager.Spawn("Keyboard", keyboardSize);
-            if (KeyboardWindow == null) return null;
-            if (target != null)
-            {
-                var below = target.Window.transform;
-                float drop = (target.Window.Size.y + keyboardSize.y) * 0.5f + gapBelowTarget;
-                KeyboardWindow.MoveTo(below.position - below.up * drop);
-            }
+            return OpenFor(target != null ? target.Window : null, automatic: false);
+        }
 
-            KeyboardContent = new GameObject().AddComponent<VirtualKeyboardContent>();
-            KeyboardContent.Init(KeyboardWindow, manager.WindowMaterial, Send, () => Target, GetComponent<VoiceTyping>());
+        /// <summary>
+        /// Opens the keyboard docked under <paramref name="owner"/> (or moves it there if it is open under another
+        /// window). <paramref name="automatic"/>: a text field got focus; the keyboard then closes again when it loses it.
+        /// </summary>
+        public SpatialWindow OpenFor(SpatialWindow owner, bool automatic)
+        {
+            if (manager == null) return null;
+            if (owner == KeyboardWindow) owner = null;
+            if (KeyboardWindow == null)
+            {
+                KeyboardWindow = manager.Spawn("Keyboard", keyboardSize);
+                if (KeyboardWindow == null) return null;
+                KeyboardContent = new GameObject().AddComponent<VirtualKeyboardContent>();
+                KeyboardContent.Init(KeyboardWindow, manager.WindowMaterial, Send, () => Target, GetComponent<VoiceTyping>());
+                manager.WindowClosed += OnWindowClosed;
+                OpenedAutomatically = automatic;
+            }
+            else if (!automatic) OpenedAutomatically = false;
+            if (owner != null && KeyboardWindow.DockedTo != owner)
+            {
+                var below = owner.transform;
+                float drop = (owner.Size.y + keyboardSize.y) * 0.5f + gapBelowTarget;
+                KeyboardWindow.MoveTo(below.position - below.up * drop);
+                manager.Dock(KeyboardWindow, owner);
+            }
+            else if (owner == null && KeyboardWindow.DockedTo == null) manager.Focus(KeyboardWindow);
             return KeyboardWindow;
+        }
+
+        /// <summary>Closes the keyboard if a text field opened it (and it is docked to <paramref name="owner"/>, when given).</summary>
+        public void CloseIfAutomatic(SpatialWindow owner = null)
+        {
+            if (KeyboardWindow == null || !OpenedAutomatically) return;
+            if (owner != null && KeyboardWindow.DockedTo != owner) return;
+            if (VoiceTyping.Current != null && VoiceTyping.Current.IsListening) return; // still dictating
+            manager.Close(KeyboardWindow);
+        }
+
+        void OnWindowClosed(SpatialWindow window)
+        {
+            if (window != KeyboardWindow) return;
+            manager.WindowClosed -= OnWindowClosed;
+            KeyboardWindow = null;
+            KeyboardContent = null;
+            OpenedAutomatically = false;
+        }
+
+        // A local text field (Laptop Shell search, a Settings field) got or lost focus.
+        void OnTextFieldFocus(WindowTextField field)
+        {
+            if (field != null)
+            {
+                if (field.Window != null && field.Window != KeyboardWindow) OpenFor(field.Window, automatic: true);
+            }
+            else CloseIfAutomatic();
         }
 
         /// <summary>

@@ -25,6 +25,9 @@ namespace SpatialLauncher.SpatialWindows
         public static WindowTextField Focused { get; private set; }
         /// <summary>True while the user is typing into a field: keyboard shortcuts should be ignored.</summary>
         public static bool IsTyping => Focused != null;
+        /// <summary>A field got focus (the field), or the last one lost it (null). Moving between fields raises it once.</summary>
+        public static event Action<WindowTextField> FocusChanged;
+        static bool switching;
 
         public string Text { get; private set; } = "";
         /// <summary>Shows asterisks instead of the text (for tokens).</summary>
@@ -69,7 +72,12 @@ namespace SpatialLauncher.SpatialWindows
         public void Focus()
         {
             if (Focused == this) return;
-            if (Focused != null) Focused.Blur();
+            if (Focused != null)
+            {
+                switching = true;
+                try { Focused.Blur(); }
+                finally { switching = false; }
+            }
             Focused = this;
             SetFocused(true);
             caretVisible = true;
@@ -80,6 +88,7 @@ namespace SpatialLauncher.SpatialWindows
                 false, false, Masked);
 #endif
             Refresh();
+            FocusChanged?.Invoke(this);
         }
 
         public void Blur()
@@ -93,6 +102,7 @@ namespace SpatialLauncher.SpatialWindows
             touchKeyboard = null;
 #endif
             Refresh();
+            if (!switching) FocusChanged?.Invoke(null);
         }
 
         public static void BlurAll() => Focused?.Blur();

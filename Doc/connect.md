@@ -88,7 +88,6 @@ Then run `agent.py`. The flags that matter here:
 | `--revoke <name>` | Forget one paired headset, then exit (this also ends its always-allow) |
 | `--revoke-always <name>` | Keep the pair, but ask again on the laptop before it takes control |
 | `--pair` | Pair a new headset: type the code it shows, confirm there, exit |
-| `--headset ip[:port]` | Dial this address (port 47810 unless given) instead of looking over Bonjour. Repeatable |
 | `--input` | Allow the headset to move and click the mouse, once you approve |
 | `--keyboard` | With `--input`: also allow typing |
 | `--cast-only` | Media keys only. Can't be combined with `--input` |
@@ -96,8 +95,8 @@ Then run `agent.py`. The flags that matter here:
 | `--no-picker` | With `--window` or `--monitor`: offer only that target |
 | `--max-windows N` | Most windows open at once (default 4, 1 to 8) |
 | `--max-width N`, `--max-height N` | Scale each stream down to fit (default 1920x1080) |
-| `--wired` | Also look for the USB Personal Hotspot (see [wired.md](wired.md)) |
-| `--verbose` | Show ffmpeg and MediaMTX logs |
+| `--wired` | Also connect over the iPhone's USB cable, with no network (see [wired.md](wired.md)) |
+| `--verbose` | Show ffmpeg and MediaMTX logs (the installed app writes ffmpeg's errors to `logs/ffmpeg.log` in its data folder instead) |
 
 Run `python agent.py --help` for the rest (`--window`, `--monitor`, `--fps`, `--bitrate`, `--encoder`). More detail is in [Tools/LaptopAgent/README.md](../Tools/LaptopAgent/README.md).
 
@@ -114,23 +113,31 @@ The packaged agent is a desktop app, so you don't need Python or the command lin
 
 **The status window** shows the agent's state and a log. In it:
 
-- **Pair new headset...** opens the pair dialog. Type the code the headset shows and press Pair. Pairing works only while the dialog is open, for 2 minutes at most.
+- **Pair new headset** (or **Show QR code**) starts pairing: look at the QR code with the headset, or type the code the headset shows and press Pair. Pairing works only while it is open, for 2 minutes at most.
 - **Allow control** (off by default) lets the headset use the mouse and keyboard, and you are still asked at each grant. **Cast only** allows media keys only. The two exclude each other.
 - **Start when I log in** is available in the installed app.
-- **Headset address** dials a fixed address (empty means find headsets over Bonjour). **Wired** also looks for the USB Personal Hotspot (see [wired.md](wired.md)).
+- **Wired (USB cable)** also connects over the iPhone's USB cable, with no network (see [wired.md](wired.md)). Without it the agent finds headsets on the same Wi-Fi over Bonjour.
 - **Stop all** ends every session now. The kill hotkey (Ctrl+Alt+Shift+Q on Windows and Linux, Ctrl+Option+Shift+Q on macOS) does the same from anywhere.
 
 **Closing the window** keeps the agent running in the background: the tray icon on Windows, the Dock on macOS. Use the tray menu or the app's Quit to stop it. Launching the app again shows the window.
 
 **macOS permissions** are asked for at the moment they're first needed, once per run: Screen Recording when the first stream starts, Accessibility when you turn on Allow control or Cast only, and Input Monitoring only if you press Enable hotkey (it is just for the kill hotkey). The window's macOS permissions section has an **Open Settings** button for each. On macOS 15 and later, the first connection to a headset also triggers the Local Network prompt; if it's denied, turn the app on under Privacy & Security > Local Network. Microphone access is never requested.
 
-## Pairing by code
+## Pairing
 
-Do this once per laptop.
+Do this once per laptop, in either of two ways.
 
-1. On the headset: Laptop > Pair new laptop. It shows a 12-character code, `XXXX-XXXX-XXXX`. The characters are Crockford base32. When typing, I and L read as 1, and O reads as 0.
+**By QR code (nothing to type):**
+
+1. On the laptop: Home > **Show QR code** in the app (or `python agent.py --pair`, which prints it in the terminal).
+2. On the headset: Laptop > Pair new laptop, then look at the laptop's screen from about an arm's length.
+3. The headset reads the QR code and the two pair by themselves, over Wi-Fi or the USB cable. There is no question on the headset: looking at this laptop's QR code was the confirmation, and the QR code names this laptop's key, so another laptop can't use it.
+
+**By code:**
+
+1. On the headset: Laptop > Pair new laptop. It shows an 8-character code, `XXXX-XXXX`. The characters are Crockford base32. When typing, I and L read as 1, and O reads as 0.
 2. The code is valid for 2 minutes and works once. Three wrong tries end it.
-3. On the laptop: `python agent.py --pair` (add `--headset <ip>` if discovery fails). Type the code.
+3. On the laptop: type it in the app (or `python agent.py --pair`; add `--wired` to pair over the USB cable).
 4. The headset asks "Pair with laptop X?". Check the name, then confirm with a pinch.
 
 Both sides now remember each other's key. Later connections need no code.
@@ -142,7 +149,12 @@ To remove a laptop: Settings > Laptop > Paired laptops > Remove on the headset, 
 1. On the headset, open the Laptop picker and tap the paired laptop.
 2. On the laptop, run `python agent.py`. If the headset is not there yet, the agent keeps retrying.
 
-Discovery uses Bonjour/mDNS (`_spatiallauncher._tcp`, with a random name each time). If it fails, pass the address: `python agent.py --headset <ip>`. In the Unity editor use `python agent.py --headset 127.0.0.1:47810`.
+There are two ways to connect: Wi-Fi, where the agent finds the headset on the same network over Bonjour/mDNS
+(`_spatiallauncher._tcp`, with a random name each time), and the USB cable (`--wired`, see [wired.md](wired.md)). There
+is no way to type a headset's address. If discovery fails, check that both are on the same Wi-Fi and that the network
+allows multicast (some guest and office networks don't), or use the cable.
+
+The Unity editor doesn't announce itself over Bonjour, so the agent can't connect to it.
 
 ### Laptop apps (the Laptop Shell)
 
@@ -162,15 +174,15 @@ Applications for a Mac. It uses our own shapes, Inter and Material Icons, no OS 
 
 ### Wired
 
-Turn on Personal Hotspot and plug in the USB cable. The agent dials 172.20.10.1. No inbound firewall rule is needed. See [wired.md](wired.md).
+Plug the iPhone into the laptop with any USB cable, tap Trust, and turn on Wired. No network, Personal Hotspot or firewall rule is needed. See [wired.md](wired.md).
 
 ### Firewall
 
 Measured on Windows 11 on this project's laptop:
 
 - With mDNS discovery, Windows showed its "allow access" prompt for python.exe once. It asked for inbound rules for TCP and UDP.
-- With `--headset <ip>` or wired mode there was no prompt.
-- If you click Cancel on the prompt, discovery may fail. Use `--headset`.
+- With wired mode there was no prompt.
+- If you click Cancel on the prompt, discovery may fail. Allow python.exe (or the app) for Private networks, or use the cable.
 
 ## Control safeguards
 
@@ -186,7 +198,7 @@ Measured on Windows 11 on this project's laptop:
 
 - **Encryption:** DTLS-SRTP for video and DTLS for the data channels.
 - **Mutual pinning:** each side has an RSA-2048 identity key. The laptop's is kept in DPAPI on Windows, encrypted under a login Keychain key on macOS, and in a 0600 file on Linux; the headset's in the iOS Keychain. Signatures are RSASSA-PKCS1-v1_5 with SHA-256 over a transcript that binds both keys, both nonces and the DTLS fingerprints. A man in the middle can't swap certificates.
-- **Pairing code:** it is bound with PBKDF2-HMAC-SHA256 (100,000 iterations) and HMAC. The headset proves nothing derived from the code to an unverified laptop. The laptop sends its code proof first.
+- **Pairing code:** it is bound with PBKDF2-HMAC-SHA256 (100,000 iterations) and HMAC. The headset proves nothing derived from the code to an unverified laptop. The laptop sends its code proof first. A QR code carries a 100-bit code plus the laptop's key fingerprint; the headset that read it pairs only with that laptop.
 - **Two approvals for control** (the laptop's can be made permanent per headset with always allow, and revoked), and the kill hotkey.
 - **Limits before authentication** on the headset listener: 64 KiB frames, 5 s until the laptop is verified, 5 attempts per minute per IP, one at a time.
 
@@ -195,8 +207,9 @@ Measured on Windows 11 on this project's laptop:
 - An unlocked, paired phone in someone else's hands. Revoke it on the laptop.
 - The headset's listener is reachable on the LAN while the picker or pairing screen is open, before authentication.
 - mDNS shows that a Spatial Launcher headset is present. The name is random, but the service type is visible.
-- Someone who sees the code while you pair and types it first could pair. That is why the code expires after 2 minutes, works once, and needs your confirmation on the headset. Check the laptop name in the prompt.
-- A fake headset on the same network that the laptop dials while pairing receives the laptop's code proof and could try to guess the code offline. PBKDF2 with 100,000 iterations, the 60-bit code and the 2-minute life make that impractical, and the code is useless once it expires.
+- Someone who sees the typed code while you pair and types it first could pair. That is why the code expires after 2 minutes, works once, and needs your confirmation on the headset. Check the laptop name in the prompt. (A photographed QR code is no use to another laptop: it names this laptop's key.)
+- Someone who can show your headset's camera their own pairing QR code while your pairing screen is open could pair their laptop. Close the pairing screen when you are done; it also ends after 2 minutes.
+- A fake headset on the same network that the laptop dials while pairing receives the laptop's code proof and could try to guess the code offline. PBKDF2 with 100,000 iterations, the 40-bit code and the 2-minute life make that impractical, and the code is useless once it expires.
 - A malicious app already running on the laptop.
 
 ## Limits

@@ -1,6 +1,7 @@
 """Controller pairing with fakes: the typed code reaches pair_command, cancel and the 120 s limit end it, nothing is
 added to the PairStore. No tkinter."""
 import asyncio
+import functools
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ from unittest import mock
 
 import agent
 import controller
+from handshake import HandshakeError
 from test_controller import FakeStore, wait_for
 
 
@@ -21,11 +23,30 @@ class RecordingStore(FakeStore):
 
 def make(pair_command=None, timeout=5.0, **settings):
     store = RecordingStore()
-    c = controller.AgentController(load_identity=lambda: "ident", store_factory=lambda: store,
+    c = controller.AgentController(load_identity=lambda: SimpleNamespace(spki_der=b"test laptop key"), store_factory=lambda: store,
                                    pair_command=pair_command, pair_timeout=timeout)
     if settings:
         c.apply(SimpleNamespace(**settings))
     return c, store
+
+
+async def silent_browse():
+    await asyncio.sleep(3600)
+    yield None
+
+
+FOUND = ("192.168.1.5", 4000)
+
+
+async def found_browse(pairing=False, instance=None, **_kw):
+    """Bonjour stand-in: one headset showing a code; nothing answers the QR's own instance."""
+    if instance is None:
+        yield FOUND
+    await asyncio.sleep(3600)
+
+
+def via_bonjour(**kw):
+    return functools.partial(agent.pair_command, browse=found_browse, find_seconds=0.2, **kw)
 
 
 def collect(c, kind, seconds=3.0):
@@ -48,12 +69,14 @@ class PairTests(unittest.TestCase):
     def test_code_reaches_pair_command_and_pairing_succeeds(self):
         got = []
 
-        async def fake_pair_once(host, port, ident, store, code, name, announce, kw):
+        async def fake_pair_once(host, port, ident, store, code, name, announce, kw, opener=None):
+            if kw.get("qr"):
+                raise HandshakeError("not pairing")  # nobody scanned the QR
             got.append((host, port, code))
             return SimpleNamespace(name="Quest", headset_spki=b"x")
 
         with mock.patch.object(agent, "_pair_once", fake_pair_once):
-            self.c, store = make(headset_address="192.168.1.5:4000")
+            self.c, store = make(pair_command=via_bonjour())
             self.c.begin_pair()
             self.assertTrue(wait_for(lambda: self.c._pair_tasks))
             time.sleep(0.05)
@@ -62,8 +85,32 @@ class PairTests(unittest.TestCase):
         self.assertEqual(got, [("192.168.1.5", 4000, "ABCDEFGHJKMN")])
         self.assertTrue(done and done[0]["ok"])
 
+    def test_wired_pairing_uses_the_iphone_on_the_usb_cable_first(self):
+        import usbmux
+        got = []
+
+        async def fake_pair_once(host, port, ident, store, code, name, announce, kw, opener=None):
+            if kw.get("qr"):
+                raise HandshakeError("not pairing")  # nobody scanned the QR
+            got.append((host, port, code, opener.func, opener.args))
+            return SimpleNamespace(name="Quest", headset_spki=b"x")
+
+        async def one_iphone():
+            return [usbmux.Device(7, "00008110-ABC")]
+
+        with mock.patch.object(agent, "_pair_once", fake_pair_once):
+            self.c, store = make(wired=True)
+            self.c._usb_list = one_iphone
+            self.c.begin_pair()
+            self.assertTrue(wait_for(lambda: self.c._pair_tasks))
+            time.sleep(0.05)
+            self.c.submit_code("abcd-efgh")
+            done = collect(self.c, "pair_done")
+        self.assertEqual(got, [("usb:00008110-ABC", 47810, "ABCDEFGH", usbmux.connect, (7, 47810))])
+        self.assertTrue(done and done[0]["ok"])
+
     def test_cancel_ends_pairing_and_adds_nothing(self):
-        self.c, store = make(pair_command=agent.pair_command, headset_address="192.168.1.5")
+        self.c, store = make(pair_command=via_bonjour())
         self.c.begin_pair()
         self.assertTrue(wait_for(lambda: self.c._pair_tasks))
         self.c.cancel_pair()
@@ -74,7 +121,7 @@ class PairTests(unittest.TestCase):
         self.assertEqual(store.added, [])
 
     def test_times_out(self):
-        self.c, store = make(timeout=0.2, headset_address="192.168.1.5")
+        self.c, store = make(pair_command=via_bonjour(), timeout=0.2)
         self.c.begin_pair()
         done = collect(self.c, "pair_done")
         self.assertTrue(done)
@@ -87,7 +134,7 @@ class PairTests(unittest.TestCase):
         self.assertEqual(self.c._pair_timeout, 120.0)
 
     def test_prompt_is_forwarded_and_wrong_code_does_not_pair(self):
-        self.c, store = make(headset_address="192.168.1.5")
+        self.c, store = make(pair_command=via_bonjour())
         self.c.begin_pair()
         prompts = collect(self.c, "pair_prompt")
         self.assertIn("code", prompts[0]["text"])
@@ -159,8 +206,7 @@ class PairTests(unittest.TestCase):
     def test_cli_hints_are_mapped_for_the_window_only(self):
         self.assertNotIn("--", controller.gui_hint(agent.PAIR_NOT_FOUND))
         self.assertIn("Ctrl+C", agent.PAIR_NOT_FOUND)  # the CLI text itself is untouched
-        for text in ("No headset showed a pairing code. Open Laptop > Pair new laptop on the headset, or use --headset.",
-                     "Run again with --headset IP[:PORT] to choose the headset.",
+        for text in ("That is not one of the numbers above. Run --pair again and enter one of the numbers.",
                      "Open Laptop > Pair new laptop on it and run --pair again.",
                      "Revoke it first (--revoke NAME)."):
             self.assertNotIn("--", controller.gui_hint(text))

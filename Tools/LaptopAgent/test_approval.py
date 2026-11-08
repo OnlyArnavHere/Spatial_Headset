@@ -195,6 +195,14 @@ class ProtocolFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.box.shown, [])
 
 
+def browse_once(*found):
+    async def browse(pairing=False):
+        for item in found:
+            yield item
+        await asyncio.sleep(3600)
+    return browse
+
+
 class KillSwitchTests(unittest.IsolatedAsyncioTestCase):
     def runner(self, **kw):
         streams = mock.Mock()
@@ -202,7 +210,7 @@ class KillSwitchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_kill_closes_sessions_stops_video_and_blocks_redialling(self):
         attempts = []
-        r, streams = self.runner(pinned=[("h", 1)])
+        r, streams = self.runner(discover=True, browse=browse_once(("h", 1)))
         live = mock.Mock(close=mock.AsyncMock())
         r.active = live
 
@@ -242,6 +250,50 @@ class KillSwitchTests(unittest.IsolatedAsyncioTestCase):
         await r._shutdown_task
         self.assertTrue(box.dismissed)
         self.assertTrue(live.closed)
+
+
+class GiveUpTests(unittest.IsolatedAsyncioTestCase):
+    """A Bonjour-found headset is dropped only when it can't be reached; one that answers is kept, so it links as soon as
+    pairing finishes (it was dropped after 5 "not paired" and Wi-Fi was never tried again)."""
+
+    async def dial(self, reasons, rounds):
+        r = session.LinkRunner(mock.Mock(), mock.Mock(), mock.Mock(), 8554)
+        calls = []
+
+        async def attempt(key):
+            calls.append(key)
+            reason = reasons[(len(calls) - 1) % len(reasons)]
+            return ("linked", "") if reason == "linked" else ("failed", reason)
+
+        r._attempt = attempt
+        with mock.patch.object(session, "BACKOFF_START_S", 0.001), mock.patch.object(session, "BACKOFF_MAX_S", 0.001):
+            r._found("10.0.0.5", 47810, 0.001, "Bonjour", session.DROP_AFTER_FAILURES)
+            for _ in range(200):
+                await asyncio.sleep(0.005)
+                if len(calls) >= rounds or ("10.0.0.5", 47810) not in r._workers:
+                    break
+        kept = ("10.0.0.5", 47810) in r._workers
+        r.stopped = True
+        for task, wake in list(r._workers.values()):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return kept, len(calls)
+
+    async def test_an_unpaired_headset_that_answers_is_kept(self):
+        kept, calls = await self.dial(["not paired", "connection closed", "the headset refused: peer refused: unknown laptop"],
+                                      session.DROP_AFTER_FAILURES * 3)
+        self.assertTrue(kept, f"dropped after {calls} answers")
+        self.assertGreater(calls, session.DROP_AFTER_FAILURES)
+
+    async def test_an_address_that_linked_is_never_dropped(self):
+        # The headset ends a session (or a panic stop refuses it for a while): its address can't be reached for a bit.
+        kept, calls = await self.dial(["linked"] + ["can't connect"] * 20, session.DROP_AFTER_FAILURES * 3)
+        self.assertTrue(kept, f"dropped after {calls} attempts")
+
+    async def test_an_unreachable_address_is_dropped(self):
+        kept, calls = await self.dial(["can't connect"], session.DROP_AFTER_FAILURES * 3)
+        self.assertFalse(kept)
+        self.assertEqual(calls, session.DROP_AFTER_FAILURES)
 
 
 @unittest.skipUnless(os.environ.get("SL_UI_TESTS") == "1", "set SL_UI_TESTS=1 to show a real message box")

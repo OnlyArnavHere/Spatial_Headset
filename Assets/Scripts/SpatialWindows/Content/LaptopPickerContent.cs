@@ -38,7 +38,7 @@ namespace SpatialLauncher.SpatialWindows
         public const float ContentHeight = RowHeight * (RowsPerPage + 2) + StatusHeight + Gap * (RowsPerPage + 2);
 
         public WindowButton MoreButton { get; private set; }
-        /// <summary>Opens the pairing screen (the code a laptop's agent.py --pair asks for).</summary>
+        /// <summary>Opens the pairing screen (it reads the laptop app's QR code, or shows a code to type there).</summary>
         public WindowButton PairButton { get; private set; }
         /// <summary>The entry buttons on the current page, in list order.</summary>
         public IReadOnlyList<WindowButton> EntryButtons => pageButtons;
@@ -248,7 +248,7 @@ namespace SpatialLauncher.SpatialWindows
             session.Control.OpenFailed += OnOpenFailed;
             session.Ended += OnSessionEnded;
             messageLabel.gameObject.SetActive(false);
-            statusLine.text = "Connected (view only)";
+            statusLine.text = ViewOnlyStatus;
             if (session.Control.IsLive) session.Control.RequestTargets();
             RebuildTargetItems();
         }
@@ -303,7 +303,7 @@ namespace SpatialLauncher.SpatialWindows
                 title = known != null && !string.IsNullOrEmpty(known.title) ? known.title : opened.Description,
                 description = opened.Description, width = opened.Width, height = opened.Height,
             };
-            statusLine.text = "Connected (view only)";
+            statusLine.text = ViewOnlyStatus;
             OpenLinked?.Invoke(linkSession, opened, target);
         }
 
@@ -311,8 +311,19 @@ namespace SpatialLauncher.SpatialWindows
         {
             if (linkSession == null) return;
             requestedOpens.Clear(); // the failure doesn't say which target
-            statusLine.text = $"Couldn't open it: {reason}";
+            statusLine.text = "Couldn't open it: " + OpenFailedText(reason);
         }
+
+        const string ViewOnlyStatus = "Connected (view only). For control, use Request control in an open window.";
+
+        /// <summary>The laptop's open-failure reason (session.py) in words.</summary>
+        public static string OpenFailedText(string reason) => reason switch
+        {
+            "gone" => "it closed, or the laptop couldn't start its video. Try again.",
+            "minimized" => "it's minimized on the laptop. Restore it there first.",
+            "no slot" => "too many laptop windows are open. Close one first.",
+            _ => reason,
+        };
 
         void OnSessionEnded(string reason)
         {

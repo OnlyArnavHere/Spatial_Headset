@@ -274,17 +274,20 @@ namespace SpatialLauncher.SpatialWindows
     /// <summary>
     /// (5) A pinch held for <see cref="GestureConfig.pinchHoldTime"/> while that hand points at no window, with the other
     /// hand not pinching (so it never competes with a click, a drag or a two-hand stretch), opens the app switcher's
-    /// overview (<see cref="Switcher.AppSwitcher"/>), or closes it again. Fires once per pinch.
+    /// overview (<see cref="Switcher.AppSwitcher"/>). Fires once per pinch. It only opens: with jittery hand tracking a
+    /// toggle kept flashing the overview open and shut, so it closes by picking a card or its close button.
+    /// A pinch counts only if the hand was seen open (tracked, not pinching) first: a relaxed hand that tracking reads as
+    /// pinched, or that drops out and comes back still "pinched", kept reopening the switcher on its own.
     /// </summary>
     public sealed class PinchHoldRecognizer : GestureRecognizer
     {
-        readonly bool[] fired = new bool[2];
+        readonly bool[] armed = new bool[2];
         float cooldownUntil;
 
         public override string Name => "Pinch and hold";
 
-        /// <summary>What the gesture does when it fires (default: toggles the switcher's overview). Test seam.</summary>
-        public System.Action Fire = () => Switcher.AppSwitcher.Current?.ToggleOverview();
+        /// <summary>What the gesture does when it fires (default: opens the switcher's overview). Test seam.</summary>
+        public System.Action Fire = () => Switcher.AppSwitcher.Current?.OpenOverview();
 
         public override void Tick(in GestureFrame frame)
         {
@@ -294,17 +297,22 @@ namespace SpatialLauncher.SpatialWindows
             {
                 var h = frame.Get(hand);
                 var other = frame.Get(hand == Handedness.Left ? Handedness.Right : Handedness.Left);
-                if (!h.Tracked || !h.Pinched)
+                if (!h.Tracked)
                 {
-                    fired[(int)hand] = false;
+                    armed[(int)hand] = false; // it must be seen open again before a pinch counts
                     continue;
                 }
-                if (fired[(int)hand] || frame.Time < cooldownUntil || (other.Tracked && other.Pinched)) continue;
+                if (!h.Pinched)
+                {
+                    armed[(int)hand] = true;
+                    continue;
+                }
+                if (!armed[(int)hand] || frame.Time < cooldownUntil || (other.Tracked && other.Pinched)) continue;
                 if (Host.Owner(hand) != null && Host.Owner(hand) != this) continue;
                 if (PointsAtWindow(hand)) continue;
                 State = $"Holding {h.PinchFor:F2} / {c.pinchHoldTime:F2} s ({hand})";
                 if (h.PinchFor < c.pinchHoldTime) continue;
-                fired[(int)hand] = true;
+                armed[(int)hand] = false;
                 cooldownUntil = frame.Time + c.pinchHoldCooldown;
                 Fire?.Invoke();
                 Event($"switcher ({hand.ToString().ToLowerInvariant()})");
@@ -321,7 +329,7 @@ namespace SpatialLauncher.SpatialWindows
 
         public override void Cancel()
         {
-            fired[0] = fired[1] = false;
+            armed[0] = armed[1] = false;
             cooldownUntil = float.NegativeInfinity;
             State = "Idle";
         }
@@ -333,8 +341,9 @@ namespace SpatialLauncher.SpatialWindows
     /// within <see cref="GestureConfig.sweepTime"/>, hides every window but the launcher; the same gesture (or the
     /// launcher's Show button) brings them back. Both hands must be tracked throughout (short drops within the tracking
     /// grace are tolerated), so one stray hand can't trigger it. While a remote screen is live or asking for approval
-    /// (<see cref="ConsentGate.IsActive"/>) the same gesture is the panic stop instead: it disconnects every remote screen
-    /// and returns to Home. It runs then even if Settings switched the gesture off.
+    /// (<see cref="ConsentGate.IsActive"/>) the same gesture is the panic stop instead, when Settings > Hands > Cross to stop
+    /// the laptop is on (off by default): it disconnects every remote screen and returns to Home, even if the hide gesture
+    /// is off. With it off, the gesture does nothing while a screen is live.
     /// </summary>
     public sealed class CrossSweepRecognizer : GestureRecognizer
     {
@@ -396,8 +405,14 @@ namespace SpatialLauncher.SpatialWindows
                         var gate = ConsentGate.Current;
                         if (gate != null && gate.IsActive)
                         {
-                            gate.PanicStop("panic stop (cross and sweep)");
-                            Event("panic stop: remote screens disconnected");
+                            // Live: the panic stop when switched on; otherwise nothing (hiding the windows over a live
+                            // screen by accident is no better).
+                            if (Host.PanicGestureEnabled)
+                            {
+                                gate.PanicStop("panic stop (cross and sweep)");
+                                Event("panic stop: remote screens disconnected");
+                            }
+                            else Event("ignored while a remote screen is live (panic gesture off)");
                         }
                         else
                         {

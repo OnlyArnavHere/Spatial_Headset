@@ -33,7 +33,7 @@ namespace SpatialLauncher.SpatialWindows
     /// While a remote screen is live a red "LIVE: &lt;source&gt;" line is drawn at the top of the view (in each eye in
     /// Stereo). Panic stop (<see cref="PanicStop"/>) disconnects every remote screen, closes their windows, refuses
     /// anything waiting and brings Home (the launcher) to the front. It is the cross-and-sweep gesture
-    /// (<see cref="CrossSweepRecognizer"/>, on even when Settings switches that gesture off), F8, or in Mono a touch on
+    /// (<see cref="CrossSweepRecognizer"/>, when Settings > Hands > Cross to stop the laptop is on; off by default), F8, or in Mono a touch on
     /// the indicator's Stop.
     /// </summary>
     public class ConsentGate : MonoBehaviour

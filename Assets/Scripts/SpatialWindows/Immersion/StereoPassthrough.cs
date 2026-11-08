@@ -326,10 +326,11 @@ namespace SpatialLauncher.SpatialWindows
         void UpdatePlane(Rect viewport)
         {
             if (plane == null && !CreatePlane()) return;
-            if (plane.transform.parent != arCamera.transform)
+            var parent = PlaneParent();
+            if (plane.transform.parent != parent)
             {
-                plane.transform.SetParent(arCamera.transform, false);
-                backdrop.transform.SetParent(arCamera.transform, false);
+                plane.transform.SetParent(parent, false);
+                backdrop.transform.SetParent(parent, false);
             }
             PlaneCorners(arCamera.projectionMatrix, viewport, distance, corners);
             CameraFov = AngularSize(corners);
@@ -337,11 +338,32 @@ namespace SpatialLauncher.SpatialWindows
             ZoomCorners(corners, BackdropScale);
             backdropMesh.vertices = corners;
             backdropMesh.RecalculateBounds();
-            ZoomCorners(corners, zoom / BackdropScale);
+            // Not enlarged to cover the eyes' views, which fill the screen (SettingsService): enlarged, the room would look
+            // bigger than it is and swing faster than the head turns, which makes people sick. At zoom 1 it stays real size,
+            // with black past the camera's edges (windows still draw there).
+            ShownZoom = zoom;
+            ZoomCorners(corners, ShownZoom / BackdropScale);
             mesh.vertices = corners;
             mesh.RecalculateBounds();
             SetPlaneActive(true);
             ImageFov = AngularSize(corners);
+        }
+
+        /// <summary>The zoom the plane is drawn at: <see cref="Zoom"/> (never enlarged on its own, so 1 stays real size).</summary>
+        public float ShownZoom { get; private set; } = 1f;
+
+        /// <summary>
+        /// What the plane hangs from. In Stereo, HoloKit's Stereo Tracked Pose: the AR camera's pose predicted ahead with
+        /// the gyroscope, which the eye cameras follow. Hung from the AR camera instead (ARKit's pose, 40-60 ms older), the
+        /// image slid against the eyes whenever the head turned and then caught up: the wobble that made people sick.
+        /// Locked to the eyes it stays still in view, like any video see-through headset. In Mono, the AR camera.
+        /// </summary>
+        Transform PlaneParent()
+        {
+            if (holoKit != null && holoKit.ScreenRenderMode == ScreenRenderMode.Stereo &&
+                holoKit.CenterEyePose != null && holoKit.CenterEyePose.parent != null)
+                return holoKit.CenterEyePose.parent;
+            return arCamera.transform;
         }
 
         bool CreatePlane()
@@ -391,7 +413,7 @@ namespace SpatialLauncher.SpatialWindows
             if (!active) ImageFov = null;
             if (plane != null && plane.activeSelf != active) plane.SetActive(active);
             // Black around a shrunk image: the eyes clear to black in Stereo anyway; in Mono it covers the camera background.
-            bool around = active && zoom < 1f;
+            bool around = active && ShownZoom < 1f;
             if (backdrop != null && backdrop.activeSelf != around) backdrop.SetActive(around);
         }
 

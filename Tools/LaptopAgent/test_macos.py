@@ -12,7 +12,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import network
 from hostos import _macos_pure as pure
 from hostos import _reaper
 from hostos.types import Monitor, Rect, Window
@@ -139,21 +138,6 @@ class FfmpegTests(unittest.TestCase):
 
 
 class SmallPieceTests(unittest.TestCase):
-    def test_hardware_ports(self):
-        text = """Hardware Port: Wi-Fi
-Device: en0
-Ethernet Address: aa:bb
-
-Hardware Port: iPhone USB
-Device: en5
-Ethernet Address: cc:dd
-
-Hardware Port: Thunderbolt Bridge
-Device: bridge0
-"""
-        self.assertEqual(network.iphone_usb_devices(text), {"en5"})
-        self.assertEqual(network.iphone_usb_devices(""), set())
-
     def test_reaper_protocol(self):
         self.assertEqual(_reaper.parse_lines(b"123\n456\n"), [123, 456])
         self.assertEqual(_reaper.parse_lines(b"12\nabc\n\n-5\n1\n0\n 77 \n"), [12, 77])

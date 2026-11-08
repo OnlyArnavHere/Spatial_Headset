@@ -160,17 +160,13 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(r.runners[1].options["keyboard_enabled"])
         self.assertEqual(r.runners[1].options["approver"], ("approver", True))
         self.assertEqual(len(r.mediamtx), 1)
-        r.c.apply(SimpleNamespace(headset_address="192.168.1.5"))
-        self.assertTrue(wait_for(lambda: len(r.runners) == 3))
-        self.assertEqual(r.runners[2].options["pinned"], [("192.168.1.5", 47810)])
-        self.assertFalse(r.runners[2].options["discover"])
+        self.assertTrue(r.runners[1].options["discover"])
+        self.assertNotIn("pinned", r.runners[1].options)
 
     def test_apply_rejects_bad_settings(self):
         r = self.rig()
         with self.assertRaises(ValueError):
             r.c.apply(SimpleNamespace(allow_control=True, cast_only=True))
-        with self.assertRaises(ValueError):
-            r.c.apply(SimpleNamespace(headset_address="not a host:::"))
 
     def test_kill_hotkey_registered_once_and_routed_to_current_runner(self):
         r = self.rig()

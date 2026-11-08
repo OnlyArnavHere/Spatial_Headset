@@ -131,6 +131,8 @@ namespace SpatialLauncher.SpatialWindows
         public PalmPushRecognizer PalmPush { get; private set; }
         public TwoHandStretchRecognizer Stretch { get; private set; }
         public CrossSweepRecognizer CrossSweep { get; private set; }
+        /// <summary>Cross and sweep stops live remote screens (Settings > Hands > Cross to stop the laptop). Off by default.</summary>
+        public bool PanicGestureEnabled { get; set; }
         public PinchHoldRecognizer PinchHold { get; private set; }
         /// <summary>The point-and-pinch input the recognizers run beside (its pointer rays), or null.</summary>
         public HandWindowInput HandInput => hands;
@@ -227,8 +229,9 @@ namespace SpatialLauncher.SpatialWindows
             UpdateFeatures(Right, Source.GetHand(Handedness.Right), dt);
 
             var frame = new GestureFrame { Left = Left, Right = Right, Head = HeadPose, DeltaTime = dt, Time = Now };
-            // The panic stop (cross and sweep while a remote screen is live) works even with that gesture switched off.
-            bool panicArmed = ConsentGate.Current != null && ConsentGate.Current.IsActive;
+            // The panic stop (cross and sweep while a remote screen is live), when switched on, works even with the hide
+            // gesture switched off.
+            bool panicArmed = PanicGestureEnabled && ConsentGate.Current != null && ConsentGate.Current.IsActive;
             foreach (var recognizer in recognizers)
             {
                 if (recognizer.Enabled || (recognizer == CrossSweep && panicArmed)) recognizer.Tick(frame);

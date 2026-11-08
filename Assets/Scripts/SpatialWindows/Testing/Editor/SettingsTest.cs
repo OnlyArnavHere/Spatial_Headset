@@ -73,7 +73,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             string file = Path.Combine(Folder, "settings.json");
             var defaults = SettingsStore.Load(file);
             Check(!File.Exists(file) && defaults.version == SpatialSettings.CurrentVersion && !defaults.laptop.wired
-                  && defaults.display.ipdMm == 64f && defaults.hands.dominantHand == Handedness.Right && defaults.voice.language == "en-US",
+                  && defaults.display.ipdMm == 63f && defaults.hands.dominantHand == Handedness.Right && defaults.voice.language == "en-US",
                 "a missing file gives the defaults (and isn't created by reading)");
 
             var changed = new SpatialSettings();
@@ -102,8 +102,17 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
             File.WriteAllText(file, "{\"version\":1,\"hands\":{\"sensitivity\":1.25}}");
             var partial = SettingsStore.Load(file);
-            Check(Mathf.Approximately(partial.hands.sensitivity, 1.25f) && partial.hands.pinch && partial.display.ipdMm == 64f && partial.voice.language == "en-US",
+            Check(Mathf.Approximately(partial.hands.sensitivity, 1.25f) && partial.hands.pinch && partial.display.ipdMm == 63f && partial.voice.language == "en-US",
                 "an older file with missing fields keeps what it has and defaults the rest");
+
+            File.WriteAllText(file, "{\"version\":1,\"display\":{\"ipdMm\":64.0}}");
+            bool movedToDefault = SettingsStore.Load(file).display.ipdMm == 63f;
+            File.WriteAllText(file, "{\"version\":1,\"display\":{\"ipdMm\":61.5}}");
+            bool chosenKept = SettingsStore.Load(file).display.ipdMm == 61.5f;
+            File.WriteAllText(file, "{\"version\":2,\"display\":{\"ipdMm\":64.0}}");
+            bool newChoiceKept = SettingsStore.Load(file).display.ipdMm == 64f;
+            Check(movedToDefault && chosenKept && newChoiceKept,
+                "version 1's untouched 64 mm IPD moves to the 63 mm standard; a chosen IPD, or 64 mm chosen later, is kept");
 
             File.WriteAllText(file, "{\"display\":{\"brightness\":5,\"ipdMm\":10},\"windows\":{\"defaultCurve\":-1},\"laptop\":{\"videoPort\":0,\"host\":\"old\",\"pairCode\":\"x\"},\"hands\":{\"sensitivity\":9}}");
             var clamped = SettingsStore.Load(file);
@@ -178,6 +187,22 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             Check(Mathf.Abs(shift.x - 10f * perMm / 2556f) < 1e-6f && Mathf.Abs(shift.y + 5f * perMm / 1179f) < 1e-6f
                   && SettingsService.ViewportShift(Vector2.one, Vector2.one, 0f) == Vector2.zero,
                 $"a viewport offset in mm becomes a fraction of the screen from its DPI ({shift.x:F4}, {shift.y:F4}; unknown DPI: none)");
+
+            // An eye's view grown to its half of the screen: a point keeps its place on the screen.
+            var eyeRect = new Rect(0.066f, 0.225f, 0.39f, 0.65f);
+            var eyeProjection = Matrix4x4.Frustum(-0.012f, 0.009f, -0.01f, 0.011f, 0.03f, 50f);
+            var grown = SettingsService.GrowProjection(eyeProjection, eyeRect, new Rect(0f, 0f, 0.5f, 1f), 0.03f, 50f);
+            bool samePlace = true;
+            foreach (var point in new[] { new Vector3(0.1f, 0.05f, -2f), new Vector3(-0.3f, -0.2f, -1.5f), new Vector3(0f, 0f, -3f) })
+            {
+                Vector2 ScreenAt(Matrix4x4 m, Rect r)
+                {
+                    var clip = m * new Vector4(point.x, point.y, point.z, 1f);
+                    return new Vector2(r.x + (clip.x / clip.w * 0.5f + 0.5f) * r.width, r.y + (clip.y / clip.w * 0.5f + 0.5f) * r.height);
+                }
+                samePlace &= (ScreenAt(eyeProjection, eyeRect) - ScreenAt(grown, new Rect(0f, 0f, 0.5f, 1f))).magnitude < 1e-4f;
+            }
+            Check(samePlace, "an eye's view grown to its half of the screen keeps every point where it was (same scale and place)");
 
         }
 

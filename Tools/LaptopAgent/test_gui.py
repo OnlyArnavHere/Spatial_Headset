@@ -94,7 +94,7 @@ class WindowSmokeTests(unittest.TestCase):
         self.c = FakeController()
         self.saved = []
         self.w = mw.MainWindow(self.root, self.c, Settings(), save=self.saved.append, kill_switch="Ctrl+Alt+Shift+Q",
-                               wired_report=lambda: SimpleNamespace(lines=lambda: ["hotspot ok"]), poll_ms=10)
+                               wired_report=lambda: "cable ok", poll_ms=10)
         self.addCleanup(self.w.close)
 
     def _release(self):
@@ -124,14 +124,6 @@ class WindowSmokeTests(unittest.TestCase):
         self.w.on_toggle("cast_only")
         self.assertFalse(self.w.vars["allow_control"].get())
 
-    def test_bad_address_is_refused_and_not_saved(self):
-        self.w.address.set("not a host:::")
-        with mock.patch.object(mw.messagebox, "showerror") as error:
-            self.w.on_address()
-        error.assert_called_once()
-        self.assertEqual(self.saved, [])
-        self.assertEqual(self.w.address.get(), "")
-
     def test_log_lines_reach_the_pane(self):
         logging.getLogger("smoke").warning("visible in the pane")
         self.pump()
@@ -143,11 +135,11 @@ class WindowSmokeTests(unittest.TestCase):
         self.w.on_toggle("wired")
         for _ in range(100):
             self.w.poll()
-            if "hotspot ok" in self.w.wired_text.get():
+            if "cable ok" in self.w.wired_text.get():
                 break
             import time
             time.sleep(0.01)
-        self.assertIn("hotspot ok", self.w.wired_text.get())
+        self.assertIn("cable ok", self.w.wired_text.get())
 
     def test_pair_dialog_starts_and_cancels_pairing(self):
         self.w.open_pair_dialog()
@@ -158,6 +150,16 @@ class WindowSmokeTests(unittest.TestCase):
         self.w.dialog.close()
         self.assertIn("cancel_pair", self.c.calls)
         self.assertIsNone(self.w.dialog)
+
+    def test_code_typed_before_the_headset_is_found_is_acknowledged(self):
+        self.w.open_pair_dialog()
+        self.w.dialog.code.set("ABCD-EFGH-JKMN")
+        self.w.dialog.submit()
+        self.assertIn("as soon as the headset is found", self.w.dialog.status.get())
+        self.c._events.append({"type": "pair_prompt", "gen": 7, "text": "Enter the code"})
+        self.w.poll()
+        self.assertEqual(self.w.dialog.status.get(), "Sending...")
+        self.w.dialog.close()
 
     def test_pair_done_event_reaches_the_dialog(self):
         self.w.open_pair_dialog()

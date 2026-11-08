@@ -1,14 +1,13 @@
 """The app's saved settings: one small JSON file in the per-user data folder.
 
-Safe by default: control is off. A missing or corrupt file, a wrong type or a bad address gives the default for that
-field (and never turns control on)."""
+Safe by default: control is off. A missing or corrupt file or a wrong type gives the default for that field (and
+never turns control on). Keys from older versions (headset_address) are ignored."""
 import json
 import logging
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import autostart
-import discovery
 import identity
 import paths
 
@@ -20,16 +19,12 @@ class Settings:
     allow_control: bool = False   # mouse and keyboard from the headset (each grant is still asked on this laptop)
     cast_only: bool = False       # view only plus media controls; excludes allow_control
     start_at_login: bool = False
-    headset_address: str = ""     # IP[:PORT] to dial instead of Bonjour
     wired: bool = False
 
     def validate(self) -> "Settings":
         """Returns self, or raises ValueError (same rules as the command line)."""
         if self.allow_control and self.cast_only:
             raise ValueError("Allow control and Cast only can't both be on.")
-        self.headset_address = self.headset_address.strip()
-        if self.headset_address:
-            discovery.parse_headset(self.headset_address)  # raises ValueError
         return self
 
 
@@ -51,11 +46,6 @@ def from_dict(data) -> Settings:
     except ValueError:
         if result.allow_control and result.cast_only:
             result.allow_control = False
-        if result.headset_address:
-            try:
-                discovery.parse_headset(result.headset_address)
-            except ValueError:
-                result.headset_address = ""
         return result
 
 

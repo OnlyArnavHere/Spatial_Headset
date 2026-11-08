@@ -251,14 +251,29 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
 
         static void PairCodeChecks()
         {
-            Check(PairCode.Parse("abcd-efgh-jkmn") == "ABCDEFGHJKMN" && PairCode.Parse(" ABCD EFGH JKMN ") == "ABCDEFGHJKMN" && PairCode.Format("ABCDEFGHJKMN") == "ABCD-EFGH-JKMN",
-                "a code parses ignoring case, spaces and dashes, and formats as XXXX-XXXX-XXXX");
+            Check(PairCode.Parse("abcd-efgh") == "ABCDEFGH" && PairCode.Parse(" ABCD EFGH ") == "ABCDEFGH" && PairCode.Format("ABCDEFGH") == "ABCD-EFGH",
+                "a code parses ignoring case, spaces and dashes, and formats as XXXX-XXXX");
+            Check(PairCode.Parse("abcd-efgh-jkmn") == "ABCDEFGHJKMN" && PairCode.Format("ABCDEFGHJKMN") == "ABCD-EFGH-JKMN",
+                "a 12-character code from an older build still parses and formats");
             Check(PairCode.Parse("ILO000000000") == "110000000000" && PairCode.Parse("il0o00000000") == "110000000000", "I and L read as 1, O reads as 0");
-            Check(PairCode.Parse("UBCDEFGHJKMN") == null && PairCode.Parse("ABCDEFGHJKM") == null && PairCode.Parse("ABCDEFGHJKMNP") == null && PairCode.Parse(null) == null &&
-                  PairCode.Parse("ABCDEFGHJKM!") == null && PairCode.Parse("") == null, "U, other characters, 11 or 13 characters and null are refused");
+            Check(PairCode.Parse("UBCDEFGHJKMN") == null && PairCode.Parse("ABCDEFG") == null && PairCode.Parse("ABCDEFGHJ") == null && PairCode.Parse("ABCDEFGHJKM") == null && PairCode.Parse("ABCDEFGHJKMNP") == null && PairCode.Parse(null) == null &&
+                  PairCode.Parse("ABCDEFGHJKM!") == null && PairCode.Parse("") == null, "U, other characters, lengths other than 8 or 12 and null are refused");
             string fresh = PairCode.New();
             Check(fresh.Length == PairCode.Length && fresh.All(c => PairCode.Alphabet.IndexOf(c) >= 0) && PairCode.Parse(PairCode.Format(fresh)) == fresh && PairCode.New() != fresh,
-                "a new code has 12 alphabet characters and survives format and parse");
+                "a new code has 8 alphabet characters and survives format and parse");
+
+            // QR pairing: the text the laptop shows, and the id that names it (known answer from test_qr_pairing.py).
+            Check(PairCode.QrId("0123456789ABCDEFGHJK") == "8d64db921aec5743" && PairCode.QrInstance("0123456789ABCDEFGHJK") == "SL-8d64db921aec5743",
+                "a QR's id is the first 8 bytes of SHA-256(\"sl-qr-id:\" + code), in hex, as the laptop computes it");
+            bool read = PairCode.TryParseQr(" SLPAIR:0123456789ABCDEFGHJK:ABCDEFGHIJKLMNOP\n", out string qrCode, out string qrFp);
+            Check(read && qrCode == "0123456789ABCDEFGHJK" && qrFp == "ABCDEFGHIJKLMNOP", "a laptop's pairing QR gives its code and fingerprint");
+            string[] notOurs =
+            {
+                null, "", "hello", "https://example.com", "SLPAIR:ABC:ABCDEFGHIJKLMNOP", "SLPAIR:0123456789ABCDEFGHJU:ABCDEFGHIJKLMNOP",
+                "SLPAIR:0123456789ABCDEFGHJK:abcdefghijklmnop", "SLPAIR:0123456789ABCDEFGHJK:ABCDEFGHIJKLMNO1",
+                "XLPAIR:0123456789ABCDEFGHJK:ABCDEFGHIJKLMNOP", "SLPAIR:0123456789ABCDEFGHJK:ABCDEFGHIJKLMNOP:X",
+            };
+            Check(notOurs.All(text => !PairCode.TryParseQr(text, out _, out _)), "any other QR text is not a pairing QR");
         }
 
         static void Authority()
@@ -295,6 +310,14 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             var third = auth.Issue();
             auth.Cancel();
             Check(auth.Active == null && auth.TryApplyProof(third.Id, true) == PairProofOutcome.NotPairing, "cancel kills the code");
+
+            var shown = auth.Issue();
+            ended.Clear();
+            var armed = auth.ArmQr("0123456789ABCDEFGHJK", "ABCDEFGHIJKLMNOP");
+            Check(ended.SequenceEqual(new[] { PairCodeEnd.Replaced }) && auth.Active == armed && armed.FromQr && !shown.FromQr &&
+                  armed.QrId == "8d64db921aec5743" && armed.QrFingerprint == "ABCDEFGHIJKLMNOP" && shown.QrId == null &&
+                  auth.TryApplyProof(shown.Id, true) == PairProofOutcome.NotPairing && auth.TryApplyProof(armed.Id, true) == PairProofOutcome.Accepted,
+                "a scanned QR's code replaces the shown one and keeps the laptop's fingerprint with it");
         }
 
         static void Store()

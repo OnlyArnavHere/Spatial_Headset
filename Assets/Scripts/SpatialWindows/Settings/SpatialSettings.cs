@@ -11,7 +11,8 @@ namespace SpatialLauncher.SpatialWindows
     [Serializable]
     public class SpatialSettings
     {
-        public const int CurrentVersion = 1;
+        /// <summary>2: the default IPD became 63 mm (files from 1 still on the old 64 mm default move to it).</summary>
+        public const int CurrentVersion = 2;
 
         public int version = CurrentVersion;
         public LaptopSettings laptop = new LaptopSettings();
@@ -29,8 +30,8 @@ namespace SpatialLauncher.SpatialWindows
     public class LaptopSettings
     {
         /// <summary>
-        /// Wired (USB): the headset iPhone's Personal Hotspot over a cable; the laptop dials 172.20.10.1 (see
-        /// <see cref="UsbHotspot"/> and Doc/wired.md). False: Wi-Fi (the same network).
+        /// Wired (USB): the laptop reaches the headset iPhone over its USB cable, with no network (see
+        /// <see cref="UsbCable"/> and Doc/wired.md). False: Wi-Fi (the same network).
         /// </summary>
         public bool wired;
     }
@@ -40,8 +41,12 @@ namespace SpatialLauncher.SpatialWindows
     {
         /// <summary>Screen brightness, 0.1..1 (the phone's own brightness on the device).</summary>
         public float brightness = 1f;
-        /// <summary>Distance between the user's pupils, millimetres (HoloKit's stereo, 54..74).</summary>
-        public float ipdMm = 64f;
+        /// <summary>
+        /// Distance between the user's pupils, millimetres (HoloKit's stereo, 54..74). Default 63 mm, the adult average
+        /// that VR headsets start from.
+        /// </summary>
+        public float ipdMm = DefaultIpdMm;
+        public const float DefaultIpdMm = 63f;
         /// <summary>Shift of both stereo viewports on the screen, millimetres, for a printed helmet's lens position.</summary>
         public Vector2 viewportOffsetMm;
         /// <summary>
@@ -91,6 +96,12 @@ namespace SpatialLauncher.SpatialWindows
         public bool palmPush = true;
         public bool twoHandStretch = true;
         public bool crossSweepHide = true;
+        /// <summary>
+        /// Cross and sweep while a remote screen is live is the panic stop (disconnects it). Off by default: hand tracking
+        /// sometimes swaps left and right, which reads as crossed wrists and then a sweep, and cut live laptops off.
+        /// F8 and the Stop button always stop.
+        /// </summary>
+        public bool panicGesture;
         /// <summary>A pinch held on nothing opens the app switcher.</summary>
         public bool pinchHoldSwitcher = true;
         /// <summary>Shows hand state and gesture recognizer outputs on screen, for tuning thresholds.</summary>

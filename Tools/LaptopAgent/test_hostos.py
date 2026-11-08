@@ -60,24 +60,6 @@ class WindowsGoldenTests(unittest.TestCase):
         prompt = hostos.open_prompt("text", "caption", 1000)
         self.assertFalse(prompt.dismiss())  # nothing is showing yet
 
-    def test_wired_report_text_per_os(self):
-        import network
-        iface = network.Interface("Apple Mobile Device Ethernet", "172.20.10.4", "", "Public")
-        head = "Wired (USB):       host 172.20.10.4   on 'Apple Mobile Device Ethernet' (USB)"
-        windows = network.WiredReport(iface, False, [], []).lines()
-        self.assertEqual(windows, [head + ", firewall profile Public",
-                                   "                   Public firewall is off: nothing to allow"])
-        other = network.WiredReport(iface, None, [], [], firewall_checked=False).lines()
-        self.assertEqual(other, [head, "                   No inbound firewall check on this OS (the agent dials out)."])
-        with mock.patch.object(network, "list_interfaces", lambda platform=None: [iface]):
-            with mock.patch.object(network, "read_firewall", lambda profile: (False, [], True)):
-                report = network.wired_report("darwin")
-                self.assertFalse(report.firewall_checked)
-                self.assertEqual(report.lines(), other)
-                report = network.wired_report("win32")
-                self.assertTrue(report.firewall_checked)
-                self.assertEqual(report.lines(), windows)
-
     def test_dismiss_during_wait_ends_the_prompt(self):
         import hostos.windows as backend
         opened, closed = threading.Event(), threading.Event()

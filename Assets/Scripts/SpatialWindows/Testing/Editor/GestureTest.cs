@@ -526,11 +526,23 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 var stream = Spawn(manager, "Live stream", opened);
                 var live = new PanicSession { Window = stream };
                 gate.BeginLive(live);
+                bool panicWas = gestures.PanicGestureEnabled;
+                // Off (the default): a live screen survives the gesture (hand tracking swapping sides set it off by itself).
+                gestures.PanicGestureEnabled = false;
+                gestures.CrossSweep.Enabled = true;
                 events.Clear();
                 yield return Cross(scripted, head, 0.45f, 0.3f);
+                Check(live.Stops == 0 && stream != null && gate.IsActive && !manager.WindowsHidden,
+                    $"with the panic gesture off (the default), cross and sweep leaves a live screen alone ({string.Join("; ", events)})");
+                gestures.CrossSweep.Enabled = false;
+                gestures.PanicGestureEnabled = true;
+                yield return gestures.Config.crossCooldown;
+                events.Clear();
+                yield return Cross(scripted, head, 0.45f, 0.3f);
+                gestures.PanicGestureEnabled = panicWas;
                 Check(live.Stops == 1 && stream == null && !gate.IsActive && !manager.WindowsHidden &&
                       events.Contains("panic stop: remote screens disconnected") && manager.FocusedWindow == launcher.Launcher,
-                    $"with a remote screen live, cross and sweep is the panic stop even when switched off: it disconnects, closes the stream and returns Home ({string.Join("; ", events)})");
+                    $"switched on, cross and sweep is the panic stop even with the hide gesture off: it disconnects, closes the stream and returns Home ({string.Join("; ", events)})");
                 gate.EndLive(live);
             }
             else Check(false, "the launcher has a consent gate");
