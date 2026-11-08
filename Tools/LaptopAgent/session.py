@@ -52,6 +52,7 @@ from typing import Callable
 
 import av
 from aiortc import RTCConfiguration, RTCPeerConnection, RTCRtpSender, RTCSessionDescription
+import aiortc.contrib.media as aiortc_media
 from aiortc.contrib.media import MediaPlayer
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
 
@@ -195,6 +196,39 @@ PLAYER_OPTIONS = {"rtsp_transport": "tcp", "analyzeduration": "0", "probesize": 
 
 def open_player(url: str) -> MediaPlayer:
     return MediaPlayer(url, format="rtsp", options=dict(PLAYER_OPTIONS), decode=False)
+
+
+class _SkipEmptyPackets:
+    """A demuxing container that never hands out an empty packet. The RTSP demuxer yields one when the capture pauses (a
+    still screen), and aiortc's player takes an empty packet for the end of the stream: the window's pump stopped and
+    the headset was told "the laptop stopped streaming that window" a few seconds after every open, while ffmpeg was
+    still capturing. A real end still ends it (the demuxer raises or runs out)."""
+
+    def __init__(self, container):
+        self._container = container
+
+    def __getattr__(self, name):
+        return getattr(self._container, name)
+
+    def demux(self, *streams):
+        for packet in self._container.demux(*streams):
+            if packet.size:
+                yield packet
+
+
+def _install_empty_packet_guard() -> None:
+    worker = aiortc_media.player_worker_demux
+    if getattr(worker, "skips_empty_packets", False):
+        return
+
+    def player_worker_demux(loop, container, *rest):
+        return worker(loop, _SkipEmptyPackets(container), *rest)
+
+    player_worker_demux.skips_empty_packets = True
+    aiortc_media.player_worker_demux = player_worker_demux  # MediaPlayer looks it up when it starts its thread
+
+
+_install_empty_packet_guard()
 
 
 class LinkSession:
@@ -575,7 +609,9 @@ class LinkSession:
                 packet.pts = packet.dts = out
                 slot.track.push(packet)
         except MediaStreamError:
-            pass
+            log.info("The video feed of %s ended", window.target_id)
+        except Exception:
+            log.exception("Forwarding %s to the headset failed", window.target_id)
         if slot.window is window:
             self._wake.set()  # the stream ended on its own; run() reports it
 

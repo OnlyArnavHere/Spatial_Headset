@@ -82,6 +82,17 @@ and `dist\` were rebuilt from today's code on 2026-11-07.
 - Wi-Fi fix: the agent gave up on a Bonjour-found headset after 5 failures of any kind, including "not paired", so after
   QR pairing Wi-Fi was never tried again. Now only "can't connect" counts towards giving up (`session.py`, tests in
   `test_approval.py`).
+- Windows went blank seconds after opening ("The laptop stopped streaming that window") while the link stayed up.
+  When the laptop screen is still, the RTSP demuxer hands out an empty packet, and aiortc's MediaPlayer took that for
+  the end of the stream, so the window's pump ended. `session.py` now wraps aiortc's demux worker so that empty packets
+  are skipped, and the pump logs why it ended. Seen live (an empty packet 3 s into a desktop stream);
+  `test_session_e2e.EmptyPacketTests` fails without the fix. Covers Wi-Fi and the cable (both use `LinkSession`).
+  Rebuilt and reinstalled; untested on the headset.
+- USB cable sessions ended the moment they started ("Linked ... paired-stream", then "the headset closed the
+  connection"): the headset's `LinkListener` closed every accepted client when the handler returned, including the one
+  just handed to the USB stream session. The handler now owns the client (closes it unless handed over); the listener
+  closes it only if the handler throws. New `ListenerHandover` step in Test Laptop Link Handshake; not yet run (Unity
+  was waiting on its scene recovery dialog). Needs a new phone build.
 - "Connection lost" was the panic gesture firing by itself. The iPhone's log (read on Windows with
   `pymobiledevice3 syslog live`) showed `[Consent] panic stop (cross and sweep)` one second before each drop. Hand
   tracking swapping left and right reads as crossed wrists and then a sweep. The panic gesture is now opt-in: Settings >

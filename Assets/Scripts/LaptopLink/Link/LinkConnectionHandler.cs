@@ -47,7 +47,10 @@ namespace SpatialLauncher.LaptopLink
             this.deviceName = deviceName ?? (() => "");
         }
 
-        /// <summary>Handles an accepted client; the client is closed when this returns.</summary>
+        /// <summary>
+        /// Handles an accepted client; the client is closed when this returns, unless the connection was handed over to
+        /// a USB stream session, which then owns it.
+        /// </summary>
         public Task<LinkResult> HandleAsync(TcpClient client, CancellationToken ct)
         {
             string address = "?";
@@ -81,15 +84,17 @@ namespace SpatialLauncher.LaptopLink
             }
             LinkResult result;
             var probe = new QrProbe();
+            var channel = new NetworkFrameChannel(stream, close, 0, 8);
             try
             {
-                result = await RouteAsync(new NetworkFrameChannel(stream, close, 0, 8), address, since, ct, probe).ConfigureAwait(false);
+                result = await RouteAsync(channel, address, since, ct, probe).ConfigureAwait(false);
                 // A laptop showing a QR asks every few seconds whether it was scanned: those answers cost no rate.
                 if (probe.Asked && result != null && !result.Ok && result.Reason == "not pairing") gate.Refund(address);
             }
             finally
             {
                 gate.Leave(address);
+                channel.Close(); // no-op once handed over (USB stream session) or already closed
             }
             Post(result);
             return result;

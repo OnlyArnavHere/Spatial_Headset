@@ -11,7 +11,9 @@ namespace SpatialLauncher.LaptopLink
     /// The TCP listener of the link port. It listens only while at least one lease from <see cref="Acquire"/> is held and
     /// closes its socket when the last lease is released: it then stops accepting, while exchanges already running finish
     /// on their own. A bind failure (port busy) never throws: it is logged and shown in <see cref="Status"/>. Plain C#;
-    /// the accept loop runs on a worker, each client is handed to the handler on its own task.
+    /// the accept loop runs on a worker, each client is handed to the handler on its own task. The handler owns the client
+    /// and closes it (it may hand the connection on to a USB stream session); the listener closes it only if the handler
+    /// throws.
     /// </summary>
     public sealed class LinkListener : IDisposable
     {
@@ -125,12 +127,11 @@ namespace SpatialLauncher.LaptopLink
             catch (Exception e)
             {
                 Debug.LogWarning("[Link] connection failed: " + e.GetType().Name + " " + e.Message);
-            }
-            finally
-            {
                 try { client.Close(); }
                 catch (Exception) { }
             }
+            // On success the handler has closed the client, or handed it to a USB stream session that now owns it.
+            // Closing it here regardless cut every USB session the moment it started.
         }
 
         public void Dispose()

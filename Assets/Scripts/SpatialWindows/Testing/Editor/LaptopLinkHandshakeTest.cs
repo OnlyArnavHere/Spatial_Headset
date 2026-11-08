@@ -243,6 +243,7 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
                 QrPairing(root, headset, agent, stranger);
                 Handshake(root, headset, agent, stranger);
                 Limits(root, headset);
+                ListenerHandover();
             }
             finally
             {
@@ -548,6 +549,46 @@ namespace SpatialLauncher.SpatialWindows.Testing.Editor
             t = 12.5;
             bool refilled = limited.TryEnter("3.3.3.3");
             Check(allowed == 5 && refilled, $"the gate allows 5 attempts per minute per IP, then one more every 12 s ({allowed})");
+        }
+        // The listener leaves a client open once its handler returns (the handler closes it, or hands it to a USB stream
+        // session). It used to close every client then, which ended each USB session the moment it started.
+        static void ListenerHandover()
+        {
+            const int Port = 47899;
+            TcpClient kept = null;
+            using (var listener = new LinkListener((client, ct) => { kept = client; return Task.CompletedTask; }, Port, IPAddress.Loopback))
+            using (listener.Acquire())
+            using (var laptop = new TcpClient())
+            {
+                laptop.Connect(IPAddress.Loopback, Port);
+                bool handed = WaitFor(() => kept != null, 5000);
+                Thread.Sleep(200); // past the handler's return
+                bool open = false;
+                if (handed)
+                {
+                    try
+                    {
+                        kept.GetStream().Write(new byte[] { 42 }, 0, 1);
+                        laptop.ReceiveTimeout = 2000;
+                        open = laptop.GetStream().ReadByte() == 42;
+                    }
+                    catch (Exception) { }
+                }
+                Check(handed && open, "a client the handler handed over stays open after the handler returns (USB stream sessions)");
+                kept?.Close();
+            }
+
+            using (var listener = new LinkListener((client, ct) => throw new InvalidOperationException("boom"), Port, IPAddress.Loopback))
+            using (listener.Acquire())
+            using (var laptop = new TcpClient())
+            {
+                laptop.Connect(IPAddress.Loopback, Port);
+                laptop.ReceiveTimeout = 2000;
+                int got = -2;
+                try { got = laptop.GetStream().ReadByte(); }
+                catch (Exception) { got = -1; }
+                Check(got == -1, "the listener closes the client when its handler throws");
+            }
         }
     }
 }

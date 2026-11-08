@@ -139,6 +139,9 @@ namespace SpatialLauncher.LaptopLink
             }
         }
 
+        /// <summary>The connection was handed over (<see cref="TryDetach"/>); closing it is no longer this channel's job.</summary>
+        public bool IsDetached => detached;
+
         public bool TryDetach(out Stream detachedStream, out Action detachedClose)
         {
             detachedStream = null;

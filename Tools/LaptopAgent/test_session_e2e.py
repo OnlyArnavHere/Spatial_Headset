@@ -549,5 +549,35 @@ class PairDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("declined" in s for s in said), said)
 
 
+class EmptyPacketTests(unittest.TestCase):
+    """A still screen makes the RTSP demuxer hand out an empty packet; aiortc's player took that for the end of the
+    stream, so every window stopped a few seconds after it opened ("the laptop stopped streaming that window")."""
+
+    class Container:
+        name = "fake"
+
+        def __init__(self, sizes):
+            self._packets = iter([SimpleNamespace(size=size, stream=None, pts=None, time_base=None) for size in sizes])
+            self.handed_out = []
+
+        def demux(self, *streams):  # one shared position, like a real container: each call carries on reading
+            for packet in self._packets:
+                self.handed_out.append(packet.size)
+                yield packet
+
+    def test_the_player_reads_past_an_empty_packet(self):
+        from aiortc.contrib import media
+        container = self.Container([10, 0, 0, 20, 30])
+        media.player_worker_demux(asyncio.new_event_loop(), container, [], None, None, threading.Event(), False, False)
+        self.assertEqual(container.handed_out, [10, 0, 0, 20, 30])  # read to the real end, not stopped at the first 0
+
+    def test_the_guard_is_installed_once(self):
+        from aiortc.contrib import media
+        worker = media.player_worker_demux
+        session._install_empty_packet_guard()
+        self.assertIs(media.player_worker_demux, worker)
+        self.assertTrue(worker.skips_empty_packets)
+
+
 if __name__ == "__main__":
     unittest.main()
